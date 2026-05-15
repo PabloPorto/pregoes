@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+
+# Ambientes virtuais
+.env/
+.venv/
+venv/
+
+# Banco e artefatos gerados
+data/pregoes.db
+data/exports/*.xlsx
+data/editais/tmp*.pdf
+
+# Credenciais de fornecedores (Q8) — NUNCA versionar
+data/credenciais.json
+
+# OS
+.DS_Store
+*.swp
+*.bak

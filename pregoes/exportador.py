@@ -1,0 +1,203 @@
+"""
+Exportador de itens extraídos para a planilha matriz do cliente.
+
+REGRA OURO: o template do cliente é sagrado. Não criamos nada do zero.
+- Carregamos `matriz_template.xlsx`
+- Preenchemos apenas as colunas C, D, E, F (descrição, unidade, qtd, ref)
+- Deixamos L, T, U para o scraper preencher depois
+- TODAS as fórmulas existentes (G, H, I, J, K, N, P, R, S, V-AB, totais) ficam intactas
+- Salvamos como novo arquivo
+
+Edge case >500 itens: copia as fórmulas das linhas existentes para as novas
+usando openpyxl.Translator (mantém $V$4 absoluto e ajusta L504→L505 relativo).
+"""
+from __future__ import annotations
+
+import shutil
+from pathlib import Path
+from typing import Iterable
+
+from openpyxl import load_workbook
+from openpyxl.formula.translate import Translator
+from openpyxl.utils import get_column_letter
+
+from . import config
+from .extrator import ItemExtraido
+
+
+# Faixa de linhas que o template já tem prontas
+LINHA_PRIMEIRO_ITEM = config.LINHA_DADOS_INICIO        # 5
+LINHA_ULTIMO_ITEM_TEMPLATE = 504                       # template suporta 500 itens (5..504)
+LINHA_TOTAL_REFERENCIA = 505                           # =SUM(Y5:Y504)
+LINHA_CABECALHO_TOTAL = 506                            # 'FATURAMENTO', 'MARGEM', 'LUCRO'
+LINHA_TOTAL_FINAL = 507                                # =SUM(I5:I504), =G507/C507, =SUM(K5:K504)
+
+
+def exportar(
+    itens: Iterable[ItemExtraido],
+    *,
+    orgao: str | None = None,
+    numero_pregao: str | None = None,
+    markup: float | None = None,
+    destino: Path | str | None = None,
+    template: Path | str | None = None,
+) -> Path:
+    """
+    Gera planilha matriz preenchida.
+
+    Args:
+        itens: lista de ItemExtraido vindos do extrator
+        orgao: nome do órgão (vai na célula C1 'ORGÃO')
+        numero_pregao: número do pregão (vai na célula C2 'PREGÃO')
+        markup: multiplicador sobre o custo de aquisição. Default = valor de
+            `config.MARKUP_DEFAULT` (1.45). O cliente pode passar 1.30 para
+            um pregão com concorrência apertada, etc. Substitui as fórmulas
+            `G = =S*1.45` do template por `G = =S*<markup>`.
+        destino: caminho de saída (default: data/exports/<auto>.xlsx)
+        template: caminho do template (default: config.TEMPLATE_MATRIZ)
+
+    Returns:
+        Path do arquivo gerado.
+    """
+    template_path = Path(template) if template else config.TEMPLATE_MATRIZ
+    if not template_path.exists():
+        raise FileNotFoundError(f"Template não encontrado: {template_path}")
+
+    itens = list(itens)
+    if not itens:
+        raise ValueError("Lista de itens vazia — nada para exportar.")
+
+    markup_efetivo = markup if markup is not None else config.MARKUP_DEFAULT
+
+    if destino is None:
+        nome = _nome_default(orgao, numero_pregao)
+        destino = config.EXPORTS_DIR / nome
+    destino = Path(destino)
+    destino.parent.mkdir(parents=True, exist_ok=True)
+
+    # Cópia binária do template — preserva tudo (estilos, fórmulas, mesclagens)
+    shutil.copyfile(template_path, destino)
+
+    wb = load_workbook(destino)   # SEM data_only — mantém fórmulas
+    ws = wb.active
+
+    # Preencher cabeçalho (C1, C2)
+    if orgao:
+        ws["C1"] = orgao
+    if numero_pregao:
+        ws["C2"] = numero_pregao
+
+    # Aplicar markup ANTES de expandir: assim, quando _expandir_linhas copiar
+    # a fórmula da linha modelo (504) via Translator, ela já estará com o
+    # markup correto e as linhas novas herdam o valor sem retrabalho.
+    if markup_efetivo != config.MARKUP_DEFAULT:
+        _aplicar_markup(ws, markup_efetivo)
+
+    # Expandir template se o edital tiver mais que 500 itens
+    n_itens = len(itens)
+    if n_itens > 500:
+        _expandir_linhas(ws, n_extras=n_itens - 500)
+
+    # Preencher itens
+    for offset, item in enumerate(itens):
+        linha = LINHA_PRIMEIRO_ITEM + offset
+        ws[f"A{linha}"] = offset + 1
+        ws[f"B{linha}"] = item.item_numero if item.item_numero is not None else (offset + 1)
+        ws[f"C{linha}"] = item.descricao
+        ws[f"D{linha}"] = item.unidade or ""
+        ws[f"E{linha}"] = item.quantidade if item.quantidade is not None else 0
+        if item.valor_referencia is not None:
+            ws[f"F{linha}"] = item.valor_referencia
+
+    wb.save(destino)
+    return destino
+
+
+def _aplicar_markup(ws, markup: float) -> None:
+    """
+    Substitui o multiplicador do markup nas fórmulas da coluna G (preço de venda).
+
+    Template original: G5 = =S5*1.45, G6 = =S6*1.45, ... G504 = =S504*1.45.
+    Após esta função, todas viram =Sn*<markup>. As outras fórmulas (H, I, etc.)
+    referenciam G e portanto se ajustam automaticamente pelo Excel.
+
+    Implementação por string replace: cada fórmula é exatamente `=Sn*1.45`,
+    então substituir o sufixo `*<MARKUP_DEFAULT>` por `*<markup>` basta.
+    Se algum dia o template mudar o formato, este filtro falha silenciosamente
+    (a célula não vira fórmula errada — ela só não muda) e o teste pega.
+    """
+    sufixo_antigo = f"*{config.MARKUP_DEFAULT}"
+    sufixo_novo = f"*{markup}"
+    for linha in range(LINHA_PRIMEIRO_ITEM, LINHA_ULTIMO_ITEM_TEMPLATE + 1):
+        celula = ws[f"G{linha}"]
+        valor = celula.value
+        if isinstance(valor, str) and valor.endswith(sufixo_antigo):
+            celula.value = valor[:-len(sufixo_antigo)] + sufixo_novo
+
+
+def _expandir_linhas(ws, n_extras: int):
+    """
+    Insere N linhas adicionais antes da linha de totais, copiando as fórmulas
+    da última linha de itens existente (504) com translação de referências
+    relativas.
+    """
+    # Linha modelo (já tem todas as fórmulas certinhas)
+    linha_modelo = LINHA_ULTIMO_ITEM_TEMPLATE
+    nova_linha_total_ref = LINHA_TOTAL_REFERENCIA + n_extras
+    nova_linha_total_final = LINHA_TOTAL_FINAL + n_extras
+
+    # Inserir linhas em branco (openpyxl empurra tudo para baixo, inclusive totais)
+    ws.insert_rows(idx=linha_modelo + 1, amount=n_extras)
+
+    # Replicar fórmulas/conteúdo da linha modelo para as novas
+    for nova_idx in range(linha_modelo + 1, linha_modelo + 1 + n_extras):
+        for col in range(1, ws.max_column + 1):
+            valor_modelo = ws.cell(row=linha_modelo, column=col).value
+            if valor_modelo is None:
+                continue
+            if isinstance(valor_modelo, str) and valor_modelo.startswith("="):
+                # Tradutor mantém $V$4 absoluto e ajusta L504→L<nova> relativo
+                origem = f"{get_column_letter(col)}{linha_modelo}"
+                t = Translator(valor_modelo, origin=origem)
+                destino_ref = f"{get_column_letter(col)}{nova_idx}"
+                nova_formula = t.translate_formula(destino_ref)
+                ws.cell(row=nova_idx, column=col).value = nova_formula
+            # valores constantes (ex: número da linha em A) — pular, vamos preencher depois
+
+    # Atualizar fórmulas de total que referenciavam :504
+    _ajustar_totais(ws, n_extras)
+
+
+def _ajustar_totais(ws, n_extras: int):
+    """Ajusta SUM(:504) para SUM(:novo_limite) nas linhas de total que foram
+    empurradas para baixo pela inserção."""
+    nova_ultima_item = LINHA_ULTIMO_ITEM_TEMPLATE + n_extras
+    nova_total_ref = LINHA_TOTAL_REFERENCIA + n_extras
+    nova_total_final = LINHA_TOTAL_FINAL + n_extras
+
+    # Linha 505 antes / nova_total_ref agora: =SUM(Y5:Y504) → =SUM(Y5:Y<nova>)
+    for col in range(1, ws.max_column + 1):
+        v = ws.cell(row=nova_total_ref, column=col).value
+        if isinstance(v, str) and ":" in v and "504" in v:
+            ws.cell(row=nova_total_ref, column=col).value = v.replace("504", str(nova_ultima_item))
+
+    # Linha 507 antes: =SUM(I5:I504), =G507/C507, =SUM(K5:K504)
+    for col in range(1, ws.max_column + 1):
+        v = ws.cell(row=nova_total_final, column=col).value
+        if isinstance(v, str) and v.startswith("="):
+            atualizada = v.replace(":I504", f":I{nova_ultima_item}") \
+                          .replace(":K504", f":K{nova_ultima_item}") \
+                          .replace("G507", f"G{nova_total_final}") \
+                          .replace("C507", f"C{nova_total_final}")
+            ws.cell(row=nova_total_final, column=col).value = atualizada
+
+
+def _nome_default(orgao: str | None, numero: str | None) -> str:
+    from datetime import datetime
+    partes = ["pregao"]
+    if orgao:
+        partes.append("".join(c for c in orgao if c.isalnum())[:20])
+    if numero:
+        partes.append("".join(c for c in numero if c.isalnum())[:20])
+    partes.append(datetime.now().strftime("%Y%m%d_%H%M%S"))
+    return "_".join(partes) + ".xlsx"

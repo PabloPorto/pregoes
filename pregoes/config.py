@@ -1,0 +1,77 @@
+"""
+Configurações centrais do sistema de automação de pregões.
+
+Todo parâmetro que pode mudar fica aqui. Nada de constantes espalhadas
+pelo código. Se o cliente quiser alterar markup, overhead, cache, etc.,
+mexe só neste arquivo.
+"""
+from pathlib import Path
+
+# Estrutura de diretórios
+BASE_DIR = Path(__file__).resolve().parent.parent
+DATA_DIR = BASE_DIR / "data"
+TEMPLATES_DIR = DATA_DIR / "templates"
+EDITAIS_DIR = DATA_DIR / "editais"
+EXPORTS_DIR = DATA_DIR / "exports"
+DB_PATH = DATA_DIR / "pregoes.db"
+TEMPLATE_MATRIZ = TEMPLATES_DIR / "matriz_template.xlsx"
+
+# Garantir que pastas existam
+for d in (DATA_DIR, TEMPLATES_DIR, EDITAIS_DIR, EXPORTS_DIR):
+    d.mkdir(parents=True, exist_ok=True)
+
+# === Parâmetros financeiros (espelham o template MATRIZ) ===
+MARKUP_DEFAULT = 1.45               # Multiplicador padrão sobre custo de aquisição
+PERC_OPERACIONAL = 0.03             # 3% operacional
+PERC_COMISSAO = 0.05                # 5% comissão
+PERC_IMPOSTOS_FEDERAIS = 0.07       # 7% impostos federais
+VALOR_MINIMO_FATOR = 0.5            # Mínimo aceitável = 50% do valor de referência
+
+# === Cache de preços ===
+CACHE_PRECO_DIAS = 2                # TTL conforme decisão (resp 9)
+
+# === Scraping ===
+SCRAPER_TIMEOUT_SEGUNDOS = 30
+SCRAPER_RETRY = 2
+FORNECEDORES = {
+    "almeida": "https://www.almeidadistribuidor.com.br",
+    "dantas": "https://www.dantasdistribuidora.com.br",
+}
+
+# === Layout do template MATRIZ.xlsx ===
+# Linha onde os cabeçalhos reais estão (R4 conforme análise do template)
+LINHA_CABECALHO = 4
+# Primeira linha de dados
+LINHA_DADOS_INICIO = 5
+# Mapeamento das colunas conforme template do cliente
+COLUNAS = {
+    "item":              "B",
+    "descricao":         "C",
+    "unidade":           "D",
+    "quantidade":        "E",
+    "valor_referencia":  "F",
+    "preco_venda":       "G",   # FÓRMULA — não tocar
+    "margem":            "H",   # FÓRMULA
+    "faturamento":       "I",   # FÓRMULA
+    "lucro_unitario":    "J",   # FÓRMULA
+    "lucro_item":        "K",   # FÓRMULA
+    "preco_base":        "L",   # ← do scraper
+    "perc_st":           "M",   # manual no MVP
+    "valor_st":          "N",   # FÓRMULA
+    "perc_ipi":          "O",   # manual no MVP
+    "valor_ipi":         "P",   # FÓRMULA
+    "perc_frete":        "Q",   # manual no MVP
+    "outros":            "R",   # FÓRMULA
+    "custo_aquisicao":   "S",   # FÓRMULA
+    "codigo_fornecedor": "T",   # ← do scraper
+    "marca":             "U",   # ← do scraper
+}
+
+# Colunas que o RPA preenche (resto é fórmula do Excel)
+COLUNAS_PREENCHIDAS_RPA = ["item", "descricao", "unidade", "quantidade",
+                            "valor_referencia", "preco_base",
+                            "codigo_fornecedor", "marca"]
+
+# === UI Streamlit ===
+PORTA_UI = 8501
+TITULO_APP = "Pregões — Automação de Formação de Preços"

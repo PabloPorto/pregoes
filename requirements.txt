@@ -1,0 +1,31 @@
+# Dependências do MVP — fase 0 e 1
+# Instalação: pip install -r requirements.txt
+
+# Extração de PDF
+pdfplumber>=0.11.0
+
+# Manipulação Excel preservando fórmulas
+openpyxl>=3.1.0
+
+# Análise tabular usada na UI
+pandas>=2.2.0
+
+# UI web local
+streamlit>=1.40.0
+
+# Geração de PDFs sintéticos para testes
+reportlab>=4.2.0
+
+# Testes
+pytest>=8.0.0
+
+# Scraping de fornecedores (Almeida, Dantas) — fase 2
+# Após pip install, rodar uma vez: python -m playwright install chromium
+playwright>=1.40.0
+
+# === Reservado para fase 2 cont. ===
+# rapidfuzz>=3.0.0
+
+# === Reservado para fase 3 (NF-e + dashboard) ===
+# lxml>=5.0.0      # parsing de XMLs de NF-e
+# plotly>=5.0.0    # gráficos do dashboard
