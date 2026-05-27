@@ -663,19 +663,25 @@ def _executar_busca(itens: list, fornecedores_nomes: list[str]) -> None:
 
 
 def _mostrar_selecao(itens: list, resultados: dict) -> None:
-    """Tabela paginada com selectbox por linha. Operador escolhe a marca."""
+    """Tabela paginada com selectbox por linha. Operador escolhe a marca.
+
+    Default de seleção = MENOR preço entre todas as opções de todos os
+    fornecedores. Atende o caso comum ("quero o mais barato") sem violar
+    o princípio do briefing (CLAUDE.md §7) — o sistema apresenta todas
+    as opções e o operador pode trocar quando precisar marca específica.
+    """
     from pregoes.exportador import SelecaoFornecedor
 
-    # Inicializa estado de seleções (default: primeira opção, ou nenhuma se vazio)
+    # Inicializa estado de seleções com a opção de MENOR preço por item
     if "selecoes" not in st.session_state:
         st.session_state.selecoes = {}
         for idx, opcoes in resultados.items():
             if opcoes:
-                primeiro = opcoes[0]
+                mais_barato = min(opcoes, key=lambda o: o.preco)
                 st.session_state.selecoes[idx] = SelecaoFornecedor(
-                    preco=primeiro.preco,
-                    codigo_fornecedor=primeiro.codigo_fornecedor,
-                    marca=primeiro.marca,
+                    preco=mais_barato.preco,
+                    codigo_fornecedor=mais_barato.codigo_fornecedor,
+                    marca=mais_barato.marca,
                 )
 
     # Resumo
@@ -762,27 +768,38 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
                 )
                 continue
 
-            # Selectbox: operador escolhe entre as opções
-            labels = ["(não usar)"] + [
-                f"{o.marca} — R$ {o.preco:.2f} — código {o.codigo_fornecedor} — {o.descricao_encontrada[:60]}"
-                for o in opcoes
-            ]
+            # Ordena opções por preço ascendente — operador vê o mais barato
+            # no topo e o sistema marca explicitamente qual é o melhor preço.
+            opcoes_ordenadas = sorted(opcoes, key=lambda o: o.preco)
+            preco_min = opcoes_ordenadas[0].preco
+
+            def _label(o):
+                tag_min = " 💰 mais barato" if o.preco == preco_min else ""
+                return (
+                    f"{o.marca} — R$ {o.preco:.2f} ({o.fornecedor})"
+                    f"{tag_min} — código {o.codigo_fornecedor} — "
+                    f"{o.descricao_encontrada[:50]}"
+                )
+
+            labels = ["(não usar)"] + [_label(o) for o in opcoes_ordenadas]
             default_idx = 0
             if sel_atual is not None:
                 # Encontra a opção que casa com a seleção atual
-                for i, o in enumerate(opcoes):
+                for i, o in enumerate(opcoes_ordenadas):
                     if (o.preco == sel_atual.preco and o.marca == sel_atual.marca
                             and o.codigo_fornecedor == sel_atual.codigo_fornecedor):
                         default_idx = i + 1
                         break
 
             escolha = st.selectbox(
-                "Marca / preço",
+                "Marca / preço (default = mais barato)",
                 options=range(len(labels)),
                 format_func=lambda i: labels[i],
                 index=default_idx,
                 key=f"sel_{idx}",
             )
+            # Substitui a lista usada abaixo para já estar ordenada
+            opcoes = opcoes_ordenadas
             if escolha == 0:
                 st.session_state.selecoes.pop(idx, None)
             else:
