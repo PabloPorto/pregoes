@@ -26,10 +26,11 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo  Instalando dependencias (pode demorar 2-3 minutos)...
+echo  Instalando dependencias (pode demorar 5-10 minutos).
+echo  Inclui PyTorch CPU para extracao de PDFs complexos.
 echo.
 python -m pip install --upgrade pip --quiet
-python -m pip install -r requirements.txt
+python -m pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
 if errorlevel 1 (
     echo.
     echo  [ERRO] Falha ao instalar dependencias.

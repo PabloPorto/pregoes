@@ -39,48 +39,50 @@
 
 ---
 
-### Q6. Heurísticas de extração de PDF — calibradas em uma amostra única
+### Q6. Heurísticas de extração de PDF — refatoração concluída (2026-05-27)
 
-**Contexto.** O `extrator.py` ganhou três filtros para fazer o edital de
-Araruna 06/2026 funcionar end-to-end (513 itens, sem repetição, sem fragmento
-órfão):
+**Histórico.** Versão inicial do `extrator.py` foi calibrada na amostra
+única do edital Araruna 06/2026 com 3 heurísticas pontuais. Testes com
+5 editais reais de outros órgãos (TRE-PE, SEI/HU, Hidráulicos, etc.)
+mostraram que essas heurísticas quebravam em massa — 2 dos 5 PDFs
+produziam 100% de lixo, 1 produzia 85% de lixo.
 
-1. **Continuação de tabela entre páginas** — se uma tabela não tem cabeçalho
-   próprio mas já vimos um cabeçalho válido antes, assume continuação.
-2. **Filtro de "modelo de proposta"** — pula tabelas cujo cabeçalho contém
-   `MARCA/MODELO`, para não capturar o anexo de proposta em branco como se
-   fossem itens do edital.
-3. **Filtro de fragmento órfão** — descarta linhas com descrição < 12 chars
-   sem nenhum campo numérico, para eliminar quebras visuais que o pdfplumber
-   converte em linha de tabela isolada (ex: `KG.` solto).
+**Solução implementada (Etapa 1.0.A + 1.0.C, 2026-05-27).** Pipeline
+multi-camada com seleção por score semântico:
 
-**Default em uso.** As três heurísticas estão ativas e foram validadas contra
-uma única amostra real (Araruna 06/2026). Funcionam para esse edital.
+1. **Camada 1 — pdfplumber + validador semântico** ([extrator.py](pregoes/extrator.py)
+   + [validador.py](pregoes/validador.py)). Coleta todas as tabelas brutas,
+   identifica cabeçalho (com concatenação multi-linha), scoreia cada
+   tabela por densidade de linhas que parecem itens reais (descrição
+   longa + quantidade > 0 + unidade conhecida em catálogo brasileiro).
+   Aceita só tabelas com score ≥ 0.5; descarta linhas com score < 0.4.
+2. **Camada 2 — Docling visual** ([extrator_docling.py](pregoes/extrator_docling.py)).
+   Modelo TableFormer + DocLayNet (IBM). Chamado automaticamente quando
+   Camada 1 retorna confiança < 0.95. Roda CPU-only, offline após
+   primeiro download de modelos.
+3. **Camada 3 — mapeamento manual com aprendizado** ([mapeamento_manual.py](pregoes/mapeamento_manual.py)
+   + tela `mapeamento` em [ui/app.py](pregoes/ui/app.py)). UI mostra
+   tabelas brutas, operador escolhe a tabela de itens e mapeia cada
+   coluna. Mapa fica salvo em `mapeamentos_pdf` por assinatura de
+   cabeçalho — próximos PDFs com o mesmo cabeçalho usam automaticamente.
 
-**Risco.** Editais de outros órgãos podem ter:
-- Modelo de proposta com cabeçalho diferente (`FABRICANTE`, `PROCEDÊNCIA`,
-  `MODELO/MARCA` em outra ordem) ou idêntico ao do Termo de Referência.
-- Tabelas com numeração que começa em outro valor (lotes, sub-itens).
-- Itens legítimos com descrição muito curta (raro em material de construção,
-  mas possível: "BROCA 1/8", "PARAFUSO 6").
-- Linhas de subtotal por categoria que não casam com nosso vocabulário de
-  "lixo" (`total`, `subtotal`, `valor global`, `etc.`).
+**Métrica publicada.** `ResultadoExtracao.confianca_global ∈ [0,1]` (fração
+de itens com score ≥ 0.7 sobre total aceito). UI mostra semáforo
+(verde ≥ 0.95, amarelo ≥ 0.80, vermelho < 0.80). Quando vermelho,
+sistema oferece mapeamento manual antes do operador prosseguir.
 
-**Próximo passo necessário.** Quando aparecer o **segundo edital real** do
-cliente, rodar o extrator nele antes de qualquer fase nova e medir:
-- Total de itens extraídos vs. total declarado no edital.
-- Falsos positivos (linhas-lixo capturadas).
-- Falsos negativos (itens reais descartados pelo filtro de fragmento).
+**Resultados nos 5 PDFs reais (validação de 2026-05-27):**
+- PDF 02 (Hash/PE): de 22% duvidosos para 100% confiança
+- PDF 04 (Hidráulicos): 99.38% mantido
+- PDF 01 (Edital+Anexos): 85% de lixo → 60% confiança (75% de redução
+  de lixo; ainda dependente de Docling para resolver completamente)
+- PDFs 03 (TRE-PE) e 05 (SEI/HU): reconhecem falha honestamente (0%
+  confiança + aviso) e oferecem mapeamento manual; antes entregavam
+  100% lixo silenciosamente.
 
-Com 2-3 amostras reais, substituir as heurísticas pontuais por algo mais
-robusto. Candidatos: detecção de "número de item retrocede" entre tabelas
-consecutivas; parar de extrair após detectar a linha `TOTAL` do Termo de
-Referência; concatenar fragmentos órfãos à linha anterior em vez de
-descartar; aprender mapeamento por assinatura de cabeçalho via tabela
-`mapeamentos_pdf` (que já existe no schema mas ainda não é usada).
-
-**Não bloqueia.** O sistema funciona para o edital atual. É débito técnico
-a revisitar quando houver dor real, não preventivamente.
+**Não bloqueia.** Sistema sempre devolve resultado utilizável: ou
+extração automática de alta confiança, ou aviso explícito + mapeamento
+manual disponível. Calibração futura conforme mais editais aparecerem.
 
 ---
 

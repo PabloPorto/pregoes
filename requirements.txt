@@ -23,9 +23,17 @@ pytest>=8.0.0
 # Após pip install, rodar uma vez: python -m playwright install chromium
 playwright>=1.40.0
 
-# === Reservado para fase 2 cont. ===
-# rapidfuzz>=3.0.0
+# Extração robusta de PDF — camada visual (Docling IBM, TableFormer + DocLayNet).
+# Necessário para editais com layout complexo onde pdfplumber sozinho falha.
+# Pesada (~1.5GB com PyTorch CPU). Instalação no Windows pelo setup.bat já
+# inclui o --extra-index-url do PyTorch CPU.
+# A primeira execução do app baixa ~500MB de modelos para
+# C:/Users/<u>/.cache/docling (depois funciona offline).
+docling>=2.0.0
 
-# === Reservado para fase 3 (NF-e + dashboard) ===
+# === Reservado para fase 3 ===
+# rapidfuzz>=3.0.0   # fuzzy matching de descrições (matcher)
+
+# === Reservado para fase 4 (NF-e + dashboard) ===
 # lxml>=5.0.0      # parsing de XMLs de NF-e
 # plotly>=5.0.0    # gráficos do dashboard

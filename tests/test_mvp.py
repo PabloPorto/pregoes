@@ -276,3 +276,88 @@ def test_extrator_expoe_confianca_global():
     assert 0.0 <= res.confianca_global <= 1.0
     # PDF sintético é controlado: confiança deve ser alta
     assert res.confianca_global >= 0.9
+
+
+# === Mapeamento manual ===
+
+from pregoes import mapeamento_manual as mm
+
+
+def test_assinatura_cabecalho_estavel():
+    """Mesma linha (varia caixa/acento/espaço) → mesma assinatura."""
+    a = mm.assinatura_cabecalho(["Item", "Descrição", "Quant.", "Unidade", "Valor"])
+    b = mm.assinatura_cabecalho(["ITEM", "DESCRICAO", "Quant.", "unidade", "VALOR"])
+    c = mm.assinatura_cabecalho(["  item  ", "descrição ", " quant.", "unidade", "Valor"])
+    assert a == b == c
+
+
+def test_assinatura_cabecalho_diferente_para_layouts_diferentes():
+    a = mm.assinatura_cabecalho(["Item", "Descrição", "Quant.", "Unidade"])
+    b = mm.assinatura_cabecalho(["Item", "Descrição", "Quant.", "Unidade", "Valor"])
+    assert a != b
+
+
+def test_mapeamento_salvar_e_carregar(tmp_path):
+    """Round-trip: salva mapa, lê de volta, valida que veio igual."""
+    db = tmp_path / "test.db"
+    init_db(db)
+    mapa_original = {"descricao": 2, "quantidade": 4, "unidade": 3,
+                     "valor_referencia": 5, "codigo_orgao": 0}
+    sig = "abcd1234"
+
+    with get_conn(db) as conn:
+        mm.salvar_mapa(conn, sig, mapa_original)
+
+    with get_conn(db) as conn:
+        recuperado = mm.carregar_mapa(conn, sig)
+
+    assert recuperado == mapa_original
+
+
+def test_mapeamento_carregar_inexistente_retorna_none(tmp_path):
+    db = tmp_path / "test.db"
+    init_db(db)
+    with get_conn(db) as conn:
+        assert mm.carregar_mapa(conn, "qualquer-coisa-inexistente") is None
+
+
+def test_aplicar_mapa_extrai_itens_corretos():
+    """Tabela bruta + mapa → ItemExtraido. Lixo é filtrado por score."""
+    tabela = [
+        ["Item", "Descrição", "Qtd", "Un", "Valor"],     # cabeçalho
+        ["1", "ABRAÇADEIRA DE NYLON 100 X 2.5", "40", "PCT", "16.40"],
+        ["2", "VERGALHÃO ACO CA-50 12,5 MM", "100", "BARRA", "85.50"],
+        ["3", "Total Geral", "—", "—", "1234.56"],       # linha-lixo
+    ]
+    mapa = {"codigo_orgao": 0, "descricao": 1, "quantidade": 2,
+            "unidade": 3, "valor_referencia": 4}
+
+    res = mm.aplicar_mapa(tabela, mapa, arquivo="test.pdf")
+    assert res.total_itens == 2   # linha 'Total Geral' descartada pelo score
+    assert res.itens[0].quantidade == 40
+    assert res.itens[0].valor_referencia == 16.40
+    assert res.itens[1].quantidade == 100
+    assert res.confianca_global == 1.0
+
+
+# === Pipeline multi-camada (extrair_com_pipeline) ===
+
+from pregoes.extrator import extrair_com_pipeline
+from pregoes import extrator_docling
+
+
+def test_pipeline_pdf_sintetico_resolve_na_camada_1():
+    """PDF sintético é simples — pdfplumber resolve. Não precisa Docling."""
+    res = extrair_com_pipeline(PDF_TESTE)
+    assert res.total_itens == 25
+    assert res.confianca_global >= 0.9
+    # Primeiro aviso deve indicar qual camada resolveu
+    assert any("pdfplumber" in a.lower() or "rápida" in a.lower()
+               for a in res.avisos)
+
+
+def test_disponivel_docling_responde_sem_quebrar():
+    """A função `disponivel()` checa importlib sem importar de verdade —
+    funciona mesmo quando Docling não está instalado."""
+    out = extrator_docling.disponivel()
+    assert isinstance(out, bool)

@@ -397,18 +397,18 @@ _THRESHOLD_LINHA_EXTRAIDA = 0.7
 _THRESHOLD_LINHA_DUVIDOSA = 0.4
 
 
-def extrair_pdf(caminho_pdf: str | Path) -> ResultadoExtracao:
-    """Extrai itens de um PDF de edital com seleção de tabelas por score.
+def processar_tabelas_brutas(
+    tabelas_brutas: list[_TabelaBruta],
+    arquivo: str,
+) -> ResultadoExtracao:
+    """Aplica o pipeline de score em tabelas já coletadas.
 
-    Sempre retorna `ResultadoExtracao`. Itens claramente lixo (score < 0.4)
-    são silenciosamente descartados; itens duvidosos (0.4 ≤ s < 0.7) entram
-    com confianca='duvidoso' para a UI marcar visualmente. A propriedade
-    `confianca_global` mostra a fração de extraidos no resultado final.
+    Existe separadamente de `extrair_pdf` para permitir que outras camadas
+    (Docling visual, mapeamento manual) reusem a mesma lógica de scoring
+    e seleção. Cada camada produz `_TabelaBruta`s à sua maneira e chama
+    esta função para o restante.
     """
-    caminho_pdf = Path(caminho_pdf)
-    resultado = ResultadoExtracao(arquivo=str(caminho_pdf))
-
-    tabelas_brutas = _coletar_tabelas(caminho_pdf)
+    resultado = ResultadoExtracao(arquivo=arquivo)
     resultado.tabelas_brutas = [t.linhas for t in tabelas_brutas]
 
     if not tabelas_brutas:
@@ -441,9 +441,9 @@ def extrair_pdf(caminho_pdf: str | Path) -> ResultadoExtracao:
     blocos_aceitos = [b for b in blocos if _score_bloco(b) >= _THRESHOLD_TABELA_ACEITA]
 
     if not blocos_aceitos:
-        # Não bateu o threshold em nenhum bloco. Pega o melhor mesmo assim
-        # como melhor esforço — a UI vai mostrar confiança baixa e o
-        # operador pode optar pelo mapeamento manual.
+        # Não bateu threshold em nenhum bloco. Pega o melhor como melhor
+        # esforço — a UI vai mostrar confiança baixa e o operador pode
+        # optar pelo mapeamento manual.
         melhor = max(blocos, key=_score_bloco, default=None)
         if melhor is not None:
             blocos_aceitos = [melhor]
@@ -456,7 +456,6 @@ def extrair_pdf(caminho_pdf: str | Path) -> ResultadoExtracao:
         resultado.confianca_global = 0.0
         return resultado
 
-    # Mapa exposto na UI = o do primeiro bloco aceito (mais comum).
     resultado.mapa_colunas_detectado = blocos_aceitos[0][0].mapa
 
     n_extraidos = 0
@@ -480,3 +479,68 @@ def extrair_pdf(caminho_pdf: str | Path) -> ResultadoExtracao:
     total_aceitos = n_extraidos + n_duvidosos
     resultado.confianca_global = (n_extraidos / total_aceitos) if total_aceitos else 0.0
     return resultado
+
+
+def extrair_pdf(caminho_pdf: str | Path) -> ResultadoExtracao:
+    """Extrai itens via pdfplumber + score semântico.
+
+    Camada 1 do pipeline. Rápida (~1-3s/edital), sem dependências pesadas.
+    Resolve PDFs com layout tabular limpo. Para layouts complexos, usar
+    `extrair_com_pipeline` que automaticamente tenta camadas adicionais.
+    """
+    caminho_pdf = Path(caminho_pdf)
+    tabelas = _coletar_tabelas(caminho_pdf)
+    return processar_tabelas_brutas(tabelas, arquivo=str(caminho_pdf))
+
+
+# === Pipeline multi-camada ===
+
+# Confiança mínima para aceitar resultado da camada e não tentar a seguinte.
+# Abaixo disso, escalonamos automaticamente para a camada mais robusta.
+_CONFIANCA_SUFICIENTE = 0.95
+
+
+def extrair_com_pipeline(caminho_pdf: str | Path) -> ResultadoExtracao:
+    """Extração em múltiplas camadas com fallback automático.
+
+    Ordem:
+    1. pdfplumber + score semântico (rápido)
+    2. Docling visual (TableFormer, ~3-10s/página) — se disponível e
+       camada 1 < 95% de confiança
+
+    Sempre devolve o melhor resultado disponível. A camada usada vira o
+    primeiro aviso em `resultado.avisos` para a UI mostrar.
+    """
+    res1 = extrair_pdf(caminho_pdf)
+    if res1.confianca_global >= _CONFIANCA_SUFICIENTE:
+        res1.avisos.insert(0, "Extração rápida (pdfplumber): confiança suficiente.")
+        return res1
+
+    # Tenta camada Docling. Import local porque a dep é pesada (~1.5GB)
+    # e pode não estar instalada em ambientes leves.
+    try:
+        from .extrator_docling import extrair_via_docling
+    except ImportError:
+        res1.avisos.insert(
+            0,
+            "Camada Docling não disponível neste ambiente — "
+            "para PDFs complexos, instale `pip install docling`."
+        )
+        return res1
+
+    try:
+        res2 = extrair_via_docling(caminho_pdf)
+    except Exception as exc:
+        res1.avisos.insert(0, f"Camada Docling falhou tecnicamente: {exc}")
+        return res1
+
+    if res2.confianca_global > res1.confianca_global:
+        res2.avisos.insert(
+            0,
+            f"Camada Docling escolhida (confiança {res2.confianca_global:.0%} "
+            f"vs pdfplumber {res1.confianca_global:.0%})."
+        )
+        return res2
+
+    res1.avisos.insert(0, "Camada pdfplumber escolhida (Docling não melhorou).")
+    return res1

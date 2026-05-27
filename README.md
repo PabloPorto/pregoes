@@ -50,6 +50,13 @@ extrair os itens do edital em PDF e gerar a planilha matriz preenchida.
 - Arraste o PDF do edital para a área indicada.
 - Preencha o nome do órgão e número do pregão (opcional).
 - Clique em **"Extrair itens do PDF"**.
+- Veja o **selo de confiança** no topo: 🟢 verde (≥95%) significa
+  extração limpa, 🟡 amarelo precisa atenção, 🔴 vermelho precisa
+  conferência cuidadosa ou mapeamento manual.
+- Se aparecer o botão **"🛠️ Mapeamento Manual"**, clique para
+  indicar manualmente qual é a tabela de itens e o que é cada coluna.
+  O sistema **aprende** o formato e usa automaticamente em próximos
+  editais do mesmo órgão.
 - Confira a tabela. Edite o que quiser. Desmarque o quadradinho "OK?"
   para descartar uma linha.
 - Ajuste o **markup** se for o caso (padrão 1.45).

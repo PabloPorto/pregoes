@@ -13,8 +13,8 @@ import tempfile
 import streamlit as st
 import pandas as pd
 
-from pregoes import config, credenciais
-from pregoes.extrator import extrair_pdf
+from pregoes import config, credenciais, mapeamento_manual
+from pregoes.extrator import extrair_com_pipeline
 from pregoes.exportador import exportar
 from pregoes.db import init_db, get_conn
 
@@ -111,10 +111,36 @@ def tela_upload():
             tmp_path = Path(tmp.name)
 
             try:
-                resultado = extrair_pdf(tmp_path)
+                resultado = extrair_com_pipeline(tmp_path)
             except Exception as exc:
                 st.error(f"Falha ao ler PDF: {exc}")
                 return
+
+        # Pipeline automático ficou abaixo do limite? Tenta mapas aprendidos
+        # de PDFs anteriores com a mesma assinatura de cabeçalho.
+        if resultado.confianca_global < 0.95 and resultado.tabelas_brutas:
+            with get_conn() as conn:
+                for idx, tab in enumerate(resultado.tabelas_brutas):
+                    if not tab or not tab[0]:
+                        continue
+                    sig = mapeamento_manual.assinatura_cabecalho(tab[0])
+                    mapa_salvo = mapeamento_manual.carregar_mapa(conn, sig)
+                    if not mapa_salvo:
+                        continue
+                    novo = mapeamento_manual.aplicar_mapa(
+                        tab, mapa_salvo,
+                        arquivo=str(tmp_path),
+                        pular_cabecalho=True,
+                    )
+                    if novo.confianca_global > resultado.confianca_global:
+                        novo.tabelas_brutas = resultado.tabelas_brutas
+                        novo.avisos.insert(
+                            0,
+                            f"✨ Mapa aprendido reusado (tabela #{idx + 1}, "
+                            f"cabeçalho conhecido)."
+                        )
+                        resultado = novo
+                        break
 
         st.session_state.extracao = resultado
         # Reset do df_editavel: sem isto, uma extração nova reaproveita o
@@ -164,10 +190,26 @@ def tela_revisao():
         for aviso in res.avisos:
             st.warning(aviso)
 
+    # Quando a confiança automática não é alta o bastante OU não saiu item
+    # algum, oferece mapeamento manual. O operador escolhe a tabela bruta
+    # certa e indica o que é cada coluna — o sistema aprende e usa em
+    # próximos editais com mesmo cabeçalho.
+    if conf < 0.95 and res.tabelas_brutas:
+        st.info(
+            "💡 A confiança automática ficou abaixo de 95%. Você pode entrar "
+            "no **Mapeamento Manual** para indicar qual é a tabela de itens "
+            "e quais são as colunas. O sistema aprende e usa o mapeamento "
+            "em próximos editais com o mesmo formato."
+        )
+        if st.button("🛠️ Mapeamento Manual", use_container_width=False):
+            ir_para("mapeamento")
+
     if res.total_itens == 0:
-        st.error("Nenhum item foi extraído. Pode ser PDF escaneado (precisa OCR) "
-                 "ou layout que a heurística não reconheceu. "
-                 "Funcionalidade de mapeamento manual será adicionada na próxima entrega.")
+        st.error(
+            "Nenhum item foi extraído automaticamente. Se o PDF tem uma "
+            "tabela de itens visível, use o **Mapeamento Manual** acima. "
+            "Se o PDF está escaneado (imagem), precisa OCR — avise o time."
+        )
         return
 
     st.caption("Confira os itens abaixo. Você pode editar qualquer célula clicando nela. "
@@ -557,11 +599,155 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
         _gerar_excel(df, markup=markup, selecoes=st.session_state.selecoes)
 
 
+# === Tela: MAPEAMENTO MANUAL ===
+def tela_mapeamento():
+    from pregoes import mapeamento_manual
+
+    res = st.session_state.extracao
+    if res is None or not res.tabelas_brutas:
+        st.error("Nada para mapear — volte e suba um PDF primeiro.")
+        if st.button("← Início"):
+            ir_para("home")
+        return
+
+    if st.button("← Voltar para revisão"):
+        ir_para("revisao")
+
+    st.title("🛠️ Mapeamento Manual da Tabela de Itens")
+    st.caption(
+        "Passo 1: escolha qual das tabelas abaixo é a tabela de itens do edital. "
+        "Passo 2: indique o que é cada coluna. O sistema aprende e usa esse "
+        "mapeamento automaticamente em próximos editais com o mesmo formato."
+    )
+
+    # === Passo 1 ===
+    st.subheader("Passo 1 — Qual das tabelas é a de itens?")
+
+    # Mostra preview de cada tabela: cabeçalho + 1 linha de dados
+    opcoes_label = []
+    for idx, tab in enumerate(res.tabelas_brutas):
+        if not tab:
+            opcoes_label.append(f"Tabela #{idx + 1} (vazia)")
+            continue
+        n_cols = max(len(r) for r in tab if r) if tab else 0
+        n_linhas = len(tab)
+        # Pré-visualização: primeira linha não vazia
+        primeira = next((r for r in tab if r and any(c for c in r)), [])
+        preview = " | ".join(str(c)[:25] for c in primeira[:6] if c)[:120]
+        opcoes_label.append(f"Tabela #{idx + 1} · {n_cols} colunas · {n_linhas} linhas · {preview}")
+
+    idx_tabela = st.selectbox(
+        "Tabelas detectadas no PDF",
+        options=range(len(res.tabelas_brutas)),
+        format_func=lambda i: opcoes_label[i],
+        key="mapeamento_tabela_idx",
+    )
+    tabela_alvo = res.tabelas_brutas[idx_tabela]
+
+    if not tabela_alvo:
+        st.warning("Tabela vazia — escolha outra.")
+        return
+
+    n_cols_tabela = max(len(r) for r in tabela_alvo if r)
+
+    # Pré-visualização da tabela escolhida
+    st.caption(f"**Pré-visualização da Tabela #{idx_tabela + 1}** (primeiras 5 linhas):")
+    df_preview = pd.DataFrame(
+        [(linha + [""] * n_cols_tabela)[:n_cols_tabela] for linha in tabela_alvo[:5]],
+        columns=[f"Col {i+1}" for i in range(n_cols_tabela)],
+    )
+    st.dataframe(df_preview, use_container_width=True, hide_index=True)
+
+    # === Passo 2 ===
+    st.subheader("Passo 2 — O que é cada coluna?")
+    st.caption(
+        "A primeira linha do PDF acima é o cabeçalho — não vai virar item. "
+        "Para cada coluna, escolha o campo correspondente."
+    )
+
+    # Tenta puxar mapa salvo para esta assinatura. Se houver, usa como default.
+    assinatura = mapeamento_manual.assinatura_cabecalho(tabela_alvo[0])
+    with get_conn() as conn:
+        mapa_salvo = mapeamento_manual.carregar_mapa(conn, assinatura)
+
+    if mapa_salvo:
+        st.success(f"Encontrei um mapa salvo desta assinatura de cabeçalho — "
+                   f"valores abaixo já vieram preenchidos. Ajuste se precisar.")
+
+    mapa_atual: dict[str, int] = {}
+    cabecalho = tabela_alvo[0] if tabela_alvo else []
+    cols_ui = st.columns(min(n_cols_tabela, 3))
+    for c in range(n_cols_tabela):
+        label_cab = str(cabecalho[c])[:30] if c < len(cabecalho) else f"Col {c+1}"
+        # Default: se o mapa salvo aponta essa coluna pra algum campo, usa
+        default_campo = "ignorar"
+        if mapa_salvo:
+            for campo, idx_salvo in mapa_salvo.items():
+                if idx_salvo == c:
+                    default_campo = campo
+                    break
+
+        with cols_ui[c % len(cols_ui)]:
+            campo = st.selectbox(
+                f"Coluna {c + 1} — `{label_cab}`",
+                options=mapeamento_manual.CAMPOS,
+                format_func=lambda c=None: mapeamento_manual.ROTULOS_CAMPOS[c] if c else "",
+                index=mapeamento_manual.CAMPOS.index(default_campo),
+                key=f"map_col_{c}",
+            )
+            if campo != "ignorar":
+                if campo in mapa_atual:
+                    st.warning(f"⚠️ '{mapeamento_manual.ROTULOS_CAMPOS[campo]}' "
+                               f"já está em outra coluna.")
+                mapa_atual[campo] = c
+
+    # === Passo 3 ===
+    st.divider()
+    st.subheader("Passo 3 — Validar e aplicar")
+
+    obrigatorios = ["descricao", "quantidade"]
+    faltando = [mapeamento_manual.ROTULOS_CAMPOS[c]
+                for c in obrigatorios if c not in mapa_atual]
+    if faltando:
+        st.error(f"Mapeamento incompleto — faltam: **{', '.join(faltando)}**.")
+        return
+
+    salvar_mapa_check = st.checkbox(
+        "💾 Salvar este mapeamento para reuso automático em próximos editais "
+        "com o mesmo formato",
+        value=True,
+    )
+
+    if st.button("✅ Aplicar mapeamento", type="primary"):
+        novo_res = mapeamento_manual.aplicar_mapa(
+            tabela_alvo, mapa_atual,
+            arquivo=res.arquivo,
+            pular_cabecalho=True,
+        )
+        # Preserva as tabelas brutas originais para o operador poder
+        # eventualmente refazer o mapeamento.
+        novo_res.tabelas_brutas = res.tabelas_brutas
+
+        if salvar_mapa_check:
+            with get_conn() as conn:
+                mapeamento_manual.salvar_mapa(conn, assinatura, mapa_atual)
+            st.success(
+                f"Mapeamento salvo. Próximos PDFs com este cabeçalho usam "
+                f"automaticamente. Itens extraídos: **{novo_res.total_itens}**, "
+                f"confiança: **{novo_res.confianca_global:.0%}**."
+            )
+
+        st.session_state.extracao = novo_res
+        st.session_state.df_editavel = None  # força refresh do data_editor
+        ir_para("revisao")
+
+
 # === Roteador ===
 TELAS = {
     "home": tela_home,
     "upload": tela_upload,
     "revisao": tela_revisao,
+    "mapeamento": tela_mapeamento,
     "busca_precos": tela_busca_precos,
     "configuracoes": tela_configuracoes,
 }

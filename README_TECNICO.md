@@ -21,12 +21,17 @@ Stack inteiramente local, offline-first, sem dependência de serviços externos.
 PDF do edital
      │
      ▼
-[extrator.py] ── pdfplumber + heurísticas de cabeçalho
+[extrator.extrair_com_pipeline()]
+   1. pdfplumber + score semântico (validador.py) — rápido
+   2. Se confiança < 0.95 → tenta extrator_docling (visual, TableFormer)
+   3. Se ainda < 0.95 → UI procura mapa salvo em mapeamentos_pdf
+   4. Se mapa não existe → operador faz mapeamento manual (UI)
      │
      ▼
-[Streamlit UI] ── revisão humana (data_editor)
+[Streamlit UI] ── badge de confiança + revisão humana (data_editor)
      │
-     ├──> [db.py / SQLite] ── catálogo, histórico, mapeamentos
+     ├──> [db.py / SQLite] ── catálogo, histórico,
+     │                         mapeamentos_pdf (memória)
      │
      └──> [exportador.py] ── carrega template, preenche 7 colunas,
                               preserva 16 fórmulas
@@ -70,7 +75,10 @@ pregoes_app/
 │   ├── __init__.py
 │   ├── config.py              # Constantes — único arquivo a editar para tweaks
 │   ├── db.py                  # Schema SQLite + preco_em_cache + gravar_preco
-│   ├── extrator.py            # PDF → ItemExtraido (3 heurísticas, Q6)
+│   ├── extrator.py            # PDF → ItemExtraido (pipeline multi-camada)
+│   ├── extrator_docling.py    # ✅ Camada visual Docling/TableFormer (Q6)
+│   ├── validador.py           # ✅ score_linha / score_tabela (Q6)
+│   ├── mapeamento_manual.py   # ✅ mapa por assinatura → mapeamentos_pdf (Q6)
 │   ├── exportador.py          # ItemExtraido + SelecaoFornecedor → Excel matriz
 │   ├── normalizador.py        # ✅ normalizar_descricao + keywords + relevancia
 │   ├── credenciais.py         # ✅ CRUD de data/credenciais.json (Q8)
@@ -79,8 +87,9 @@ pregoes_app/
 │   ├── importador.py          # ⏳ TODO fase 3 — bootstrap histórico
 │   └── ui/
 │       ├── __init__.py
-│       └── app.py             # Streamlit — 5 telas (home, upload, revisão,
-│                              # busca de preços, configurações)
+│       └── app.py             # Streamlit — 6 telas (home, upload, revisão,
+│                              # mapeamento manual, busca de preços,
+│                              # configurações)
 ├── data/
 │   ├── pregoes.db             # SQLite (criado em runtime, gitignored)
 │   ├── credenciais.json       # email/senha Almeida + Dantas (gitignored)
@@ -88,14 +97,18 @@ pregoes_app/
 │   │   └── matriz_template.xlsx
 │   ├── editais/               # PDFs originais (gitignored, exceto sintético)
 │   └── exports/               # Excels gerados (gitignored)
+├── scripts/                   # Utilitários ad-hoc (não rodam em CI)
+│   ├── diagnostico_extrator.py    # calibrar heurísticas em editais novos
+│   └── inspecionar_tabelas.py     # ver todas as tabelas detectadas no PDF
 └── tests/
     ├── gerar_pdf_teste.py
-    ├── test_mvp.py            # 27 testes Fase 1 (com parametrize)
-    └── test_fase2_inicial.py  # 33 testes Fase 2 (scraper, normalizador,
-                                # credenciais, orquestrador)
+    ├── test_mvp.py            # Fase 1 + extrator novo + validador +
+    │                          # mapeamento manual + pipeline
+    └── test_fase2_inicial.py  # Fase 2 (scraper, normalizador, credenciais,
+                                # orquestrador)
 ```
 
-Total atual: **60 testes verdes** (`pytest -v`).
+Total atual: **79 testes verdes** (`pytest -v`).
 
 ## Schema SQLite
 
