@@ -309,18 +309,181 @@ class AlmeidaDistribuidor:
         return out
 
 
-# === Dantas (esqueleto) ===
+# === Dantas ===
+# Site estruturalmente similar ao Almeida (inspeção autônoma em 2026-05-27,
+# scripts/inspecionar_dantas.py): mesmo padrão de URL (/entrar, /busca?s=)
+# e mesmos atributos data-* em .product-card__info[data-codigo-produto].
+# Login também aceita email + senha; cookies relevantes pós-login são
+# PHPSESSID + token (mesmo conjunto do Almeida).
+#
+# Em vez de criar uma abstração para futuros fornecedores (CLAUDE.md §9
+# proíbe), repetimos a estrutura — quando aparecer o 3º fornecedor com
+# padrão diferente, refatoramos com contexto real.
+
+_BASE_URL_DANTAS = "https://www.dantasdistribuidora.com.br"
+
+
+def _parse_card_dantas(attrs: dict, confianca: str) -> Optional[ResultadoBusca]:
+    """Versão Dantas do parse — idêntica ao Almeida na estrutura,
+    diferindo só no `fornecedor` registrado no resultado.
+
+    Mantida como função separada (não parametrizando o Almeida) para
+    deixar explícito que são dois sites distintos — facilita debug
+    quando um site mudar o layout antes do outro.
+    """
+    codigo = (attrs.get("data-codigo-produto") or "").strip()
+    nome = (attrs.get("data-nome") or "").strip()
+    marca = (attrs.get("data-marca") or "").strip()
+    preco_str = (attrs.get("data-preco") or "").strip()
+
+    if not codigo or not nome or not preco_str:
+        return None
+    try:
+        preco = float(preco_str.replace(",", "."))
+    except ValueError:
+        return None
+    if preco <= 0:
+        return None
+
+    return ResultadoBusca(
+        descricao_encontrada=nome,
+        marca=marca,
+        preco=preco,
+        codigo_fornecedor=codigo,
+        confianca=confianca,
+        fornecedor="dantas",
+    )
+
 
 class DantasDistribuidora:
-    """Scraper de dantasdistribuidora.com.br. Não implementado ainda."""
+    """Scraper de dantasdistribuidora.com.br com pool paralelo.
+
+    Estrutura idêntica ao `AlmeidaDistribuidor` (ver inspeção em
+    scripts/inspecionar_dantas.py). Mantemos como classe separada porque
+    são dois sites distintos: se um mudar layout, o outro continua
+    funcionando sem mexer no código compartilhado.
+    """
 
     nome = "dantas"
 
-    def buscar(self, descricao: str) -> list[ResultadoBusca]:
-        raise NotImplementedError(
-            "DantasDistribuidora.buscar() será implementado no próximo lote "
-            "da Fase 2 (após validar Almeida em produção)."
+    def __init__(
+        self,
+        email: str,
+        senha: str,
+        *,
+        headless: bool = True,
+        pool_size: int = None,
+        max_req_por_segundo: float = None,
+    ):
+        self._email = email
+        self._senha = senha
+        self._headless = headless
+        self._pool_size = pool_size or config.SCRAPER_POOL_SIZE
+        self._playwright = None
+        self._browser = None
+        self._context = None
+        self._page_pool: queue.Queue = queue.Queue()
+        self._rate_limiter = _RateLimiter(
+            max_req_por_segundo or config.SCRAPER_MAX_REQ_POR_SEGUNDO
         )
+
+    def __enter__(self) -> "DantasDistribuidora":
+        from playwright.sync_api import sync_playwright
+
+        self._playwright = sync_playwright().start()
+        self._browser = self._playwright.chromium.launch(headless=self._headless)
+        self._context = self._browser.new_context(viewport={"width": 1280, "height": 900})
+        primeira = self._context.new_page()
+        self._login(primeira)
+        self._page_pool.put(primeira)
+        for _ in range(self._pool_size - 1):
+            self._page_pool.put(self._context.new_page())
+        return self
+
+    def __exit__(self, *_args) -> None:
+        try:
+            if self._browser is not None:
+                self._browser.close()
+        finally:
+            if self._playwright is not None:
+                self._playwright.stop()
+
+    def _login(self, page) -> None:
+        page.goto(f"{_BASE_URL_DANTAS}/entrar",
+                  wait_until="networkidle", timeout=30_000)
+        page.locator("input[name='email']").first.fill(self._email)
+        senha_input = page.locator("input[name='senha']").first
+        senha_input.fill(self._senha)
+        senha_input.press("Enter")
+        page.wait_for_timeout(4_000)
+
+        cookies = {c["name"]: c["value"] for c in self._context.cookies()}
+        if "PHPSESSID" not in cookies or "token" not in cookies:
+            raise RuntimeError(
+                "Falha no login Dantas — cookies de sessão não foram "
+                "estabelecidos. Verifique email/senha em data/credenciais.json."
+            )
+
+    def buscar(self, descricao: str) -> list[ResultadoBusca]:
+        if not descricao or not descricao.strip():
+            return []
+
+        normalizada = normalizar_descricao(descricao)
+        camadas: list[tuple[str, str]] = []
+        if normalizada:
+            camadas.append(("exato", normalizada))
+
+        kws = keywords(descricao)[:3]
+        if kws:
+            kws_query = " ".join(kws)
+            if kws_query != normalizada:
+                camadas.append(("variacao", kws_query))
+
+        if len(kws) >= 2:
+            kws_curto = " ".join(kws[:2])
+            if kws_curto not in (normalizada, " ".join(kws[:3])):
+                camadas.append(("variacao", kws_curto))
+
+        page = self._page_pool.get()
+        try:
+            for confianca, query in camadas:
+                self._rate_limiter.acquire()
+                brutos = self._buscar_query(page, query, confianca)
+                relevantes = [
+                    r for r in brutos
+                    if relevancia(descricao, r.descricao_encontrada) >= _RELEVANCIA_MINIMA
+                ]
+                if relevantes:
+                    return relevantes
+            return []
+        finally:
+            self._page_pool.put(page)
+
+    def _buscar_query(self, page, query: str, confianca: str) -> list[ResultadoBusca]:
+        url = f"{_BASE_URL_DANTAS}/busca?s={quote_plus(query)}"
+        page.goto(url, wait_until="networkidle", timeout=30_000)
+        page.wait_for_timeout(1_500)
+
+        cards_attrs = page.evaluate("""
+            () => {
+                const cards = document.querySelectorAll(
+                    '.product-card__info[data-codigo-produto]'
+                );
+                return Array.from(cards).slice(0, %d).map(el => ({
+                    'data-codigo-produto': el.getAttribute('data-codigo-produto'),
+                    'data-nome':           el.getAttribute('data-nome'),
+                    'data-preco':          el.getAttribute('data-preco'),
+                    'data-marca':          el.getAttribute('data-marca'),
+                }));
+            }
+        """ % _MAX_RESULTADOS_POR_QUERY)
+
+        out = []
+        for attrs in cards_attrs:
+            r = _parse_card_dantas(attrs, confianca)
+            if r is not None:
+                out.append(r)
+        return out
 
 
 # === Orquestrador em lote ===

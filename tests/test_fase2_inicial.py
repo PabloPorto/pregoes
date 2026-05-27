@@ -161,19 +161,46 @@ def test_classes_concretas_cumprem_protocolo():
     """Garantir que Almeida e Dantas têm `nome` e `buscar` — se isso quebrar
     o resto do pipeline já quebra junto."""
     almeida = AlmeidaDistribuidor(email="x@y", senha="z")
-    dantas = DantasDistribuidora()
+    dantas = DantasDistribuidora(email="x@y", senha="z")
     assert almeida.nome == "almeida"
     assert dantas.nome == "dantas"
     # Tipo estrutural: ambas devem satisfazer o Protocol em runtime,
     # via duck typing (Python não checa Protocol em runtime sem @runtime_checkable).
     assert hasattr(almeida, "buscar")
     assert hasattr(dantas, "buscar")
+    # Pool size default — mesmo nas duas
+    assert almeida._pool_size == dantas._pool_size
 
 
-def test_dantas_esqueleto_levanta_not_implemented():
-    """Dantas ainda é esqueleto e deve falhar de forma clara."""
-    with pytest.raises(NotImplementedError, match="implementado"):
-        DantasDistribuidora().buscar("ABRAÇADEIRA")
+def test_parse_card_dantas_caso_real():
+    """Estrutura real observada na inspeção autônoma de 2026-05-27.
+    Dantas usa exatamente o mesmo padrão data-* do Almeida no
+    `.product-card__info[data-codigo-produto]`."""
+    from pregoes.scraper import _parse_card_dantas
+
+    attrs = {
+        "data-codigo-produto": "41921",
+        "data-nome": "PARAFUSO NOVA FIXACOES P/TELHA FERRO ZINCADO BRANCO 85MM",
+        "data-preco": "63.18",
+        "data-marca": "NOVA FIXACOES",
+    }
+    r = _parse_card_dantas(attrs, confianca="exato")
+    assert r is not None
+    assert r.fornecedor == "dantas"
+    assert r.codigo_fornecedor == "41921"
+    assert r.preco == 63.18
+    assert r.marca == "NOVA FIXACOES"
+
+
+def test_parse_card_dantas_descarta_invalido():
+    """Mesma lógica conservadora do Almeida: faltou campo crítico → None."""
+    from pregoes.scraper import _parse_card_dantas
+
+    assert _parse_card_dantas({}, confianca="exato") is None
+    assert _parse_card_dantas(
+        {"data-codigo-produto": "1", "data-nome": "X", "data-preco": "0"},
+        confianca="exato",
+    ) is None  # preço zero
 
 
 def test_fornecedor_mockado_funciona_via_protocol():

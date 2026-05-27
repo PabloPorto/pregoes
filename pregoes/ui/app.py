@@ -87,10 +87,12 @@ def _renderizar_sidebar():
 
         st.markdown("###### Status", unsafe_allow_html=True)
         cred_almeida = credenciais.carregar("almeida")
+        cred_dantas = credenciais.carregar("dantas")
         almeida_status = ("Configurada", "success") if cred_almeida else ("Pendente", "warning")
+        dantas_status = ("Configurada", "success") if cred_dantas else ("Pendente", "warning")
         style.sidebar_status([
             ("Almeida", almeida_status[0], almeida_status[1]),
-            ("Dantas", "Em breve", "neutro"),
+            ("Dantas", dantas_status[0], dantas_status[1]),
         ])
 
         st.caption(
@@ -359,12 +361,14 @@ def tela_revisao():
 
     with col2:
         if st.button("Buscar preços", type="primary", use_container_width=True,
-                     help="Consulta Almeida (e futuramente Dantas). Pode demorar alguns minutos."):
+                     help="Consulta Almeida e Dantas (qualquer um configurado). Pode demorar minutos."):
             if not st.session_state.itens_revisados:
                 style.bloco_aviso("Nenhum item marcado como OK — nada para buscar.", tipo="danger")
-            elif credenciais.carregar("almeida") is None:
+            elif (credenciais.carregar("almeida") is None
+                  and credenciais.carregar("dantas") is None):
                 style.bloco_aviso(
-                    "Credenciais Almeida não configuradas. Acesse <b>Configurações</b> na barra lateral.",
+                    "Nenhum fornecedor configurado. Acesse <b>Configurações</b> "
+                    "para cadastrar Almeida e/ou Dantas.",
                     tipo="danger",
                 )
             else:
@@ -506,18 +510,51 @@ def tela_configuracoes():
                     )
 
     with aba_dantas:
-        style.bloco_aviso(
-            "A integração com a Dantas Distribuidora está em desenvolvimento. "
-            "A configuração ficará disponível assim que o scraper estiver pronto.",
-            tipo="info",
-        )
+        atual_dantas = credenciais.carregar("dantas") or {"email": "", "senha": ""}
+        if atual_dantas.get("email"):
+            style.bloco_aviso(
+                f"Credencial ativa: <code>{atual_dantas['email']}</code> (senha oculta).",
+                tipo="success",
+            )
+        else:
+            style.bloco_aviso(
+                "Nenhuma credencial salva. A busca não inclui Dantas até configurar.",
+                tipo="warning",
+            )
+            # Atalho útil: muitos operadores usam a mesma conta nas duas
+            cred_almeida_existente = credenciais.carregar("almeida")
+            if cred_almeida_existente:
+                if st.button("📋 Usar as mesmas credenciais da Almeida",
+                             key="copia_almeida_dantas"):
+                    credenciais.salvar(
+                        "dantas",
+                        cred_almeida_existente["email"],
+                        cred_almeida_existente["senha"],
+                    )
+                    st.rerun()
+
+        with st.form("form_dantas"):
+            email_d = st.text_input("E-mail", value=atual_dantas.get("email", ""),
+                                    key="dantas_email")
+            senha_d = st.text_input("Senha", value=atual_dantas.get("senha", ""),
+                                    type="password", key="dantas_senha")
+            salvar_d = st.form_submit_button("Salvar credenciais", type="primary")
+            if salvar_d:
+                if not email_d or not senha_d:
+                    style.bloco_aviso("Preencha e-mail e senha antes de salvar.",
+                                      tipo="danger")
+                else:
+                    credenciais.salvar("dantas", email_d.strip(), senha_d)
+                    style.bloco_aviso(
+                        "Credenciais da Dantas salvas com sucesso.", tipo="success",
+                    )
 
 
 # === Tela: BUSCA DE PREÇOS ===
 def tela_busca_precos():
     style.header_pagina(
         "Busca de preços nos fornecedores",
-        "Consulta cada item na Almeida (e futuramente Dantas) e mostra as marcas "
+        "Consulta cada item nos fornecedores configurados (Almeida e/ou Dantas) e mostra as marcas "
         "disponíveis. Você escolhe qual marca entra na planilha.",
     )
 
@@ -530,11 +567,26 @@ def tela_busca_precos():
             ir_para("revisao")
         return
 
-    st.caption(
-        f"{len(itens)} itens serão buscados na Almeida. "
-        "Estimativa: ~1,5s por item (~{:.0f} min nesta lista).".format(
-            len(itens) * 1.5 / 60
+    fornecedores_disponiveis = [
+        nome for nome in ("almeida", "dantas")
+        if credenciais.carregar(nome) is not None
+    ]
+    if not fornecedores_disponiveis:
+        style.bloco_aviso(
+            "Nenhum fornecedor configurado. Vá em <b>Configurações</b> "
+            "para cadastrar Almeida e/ou Dantas.",
+            tipo="danger",
         )
+        return
+
+    # Estimativa: ~1,5s por item por fornecedor, com pool 4 paralelizando
+    # ≈ rate limiter 2 req/s → ~0,5s por item efetivo por fornecedor.
+    n_forn = len(fornecedores_disponiveis)
+    minutos_est = len(itens) * 0.5 * n_forn / 60
+    fornec_str = " + ".join(f.capitalize() for f in fornecedores_disponiveis)
+    st.caption(
+        f"{len(itens)} itens serão buscados em {fornec_str}. "
+        f"Estimativa: ~{minutos_est:.0f} min nesta lista (com paralelismo)."
     )
 
     # Se ainda não buscou, oferecer botão para começar
@@ -542,7 +594,7 @@ def tela_busca_precos():
         col_a, col_b = st.columns([1, 5])
         with col_a:
             if st.button("Iniciar busca", type="primary"):
-                _executar_busca(itens)
+                _executar_busca(itens, fornecedores_disponiveis)
                 st.rerun()
         with col_b:
             if st.button("Voltar para revisão"):
@@ -553,25 +605,41 @@ def tela_busca_precos():
     _mostrar_selecao(itens, st.session_state.resultados_busca)
 
 
-def _executar_busca(itens: list) -> None:
-    """Roda buscar_precos_para_itens em foreground com barra de progresso."""
-    from pregoes.scraper import AlmeidaDistribuidor, buscar_precos_para_itens
+def _executar_busca(itens: list, fornecedores_nomes: list[str]) -> None:
+    """Abre os fornecedores configurados (Almeida e/ou Dantas) e roda o
+    batch paralelo. Em caso de falha de UM fornecedor (login, rede), o
+    outro continua — `ResultadoLote.erros` reporta isso na UI."""
+    from contextlib import ExitStack
+    from pregoes.scraper import (
+        AlmeidaDistribuidor,
+        DantasDistribuidora,
+        buscar_precos_para_itens,
+    )
 
-    cred = credenciais.carregar("almeida")
-    if cred is None:
-        style.bloco_aviso("Credenciais Almeida não configuradas.", tipo="danger")
-        return
+    classes = {"almeida": AlmeidaDistribuidor, "dantas": DantasDistribuidora}
 
-    progress = st.progress(0.0, text="Fazendo login na Almeida...")
+    progress = st.progress(
+        0.0, text=f"Fazendo login em {', '.join(fornecedores_nomes)}..."
+    )
     status_box = st.empty()
 
     def cb(atual, total, msg):
         progress.progress(atual / total, text=f"{atual}/{total} — {msg}")
 
     try:
-        with AlmeidaDistribuidor(cred["email"], cred["senha"]) as alm:
+        # ExitStack abre todos os fornecedores e fecha todos no fim,
+        # mesmo se um falhar no meio.
+        with ExitStack() as stack:
+            fornecedores = []
+            for nome in fornecedores_nomes:
+                cred = credenciais.carregar(nome)
+                if cred is None:
+                    continue
+                cls = classes[nome]
+                f = stack.enter_context(cls(cred["email"], cred["senha"]))
+                fornecedores.append(f)
             progress.progress(0.0, text="Login OK. Iniciando buscas...")
-            lote = buscar_precos_para_itens(itens, [alm], progresso_callback=cb)
+            lote = buscar_precos_para_itens(itens, fornecedores, progresso_callback=cb)
     except Exception as exc:
         style.bloco_aviso(f"Falha técnica na busca: {exc}", tipo="danger")
         return
