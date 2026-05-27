@@ -108,25 +108,18 @@ def tela_home():
         "Visão geral dos pregões processados e atalho para um novo.",
     )
 
-    # KPIs do mês — usando o que já temos em editais.
+    # KPIs simples — contagem total e por status relevante para o operador.
+    # Usa COUNT direto no SQL (mais barato que carregar todas as linhas).
     with get_conn() as conn:
-        rows_all = conn.execute("""
-            SELECT id, orgao, numero_pregao, status, criado_em
-            FROM editais
-            ORDER BY criado_em DESC
-        """).fetchall()
+        total = conn.execute("SELECT COUNT(*) FROM editais").fetchone()[0]
+        contagens = dict(conn.execute("""
+            SELECT status, COUNT(*) FROM editais GROUP BY status
+        """).fetchall())
 
-    total = len(rows_all)
-    por_status = {"rascunho": 0, "precificado": 0, "exportado": 0,
-                  "ganho": 0, "perdido": 0}
-    for r in rows_all:
-        por_status[r["status"]] = por_status.get(r["status"], 0) + 1
-
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3 = st.columns(3)
     c1.metric("Pregões registrados", total)
-    c2.metric("Em rascunho", por_status.get("rascunho", 0))
-    c3.metric("Precificados", por_status.get("precificado", 0))
-    c4.metric("Ganhos", por_status.get("ganho", 0))
+    c2.metric("Em rascunho", contagens.get("rascunho", 0))
+    c3.metric("Precificados", contagens.get("precificado", 0))
 
     # Atalho principal — sidebar tem o mesmo, mas o CTA principal aqui ajuda
     # quem chega na tela home e quer começar imediatamente.
@@ -137,19 +130,6 @@ def tela_home():
                   "usando_tabelas_docling", "mapeamento_tabela_idx"):
             st.session_state.pop(k, None)
         ir_para("upload")
-
-    st.markdown("## Pregões recentes")
-    if not rows_all:
-        style.bloco_aviso(
-            "Nenhum pregão registrado ainda. Clique em <b>Iniciar novo pregão</b> "
-            "acima para começar.",
-            tipo="info",
-        )
-        return
-
-    df = pd.DataFrame([dict(r) for r in rows_all[:20]])
-    df.columns = ["ID", "Órgão", "Pregão", "Status", "Criado em"]
-    st.dataframe(df, use_container_width=True, hide_index=True)
 
 
 # === Tela: UPLOAD ===
