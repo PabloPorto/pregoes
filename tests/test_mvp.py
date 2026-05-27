@@ -356,13 +356,19 @@ from pregoes import extrator_docling
 
 
 def test_pipeline_pdf_sintetico_resolve_na_camada_1():
-    """PDF sintético é simples — pdfplumber resolve. Não precisa Docling."""
+    """PDF sintético é simples — pdfplumber resolve. Não precisa Gemini.
+
+    No caminho feliz (confianca >= 95%) o pipeline NÃO adiciona avisos
+    técnicos — o banner verde da UI de revisão já comunica o sucesso.
+    """
     res = extrair_com_pipeline(PDF_TESTE)
     assert res.total_itens == 25
     assert res.confianca_global >= 0.9
-    # Primeiro aviso deve indicar qual camada resolveu
-    assert any("pdfplumber" in a.lower() or "rápida" in a.lower()
-               for a in res.avisos)
+    # Caminho feliz: sem ruído de avisos técnicos para o operador leigo
+    assert not any(
+        "pdfplumber" in a.lower() or "gemini" in a.lower() or "camada" in a.lower()
+        for a in res.avisos
+    )
 
 
 def test_disponivel_docling_responde_sem_quebrar():
