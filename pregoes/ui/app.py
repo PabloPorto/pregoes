@@ -654,14 +654,16 @@ def tela_busca_precos():
         )
         return
 
-    # Estimativa: ~1,5s por item por fornecedor, com pool 4 paralelizando
-    # ≈ rate limiter 2 req/s → ~0,5s por item efetivo por fornecedor.
+    # Estimativa: ~1,5s por item por fornecedor (modelo serial — cada
+    # fornecedor processado um por vez, ver _executar_busca). Cache hit
+    # encurta drasticamente nas revisões subsequentes.
     n_forn = len(fornecedores_disponiveis)
-    minutos_est = len(itens) * 0.5 * n_forn / 60
+    minutos_est = max(1, round(len(itens) * 1.5 * n_forn / 60))
     fornec_str = " + ".join(f.capitalize() for f in fornecedores_disponiveis)
     st.caption(
         f"{len(itens)} itens serão buscados em {fornec_str}. "
-        f"Estimativa: ~{minutos_est:.0f} min nesta lista (com paralelismo)."
+        f"Estimativa: ~{minutos_est} min na primeira execução "
+        f"(revisões com cache de 2 dias ficam quase instantâneas)."
     )
 
     # Se ainda não buscou, oferecer botão para começar
