@@ -681,43 +681,94 @@ def tela_busca_precos():
 
 
 def _executar_busca(itens: list, fornecedores_nomes: list[str]) -> None:
-    """Abre os fornecedores configurados (Almeida e/ou Dantas) e roda o
-    batch paralelo. Em caso de falha de UM fornecedor (login, rede), o
-    outro continua — `ResultadoLote.erros` reporta isso na UI."""
-    from contextlib import ExitStack
+    """Roda a busca em cada fornecedor SEQUENCIALMENTE, abrindo e fechando
+    o Playwright entre eles.
+
+    Por que sequencial e não simultâneo: Playwright sync API permite
+    apenas UMA instância por thread. Abrir Almeida + Dantas ao mesmo
+    tempo (via ExitStack) falha com erro do tipo 'sync API inside the
+    asyncio loop' já na 2ª chamada. Bug reportado em produção
+    (operador, vídeo de 2026-05-27).
+
+    Os resultados de cada fornecedor são concatenados — cada item do
+    edital pode acabar com opções de Almeida E de Dantas, e a UI mostra
+    todas para o operador escolher (default: mais barato).
+    """
     from pregoes.scraper import (
         AlmeidaDistribuidor,
         DantasDistribuidora,
+        ResultadoLote,
         buscar_precos_para_itens,
     )
 
     classes = {"almeida": AlmeidaDistribuidor, "dantas": DantasDistribuidora}
 
-    progress = st.progress(
-        0.0, text=f"Fazendo login em {', '.join(fornecedores_nomes)}..."
-    )
+    progress = st.progress(0.0, text="Iniciando…")
     status_box = st.empty()
 
-    def cb(atual, total, msg):
-        progress.progress(atual / total, text=f"{atual}/{total} — {msg}")
+    # Acumula resultados de cada fornecedor
+    resultados_agregados: dict[int, list] = {idx: [] for idx in range(len(itens))}
+    erros_agregados: list = []
+    cache_hits_total = 0
+    cache_misses_total = 0
 
-    try:
-        # ExitStack abre todos os fornecedores e fecha todos no fim,
-        # mesmo se um falhar no meio.
-        with ExitStack() as stack:
-            fornecedores = []
-            for nome in fornecedores_nomes:
-                cred = credenciais.carregar(nome)
-                if cred is None:
-                    continue
-                cls = classes[nome]
-                f = stack.enter_context(cls(cred["email"], cred["senha"]))
-                fornecedores.append(f)
-            progress.progress(0.0, text="Login OK. Iniciando buscas...")
-            lote = buscar_precos_para_itens(itens, fornecedores, progresso_callback=cb)
-    except Exception as exc:
-        style.bloco_aviso(f"Falha técnica na busca: {exc}", tipo="danger")
-        return
+    n_forn = len(fornecedores_nomes)
+
+    for forn_idx, nome in enumerate(fornecedores_nomes):
+        cred = credenciais.carregar(nome)
+        if cred is None:
+            continue
+        cls = classes[nome]
+
+        progress.progress(
+            forn_idx / max(n_forn, 1),
+            text=f"Fazendo login em {nome.capitalize()} "
+                 f"({forn_idx + 1}/{n_forn})…"
+        )
+
+        # callback de progresso DENTRO desse fornecedor — composto:
+        # avança proporcional ao total de fornecedores
+        def cb(atual, total, msg, _forn_idx=forn_idx, _nome=nome):
+            frac_dentro = atual / max(total, 1)
+            frac_total = (_forn_idx + frac_dentro) / max(n_forn, 1)
+            progress.progress(
+                frac_total,
+                text=f"{_nome.capitalize()} {atual}/{total} — {msg}"
+            )
+
+        try:
+            with cls(cred["email"], cred["senha"]) as forn:
+                lote = buscar_precos_para_itens(
+                    itens, [forn], progresso_callback=cb,
+                )
+        except Exception as exc:
+            # Falha grave (login, layout mudou) — registra como erro
+            # global mas segue para o próximo fornecedor.
+            from pregoes.scraper import ErroBusca
+            erros_agregados.append(ErroBusca(
+                indice_item=-1,
+                fornecedor=nome,
+                descricao_resumo="(login/inicialização)",
+                mensagem=f"{type(exc).__name__}: {exc}",
+            ))
+            continue
+
+        # Mescla resultados do fornecedor no agregado
+        for idx, bag in lote.resultados.items():
+            resultados_agregados[idx].extend(bag)
+        erros_agregados.extend(lote.erros)
+        cache_hits_total += lote.cache_hits
+        cache_misses_total += lote.cache_misses
+
+    # Empacota como ResultadoLote para preservar API que a UI espera
+    lote = ResultadoLote(
+        resultados=resultados_agregados,
+        erros=erros_agregados,
+        cache_hits=cache_hits_total,
+        cache_misses=cache_misses_total,
+    )
+
+    progress.progress(1.0, text="Busca concluída.")
 
     # Compatível com UI anterior (dict de resultados) + dados extras
     st.session_state.resultados_busca = lote.resultados
