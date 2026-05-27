@@ -49,28 +49,38 @@ from .extrator import (
 from .validador import score_linha
 
 
-# Modelo padrão. Free tier cobre folgadamente o volume alvo (1500 req/dia).
-# Mudou-se de gemini-2.0-flash-exp para flash (GA) em fev/2025.
-MODELO_DEFAULT = "gemini-2.0-flash"
+# Modelo padrão: `gemini-2.5-flash-lite` tem 1M de contexto e free tier
+# ativo (1000 req/dia, 15 RPM). Modelo equilibrado para nosso caso —
+# o gemini-2.0-flash mais simples teve free tier desativado para contas
+# novas (descoberto em uso real, 2026-05-27).
+MODELO_DEFAULT = "gemini-2.5-flash-lite"
 
-# Limite de caracteres por página enviada ao modelo. PDFs grandes têm
-# páginas com 4-8k chars; 12k cobre 99% dos casos sem estourar contexto
-# nem dar prompts longos demais.
-MAX_CHARS_POR_PAGINA = 12_000
+# Limite total de caracteres enviados em uma chamada. 1M tokens ≈ 4M chars
+# em pt-BR; deixamos 800k como margem para prompt + output.
+# Editais reais raramente passam de 400k chars (extraídos do PDF).
+MAX_CHARS_POR_EDITAL = 800_000
 
 # Threshold de confiança da linha pra entrar no resultado final.
 # Mesma escala do extrator: >=0.7 extraido, >=0.4 duvidoso.
 _THRESHOLD_LINHA = _THRESHOLD_LINHA_DUVIDOSA
 
 
-PROMPT_TABELA = """Você é um extrator de tabelas de editais de licitação pública brasileiros.
+PROMPT_TABELA = """Você é um extrator especializado em tabelas de editais de licitação pública brasileiros.
 
-Receba o TEXTO de uma página do edital. Sua tarefa: extrair os ITENS da
-tabela de produtos/materiais. IGNORE:
-- Tabelas de contatos, endereços, fiscais, gestores
-- Formulários em branco, anexo de modelo de proposta sem dados
-- Tabelas de totais, subtotais, rubricas orçamentárias
-- Cabeçalhos, rodapés, paginação
+Recebe o TEXTO COMPLETO de um edital, com todas as páginas concatenadas
+(marcadores `=== PÁGINA N ===` separam-nas). Sua tarefa: encontrar a
+TABELA DE ITENS / PRODUTOS / MATERIAIS do termo de referência e
+extrair TODOS os itens dela.
+
+DESCARTE estas tabelas e seções (NÃO são itens):
+- Tabelas de contatos, endereços, fiscais, gestores responsáveis
+- Formulários em branco, anexo "modelo de proposta" sem dados de produtos
+- Tabelas de totais, subtotais, rubricas orçamentárias, fontes de recurso
+- Cabeçalhos de seção, rodapés, paginação
+- Cláusulas contratuais, condições gerais, instruções
+
+Reconheça a tabela de itens pela presença das colunas típicas:
+"ITEM / DESCRIÇÃO / UNIDADE / QUANTIDADE / VALOR DE REFERÊNCIA" ou similar.
 
 Para cada item REAL da tabela de produtos, retorne em JSON:
 - "numero": número do item no edital (int ou null se não houver)
@@ -79,20 +89,24 @@ Para cada item REAL da tabela de produtos, retorne em JSON:
 - "quantidade": quantidade demandada (number)
 - "valor_referencia": valor unitário máximo / de referência (number ou null)
 
-Regras importantes:
+Regras IMPORTANTES:
 - Retorne SOMENTE um array JSON válido, SEM prosa ou explicação antes/depois.
-- Se a página não tiver tabela de itens, retorne array vazio: []
+- Inclua TODOS os itens da tabela de produtos, mesmo que ela se estenda
+  por várias páginas. Itens com numeração contínua (1, 2, 3, ...) DEVEM
+  todos ser retornados.
 - Mantenha acentos e ç corretos — corrija defeitos de extração se reconhecer
   (ex: "DOBRADI˙A" → "DOBRADIÇA", "MANUTEN`AO" → "MANUTENÇÃO").
 - NÃO invente itens. Se em dúvida sobre se uma linha é item ou ruído, descarte.
 - NÃO inclua linhas de "TOTAL", "SUBTOTAL", "VALOR GLOBAL" como itens.
+- Se a quantidade aparecer em mais de uma coluna (ex: "Quant. Ordinário"
+  e "Quant. Eleição" e "Quant. Total"), use a QUANTIDADE TOTAL.
 
-TEXTO DA PÁGINA:
+TEXTO DO EDITAL:
 \"\"\"
 {texto}
 \"\"\"
 
-JSON (array de objetos, ou [] se nenhum item):"""
+JSON (array de objetos, ou [] se não houver tabela de itens):"""
 
 
 @dataclass
@@ -122,22 +136,36 @@ def extrair_via_gemini(
     modelo: str = MODELO_DEFAULT,
     callback_progresso=None,
 ) -> ResultadoExtracao:
-    """Extrai itens de um PDF via Gemini, página por página.
+    """Extrai itens de um PDF inteiro via Gemini em **1 única chamada**.
+
+    Estratégia (refatorada em 2026-05-27 após bug em produção):
+    - Concatena texto de TODAS as páginas com marcadores `=== PÁGINA N ===`
+    - Envia tudo em UMA chamada (modelo aceita 1M de tokens de contexto)
+    - Custo: ~$0.01-0.02 por edital típico no `gemini-2.5-flash-lite`
+    - 1 req conta como 1/1000 do free tier diário — muito folgado
+
+    Por que 1 chamada e não N (uma por página):
+    - Free tier do `gemini-2.0-flash` foi removido para contas novas; usar
+      `gemini-2.5-flash-lite` que tem free tier ativo.
+    - 93 chamadas por edital exauriam o RPM rapidamente E desperdiçavam
+      ~80% delas em páginas sem tabela de itens (capa, cláusulas, anexos).
+    - 1 chamada com tudo: modelo entende contexto, junta multi-página
+      naturalmente, ignora seções não-relevantes pelo prompt.
 
     Args:
         caminho_pdf: PDF a processar.
         api_key: se None, carrega de `credenciais.carregar_chave_api("gemini")`.
-        modelo: nome do modelo (default `gemini-2.0-flash`).
-        callback_progresso: opcional, `cb(pag_atual, total_pag, msg)` chamado
-            após cada página.
+        modelo: nome do modelo (default `gemini-2.5-flash-lite`).
+        callback_progresso: opcional, `cb(etapa, total, msg)` chamado em
+            cada fase (leitura PDF, chamada API, parse).
 
     Levanta:
-        - `RuntimeError` se API key não configurada.
+        - `RuntimeError` se API key não configurada ou texto vazio.
         - `ImportError` se `google-genai` não estiver instalado.
 
-    Retorna `ResultadoExtracao` no mesmo formato das outras camadas, com
-    `confianca_global` calculado pelo validador semântico (igual nos outros
-    caminhos — não confiamos cegamente no Gemini, validamos a saída).
+    Retorna `ResultadoExtracao` com `confianca_global` calculado pelo
+    validador semântico (uniforme com outras camadas — não confiamos
+    cegamente, validamos a saída do LLM).
     """
     caminho_pdf = Path(caminho_pdf)
 
@@ -149,96 +177,115 @@ def extrair_via_gemini(
             "Acesse Configurações → IA (Gemini) para colar a chave."
         )
 
-    # Import local — paga o custo de importar `google.genai` só quando
-    # alguém realmente vai usar Gemini.
     from google import genai
     client = genai.Client(api_key=api_key)
 
-    stats = _Stats()
     resultado = ResultadoExtracao(arquivo=str(caminho_pdf))
 
+    # Etapa 1: extrai texto de todas as páginas + concatena
+    if callback_progresso:
+        callback_progresso(0, 3, "Lendo PDF…")
+
+    blocos: list[str] = []
+    n_paginas = 0
+    n_paginas_com_texto = 0
     with pdfplumber.open(caminho_pdf) as pdf:
-        total_pag = len(pdf.pages)
+        n_paginas = len(pdf.pages)
         for n_pag, page in enumerate(pdf.pages, start=1):
-            stats.paginas_processadas += 1
-            texto = page.extract_text() or ""
-            # Páginas sem texto suficiente (escaneadas? em branco?) não
-            # geram chamada — economiza tokens e tempo.
-            if len(texto.strip()) < 80:
-                if callback_progresso:
-                    callback_progresso(n_pag, total_pag, "(página sem texto)")
+            texto = (page.extract_text() or "").strip()
+            if len(texto) < 50:
                 continue
+            n_paginas_com_texto += 1
+            blocos.append(f"=== PÁGINA {n_pag} ===\n{texto}")
 
-            # Trunca para não estourar contexto
-            texto_chunk = texto[:MAX_CHARS_POR_PAGINA]
+    if not blocos:
+        resultado.avisos.append(
+            "Gemini: PDF sem texto extraível (possivelmente escaneado). "
+            "OCR ainda não suportado."
+        )
+        return resultado
 
-            try:
-                stats.chamadas_api += 1
-                resposta = client.models.generate_content(
-                    model=modelo,
-                    contents=PROMPT_TABELA.format(texto=texto_chunk),
-                )
-                texto_resp = resposta.text or ""
-            except Exception as exc:
-                stats.erros_api += 1
-                resultado.avisos.append(
-                    f"Gemini falhou na página {n_pag}: "
-                    f"{type(exc).__name__}: {exc}"
-                )
-                if callback_progresso:
-                    callback_progresso(n_pag, total_pag, "(erro Gemini)")
-                continue
+    texto_completo = "\n\n".join(blocos)
 
-            try:
-                lista = _parse_json_lista(texto_resp)
-            except (json.JSONDecodeError, ValueError) as exc:
-                stats.erros_json += 1
-                resultado.avisos.append(
-                    f"Gemini retornou JSON inválido na página {n_pag}: {exc}"
-                )
-                if callback_progresso:
-                    callback_progresso(n_pag, total_pag, "(JSON inválido)")
-                continue
+    # Trunca se exceder o limite (raríssimo — 800k chars cabem ~93 págs de A4)
+    if len(texto_completo) > MAX_CHARS_POR_EDITAL:
+        resultado.avisos.append(
+            f"Gemini: PDF muito grande ({len(texto_completo):,} chars), "
+            f"truncado em {MAX_CHARS_POR_EDITAL:,}. Itens das últimas "
+            f"páginas podem ser perdidos."
+        )
+        texto_completo = texto_completo[:MAX_CHARS_POR_EDITAL]
 
-            n_itens_pag = 0
-            for d in lista:
-                item = _dict_para_item(d, pagina=n_pag)
-                if item is None:
-                    continue
-                # Aplica score do validador para classificar 'extraido'
-                # vs 'duvidoso' — uniforme com outras camadas.
-                sc = score_linha(
-                    item.descricao, item.quantidade,
-                    item.unidade, item.valor_referencia,
-                ).score
-                if sc >= _THRESHOLD_LINHA_EXTRAIDA:
-                    item.confianca = "extraido"
-                elif sc >= _THRESHOLD_LINHA_DUVIDOSA:
-                    item.confianca = "duvidoso"
-                else:
-                    continue
-                resultado.itens.append(item)
-                n_itens_pag += 1
+    # Etapa 2: chamada única ao Gemini
+    if callback_progresso:
+        callback_progresso(
+            1, 3,
+            f"Enviando {len(texto_completo):,} chars ({n_paginas_com_texto} págs) à IA…"
+        )
 
-            if n_itens_pag > 0:
-                stats.paginas_com_itens += 1
+    try:
+        resposta = client.models.generate_content(
+            model=modelo,
+            contents=PROMPT_TABELA.format(texto=texto_completo),
+        )
+        texto_resp = resposta.text or ""
+    except Exception as exc:
+        # Inclui mensagem completa para debug — operador precisa ver
+        # erros de quota, modelo inválido, etc.
+        resultado.avisos.append(
+            f"Gemini falhou na chamada: {type(exc).__name__}: {exc}"
+        )
+        return resultado
 
-            if callback_progresso:
-                callback_progresso(n_pag, total_pag, f"{n_itens_pag} item(ns)")
+    if not texto_resp.strip():
+        resultado.avisos.append(
+            "Gemini retornou resposta vazia. Pode ser safety filter ou "
+            "modelo não conseguiu identificar tabela no PDF."
+        )
+        return resultado
 
-    # Confiança global = fração de itens com score 'extraido'
+    # Etapa 3: parse JSON + validação
+    if callback_progresso:
+        callback_progresso(2, 3, "Processando resposta da IA…")
+
+    try:
+        lista = _parse_json_lista(texto_resp)
+    except (json.JSONDecodeError, ValueError) as exc:
+        resultado.avisos.append(
+            f"Gemini retornou JSON inválido: {exc}. "
+            f"Início da resposta: {texto_resp[:200]!r}"
+        )
+        return resultado
+
+    for d in lista:
+        item = _dict_para_item(d, pagina=0)  # multi-página: pagina=0
+        if item is None:
+            continue
+        sc = score_linha(
+            item.descricao, item.quantidade,
+            item.unidade, item.valor_referencia,
+        ).score
+        if sc >= _THRESHOLD_LINHA_EXTRAIDA:
+            item.confianca = "extraido"
+        elif sc >= _THRESHOLD_LINHA_DUVIDOSA:
+            item.confianca = "duvidoso"
+        else:
+            continue
+        resultado.itens.append(item)
+
     n_extraidos = sum(1 for i in resultado.itens if i.confianca == "extraido")
     total = len(resultado.itens)
     resultado.confianca_global = (n_extraidos / total) if total else 0.0
 
-    # Aviso no topo com estatísticas — útil para debug e transparência
     resumo = (
-        f"Gemini: {stats.paginas_com_itens}/{stats.paginas_processadas} págs "
-        f"com itens, {stats.chamadas_api} chamadas API"
+        f"Gemini ({modelo}): {total} itens extraídos de "
+        f"{n_paginas_com_texto}/{n_paginas} págs com texto, "
+        f"{len(lista)} candidatos brutos, {len(texto_completo):,} chars enviados"
     )
-    if stats.erros_api or stats.erros_json:
-        resumo += f", {stats.erros_api} erro(s) API, {stats.erros_json} JSON inválido"
     resultado.avisos.insert(0, resumo)
+
+    if callback_progresso:
+        callback_progresso(3, 3, f"{total} itens extraídos.")
 
     return resultado
 
