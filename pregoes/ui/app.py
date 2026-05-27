@@ -288,7 +288,7 @@ def tela_revisao():
     if "editor_version" not in st.session_state:
         st.session_state.editor_version = 0
 
-    bcol1, bcol2, bcol3 = st.columns([1, 1, 5])
+    bcol1, bcol2 = st.columns(2)
     with bcol1:
         if st.button("Marcar todos", use_container_width=True):
             st.session_state.df_editavel["OK"] = True
@@ -299,13 +299,17 @@ def tela_revisao():
             st.session_state.df_editavel["OK"] = False
             st.session_state.editor_version += 1
             st.rerun()
-    with bcol3:
-        n_marcados = int(st.session_state.df_editavel["OK"].sum())
-        st.caption(f"**{n_marcados}** de **{len(st.session_state.df_editavel)}** itens marcados.")
 
     # `num_rows="fixed"` (default) em vez de "dynamic": evita que o
     # data_editor crie linhas vazias quando o usuário clica em uma área
     # vazia — comportamento que confundia o checkbox individual.
+    #
+    # ATENÇÃO: NÃO atribuir `st.session_state.df_editavel = edited` aqui!
+    # Isso causa race condition em cliques rápidos sucessivos. O widget
+    # Streamlit já mantém o estado de edição via `key`, então `edited`
+    # sempre reflete os checkboxes atuais. df_editavel é só a *snapshot
+    # inicial* — atualizada apenas em "Marcar/Desmarcar todos" ou ao
+    # carregar nova extração.
     edited = st.data_editor(
         st.session_state.df_editavel,
         use_container_width=True,
@@ -321,7 +325,12 @@ def tela_revisao():
         hide_index=True,
         key=f"editor_{st.session_state.editor_version}",
     )
-    st.session_state.df_editavel = edited
+
+    # Contador DEPOIS do data_editor — agora vê o estado atual via `edited`,
+    # que é a única fonte de verdade dos checkboxes (não tocamos em
+    # df_editavel para evitar race conditions).
+    n_marcados = int(edited["OK"].sum())
+    st.caption(f"**{n_marcados}** de **{len(edited)}** itens marcados.")
 
     st.divider()
 
