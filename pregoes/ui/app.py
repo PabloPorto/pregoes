@@ -959,14 +959,14 @@ def tela_mapeamento():
     )
 
     if st.button("Aplicar mapeamento", type="primary"):
-        novo_res = mapeamento_manual.aplicar_mapa(
-            tabela_alvo, mapa_atual,
+        # Aplicar em LOTE: pega a tabela escolhida + todas as fatias
+        # continuação que vêm com ela (tabelas multi-página comuns em
+        # editais grandes). aplicar_mapa_em_lote detecta as irmãs pelo
+        # cabeçalho repetido OU cabeçalho fake/vazio.
+        novo_res = mapeamento_manual.aplicar_mapa_em_lote(
+            res.tabelas_brutas, idx_tabela, mapa_atual,
             arquivo=res.arquivo,
-            pular_cabecalho=True,
         )
-        # Preserva as tabelas brutas originais para o operador poder
-        # eventualmente refazer o mapeamento.
-        novo_res.tabelas_brutas = res.tabelas_brutas
 
         if salvar_mapa_check:
             with get_conn() as conn:
