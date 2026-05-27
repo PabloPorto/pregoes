@@ -134,6 +134,46 @@ def test_exportador_markup_default_preserva_template(tmp_path):
     assert ws["G504"].value == "=S504*1.45"
 
 
+def test_exportador_preenche_LTU_quando_ha_selecao(tmp_path):
+    """Quando o operador escolhe marca/preço, exportador preenche L (preço),
+    T (código fornecedor), U (marca) na linha correspondente."""
+    from pregoes.exportador import SelecaoFornecedor
+    res = extrair_pdf(PDF_TESTE)
+    destino = tmp_path / "saida.xlsx"
+    selecoes = {
+        0: SelecaoFornecedor(preco=12.34, codigo_fornecedor="ABC123", marca="FOXLUX"),
+        2: SelecaoFornecedor(preco=99.99, codigo_fornecedor="XYZ", marca="THOMPSON"),
+    }
+    exportar(res.itens, selecoes=selecoes, destino=destino)
+
+    wb = load_workbook(destino)
+    ws = wb.active
+    # Linha 5 (item 0) preenchida
+    assert ws["L5"].value == 12.34
+    assert ws["T5"].value == "ABC123"
+    assert ws["U5"].value == "FOXLUX"
+    # Linha 6 (item 1) sem seleção: L/T/U vazios
+    assert ws["L6"].value is None
+    assert ws["T6"].value is None
+    assert ws["U6"].value is None
+    # Linha 7 (item 2) preenchida
+    assert ws["L7"].value == 99.99
+    assert ws["U7"].value == "THOMPSON"
+
+
+def test_exportador_sem_selecoes_nao_toca_LTU(tmp_path):
+    """Comportamento pré-Fase 2 deve seguir intacto quando selecoes não é passado."""
+    res = extrair_pdf(PDF_TESTE)
+    destino = tmp_path / "saida.xlsx"
+    exportar(res.itens, destino=destino)
+    wb = load_workbook(destino)
+    ws = wb.active
+    for linha in range(5, 10):
+        assert ws[f"L{linha}"].value is None
+        assert ws[f"T{linha}"].value is None
+        assert ws[f"U{linha}"].value is None
+
+
 def test_exportador_lista_vazia_falha(tmp_path):
     with pytest.raises(ValueError, match="vazia"):
         exportar([], destino=tmp_path / "vazio.xlsx")

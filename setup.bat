@@ -38,6 +38,19 @@ if errorlevel 1 (
 )
 
 echo.
+echo  Instalando navegador interno para busca de precos...
+echo  (Baixa o Chromium uma unica vez, pode demorar 1-2 minutos)
+echo.
+python -m playwright install chromium
+if errorlevel 1 (
+    echo.
+    echo  [ERRO] Falha ao instalar o navegador (Chromium).
+    echo  A busca automatica de precos nao vai funcionar ate corrigir.
+    pause
+    exit /b 1
+)
+
+echo.
 echo  ================================================
 echo   Instalacao concluida com sucesso!
 echo  ================================================

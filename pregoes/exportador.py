@@ -14,6 +14,7 @@ usando openpyxl.Translator (mantém $V$4 absoluto e ajusta L504→L505 relativo)
 from __future__ import annotations
 
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
@@ -23,6 +24,20 @@ from openpyxl.utils import get_column_letter
 
 from . import config
 from .extrator import ItemExtraido
+
+
+@dataclass(frozen=True)
+class SelecaoFornecedor:
+    """
+    Escolha do operador para um item do edital, vinda da tela de busca.
+
+    O operador SEMPRE escolhe entre as opções retornadas pelos scrapers — o
+    sistema nunca decide marca (Resp final 7). Esta dataclass empacota a
+    escolha para o exportador preencher as colunas L, T, U da planilha.
+    """
+    preco: float
+    codigo_fornecedor: str
+    marca: str
 
 
 # Faixa de linhas que o template já tem prontas
@@ -39,6 +54,7 @@ def exportar(
     orgao: str | None = None,
     numero_pregao: str | None = None,
     markup: float | None = None,
+    selecoes: dict[int, "SelecaoFornecedor"] | None = None,
     destino: Path | str | None = None,
     template: Path | str | None = None,
 ) -> Path:
@@ -53,6 +69,12 @@ def exportar(
             `config.MARKUP_DEFAULT` (1.45). O cliente pode passar 1.30 para
             um pregão com concorrência apertada, etc. Substitui as fórmulas
             `G = =S*1.45` do template por `G = =S*<markup>`.
+        selecoes: opcional, mapa `{índice_do_item: SelecaoFornecedor}` com a
+            marca/preço escolhida pelo operador para cada item após a busca
+            nos fornecedores. Quando presente, preenche colunas L (preço),
+            T (código fornecedor) e U (marca). Itens ausentes do mapa ficam
+            sem preço (operador preenche manualmente no Excel, comportamento
+            pré-Fase 2).
         destino: caminho de saída (default: data/exports/<auto>.xlsx)
         template: caminho do template (default: config.TEMPLATE_MATRIZ)
 
@@ -99,6 +121,7 @@ def exportar(
         _expandir_linhas(ws, n_extras=n_itens - 500)
 
     # Preencher itens
+    selecoes = selecoes or {}
     for offset, item in enumerate(itens):
         linha = LINHA_PRIMEIRO_ITEM + offset
         ws[f"A{linha}"] = offset + 1
@@ -108,6 +131,13 @@ def exportar(
         ws[f"E{linha}"] = item.quantidade if item.quantidade is not None else 0
         if item.valor_referencia is not None:
             ws[f"F{linha}"] = item.valor_referencia
+
+        # Colunas vindas do scraper (Fase 2): L=preço, T=código, U=marca
+        sel = selecoes.get(offset)
+        if sel is not None:
+            ws[f"L{linha}"] = sel.preco
+            ws[f"T{linha}"] = sel.codigo_fornecedor
+            ws[f"U{linha}"] = sel.marca
 
     wb.save(destino)
     return destino

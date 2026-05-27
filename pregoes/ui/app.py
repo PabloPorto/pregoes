@@ -13,7 +13,7 @@ import tempfile
 import streamlit as st
 import pandas as pd
 
-from pregoes import config
+from pregoes import config, credenciais
 from pregoes.extrator import extrair_pdf
 from pregoes.exportador import exportar
 from pregoes.db import init_db, get_conn
@@ -50,12 +50,16 @@ def tela_home():
     st.title("Pregões")
     st.caption("Automação da formação de preços para licitações")
 
-    col1, col2 = st.columns([1, 2])
+    col1, col2, col3 = st.columns([1, 1, 2])
     with col1:
         if st.button("➕ Novo pregão", type="primary", use_container_width=True):
-            st.session_state.extracao = None
-            st.session_state.df_editavel = None
+            for k in ("extracao", "df_editavel", "resultados_busca",
+                      "selecoes", "pagina_busca", "itens_revisados"):
+                st.session_state.pop(k, None)
             ir_para("upload")
+    with col2:
+        if st.button("⚙️ Configurações", use_container_width=True):
+            ir_para("configuracoes")
 
     st.divider()
     st.subheader("Pregões recentes")
@@ -168,6 +172,26 @@ def tela_revisao():
             "Valor referência": item.valor_referencia,
         } for item in res.itens])
 
+    # Botões de marcação em massa. Mudar a key do data_editor força o
+    # Streamlit a redesenhar a tabela com os novos valores de OK?.
+    if "editor_version" not in st.session_state:
+        st.session_state.editor_version = 0
+
+    bcol1, bcol2, bcol3 = st.columns([1, 1, 5])
+    with bcol1:
+        if st.button("☑️ Marcar todos", use_container_width=True):
+            st.session_state.df_editavel["OK"] = True
+            st.session_state.editor_version += 1
+            st.rerun()
+    with bcol2:
+        if st.button("⬜ Desmarcar todos", use_container_width=True):
+            st.session_state.df_editavel["OK"] = False
+            st.session_state.editor_version += 1
+            st.rerun()
+    with bcol3:
+        n_marcados = int(st.session_state.df_editavel["OK"].sum())
+        st.caption(f"**{n_marcados}** de **{len(st.session_state.df_editavel)}** itens marcados.")
+
     edited = st.data_editor(
         st.session_state.df_editavel,
         use_container_width=True,
@@ -182,18 +206,13 @@ def tela_revisao():
             "Valor referência": st.column_config.NumberColumn("Ref. (R$)", format="%.2f"),
         },
         hide_index=True,
-        key="editor",
+        key=f"editor_{st.session_state.editor_version}",
     )
     st.session_state.df_editavel = edited
 
     st.divider()
     col1, col2, col3 = st.columns([2, 1, 1])
     with col1:
-        st.caption(f"💡 Próxima etapa (fase 2): consulta automática de preços em "
-                   f"Almeida e Dantas. Por enquanto, gera planilha matriz com "
-                   f"valores de referência preenchidos e preços em branco.")
-
-    with col2:
         markup = st.number_input(
             "Markup deste pregão",
             min_value=1.00,
@@ -207,22 +226,31 @@ def tela_revisao():
             ),
         )
 
+    # Salva estado para a tela seguinte usar
+    st.session_state.markup = markup
+    st.session_state.itens_revisados = _df_para_itens(edited)
+
+    with col2:
+        if st.button("🔍 Buscar preços", type="primary", use_container_width=True,
+                     help="Consulta Almeida (e futuramente Dantas). Pode demorar alguns minutos."):
+            if not st.session_state.itens_revisados:
+                st.error("Nenhum item marcado como OK — nada para buscar.")
+            elif credenciais.carregar("almeida") is None:
+                st.error("Credenciais Almeida não configuradas. Vá em ⚙️ Configurações.")
+            else:
+                ir_para("busca_precos")
+
     with col3:
-        if st.button("📊 Gerar planilha matriz", type="primary",
-                     use_container_width=True):
-            _gerar_excel(edited, markup=markup)
+        if st.button("📊 Gerar sem buscar", use_container_width=True,
+                     help="Gera a planilha matriz com colunas L/T/U vazias (preço, código, marca em branco)."):
+            _gerar_excel(edited, markup=markup, selecoes={})
 
 
-def _gerar_excel(df: pd.DataFrame, markup: float):
-    """Converte DataFrame editado de volta para ItemExtraido e exporta."""
+def _df_para_itens(df: pd.DataFrame) -> list:
+    """Converte DataFrame editado de volta para lista de ItemExtraido (linhas OK)."""
     from pregoes.extrator import ItemExtraido
-
     df_ok = df[df["OK"] == True]
-    if df_ok.empty:
-        st.error("Nenhum item marcado como OK — nada para exportar.")
-        return
-
-    itens = [
+    return [
         ItemExtraido(
             item_numero=int(r["Item"]) if pd.notna(r["Item"]) else None,
             descricao=str(r["Descrição"]) if pd.notna(r["Descrição"]) else "",
@@ -233,6 +261,18 @@ def _gerar_excel(df: pd.DataFrame, markup: float):
         for _, r in df_ok.iterrows()
     ]
 
+
+def _gerar_excel(df: pd.DataFrame, markup: float, selecoes: dict):
+    """Converte DataFrame editado de volta para ItemExtraido e exporta.
+
+    `selecoes` é o mapa {indice_item: SelecaoFornecedor} já preparado pela
+    tela de busca. Vazio = planilha sem preço (operador preenche manualmente).
+    """
+    itens = _df_para_itens(df)
+    if not itens:
+        st.error("Nenhum item marcado como OK — nada para exportar.")
+        return
+
     with st.spinner("Gerando planilha matriz a partir do template..."):
         try:
             destino = exportar(
@@ -240,24 +280,18 @@ def _gerar_excel(df: pd.DataFrame, markup: float):
                 orgao=st.session_state.get("orgao"),
                 numero_pregao=st.session_state.get("numero"),
                 markup=markup,
+                selecoes=selecoes,
             )
         except Exception as exc:
             st.error(f"Falha ao gerar planilha: {exc}")
             return
 
-        # Persistir edital no banco (registro mínimo)
-        with get_conn() as conn:
-            conn.execute("""
-                INSERT INTO editais (orgao, numero_pregao, arquivo_pdf, status)
-                VALUES (?, ?, ?, ?)
-            """, (
-                st.session_state.get("orgao") or "",
-                st.session_state.get("numero") or "",
-                st.session_state.get("pdf_path") or "",
-                "rascunho",
-            ))
+        # Persistir edital + itens no banco (Fase 2: itens vinculados às seleções)
+        _persistir_edital(itens, selecoes)
 
     st.success(f"✅ Planilha gerada: `{destino.name}`")
+    if selecoes:
+        st.caption(f"Inclui preço/marca/código para {len(selecoes)} de {len(itens)} itens.")
     with open(destino, "rb") as f:
         st.download_button(
             "⬇️ Baixar planilha matriz",
@@ -269,11 +303,255 @@ def _gerar_excel(df: pd.DataFrame, markup: float):
         )
 
 
+def _persistir_edital(itens: list, selecoes: dict) -> None:
+    """Grava 1 linha em `editais` + N linhas em `edital_itens`. Idempotência
+    não é necessária porque cada geração é considerada um novo registro
+    (status = rascunho)."""
+    with get_conn() as conn:
+        cursor = conn.execute("""
+            INSERT INTO editais (orgao, numero_pregao, arquivo_pdf, status)
+            VALUES (?, ?, ?, ?)
+        """, (
+            st.session_state.get("orgao") or "",
+            st.session_state.get("numero") or "",
+            st.session_state.get("pdf_path") or "",
+            "precificado" if selecoes else "rascunho",
+        ))
+        edital_id = cursor.lastrowid
+
+        for idx, item in enumerate(itens):
+            sel = selecoes.get(idx)
+            conn.execute("""
+                INSERT INTO edital_itens
+                    (edital_id, item_numero, descricao_original, unidade,
+                     quantidade, valor_referencia, preco_base, confianca_match, revisado)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                edital_id,
+                item.item_numero,
+                item.descricao,
+                item.unidade,
+                item.quantidade,
+                item.valor_referencia,
+                sel.preco if sel else None,
+                "manual" if sel else None,
+                1,
+            ))
+
+
+# === Tela: CONFIGURAÇÕES ===
+def tela_configuracoes():
+    if st.button("← Voltar"):
+        ir_para("home")
+
+    st.title("Configurações")
+    st.caption(
+        "Credenciais dos sites de fornecedores. Salvas apenas localmente, "
+        "no arquivo `data/credenciais.json` — nunca enviadas para nenhum servidor."
+    )
+
+    st.subheader("Almeida Distribuidor")
+    atual = credenciais.carregar("almeida") or {"email": "", "senha": ""}
+    with st.form("form_almeida"):
+        email = st.text_input("E-mail", value=atual.get("email", ""))
+        senha = st.text_input("Senha", value=atual.get("senha", ""), type="password")
+        salvar_btn = st.form_submit_button("Salvar credenciais", type="primary")
+        if salvar_btn:
+            if not email or not senha:
+                st.error("Preencha e-mail e senha antes de salvar.")
+            else:
+                credenciais.salvar("almeida", email.strip(), senha)
+                st.success("Credenciais da Almeida salvas com sucesso.")
+
+    if atual.get("email"):
+        st.caption(f"✅ Credencial atual: `{atual['email']}` (senha oculta).")
+    else:
+        st.warning("⚠️ Nenhuma credencial salva ainda. O scraper de preços não funcionará até configurar.")
+
+    st.divider()
+    st.subheader("Dantas Distribuidora")
+    st.info("Configuração será adicionada quando o scraper da Dantas estiver pronto.")
+
+
+# === Tela: BUSCA DE PREÇOS ===
+def tela_busca_precos():
+    if st.button("← Voltar para revisão"):
+        ir_para("revisao")
+
+    st.title("🔍 Busca de preços nos fornecedores")
+
+    itens = st.session_state.get("itens_revisados") or []
+    if not itens:
+        st.error("Nenhum item para buscar. Volte para a revisão.")
+        return
+
+    st.caption(f"{len(itens)} itens serão buscados na Almeida. "
+               "Estimativa: ~1.5s por item (ou seja, ~{:.0f}min para esta lista).".format(
+                   len(itens) * 1.5 / 60))
+
+    # Se ainda não buscou, oferecer botão para começar
+    if "resultados_busca" not in st.session_state:
+        if st.button("▶️ Iniciar busca", type="primary"):
+            _executar_busca(itens)
+            st.rerun()
+        return
+
+    # Já buscou: mostrar resultados + seleção
+    _mostrar_selecao(itens, st.session_state.resultados_busca)
+
+
+def _executar_busca(itens: list) -> None:
+    """Roda buscar_precos_para_itens em foreground com barra de progresso."""
+    from pregoes.scraper import AlmeidaDistribuidor, buscar_precos_para_itens
+
+    cred = credenciais.carregar("almeida")
+    if cred is None:
+        st.error("Credenciais Almeida não configuradas.")
+        return
+
+    progress = st.progress(0.0, text="Fazendo login na Almeida...")
+    status_box = st.empty()
+
+    def cb(atual, total, msg):
+        progress.progress(atual / total, text=f"{atual}/{total} — {msg}")
+
+    try:
+        with AlmeidaDistribuidor(cred["email"], cred["senha"]) as alm:
+            progress.progress(0.0, text="Login OK. Iniciando buscas...")
+            resultados = buscar_precos_para_itens(itens, [alm], progresso_callback=cb)
+    except Exception as exc:
+        st.error(f"Falha técnica na busca: {exc}")
+        return
+
+    st.session_state.resultados_busca = resultados
+    status_box.success(f"Busca concluída — {len(resultados)} itens processados.")
+
+
+def _mostrar_selecao(itens: list, resultados: dict) -> None:
+    """Tabela paginada com selectbox por linha. Operador escolhe a marca."""
+    from pregoes.exportador import SelecaoFornecedor
+
+    # Inicializa estado de seleções (default: primeira opção, ou nenhuma se vazio)
+    if "selecoes" not in st.session_state:
+        st.session_state.selecoes = {}
+        for idx, opcoes in resultados.items():
+            if opcoes:
+                primeiro = opcoes[0]
+                st.session_state.selecoes[idx] = SelecaoFornecedor(
+                    preco=primeiro.preco,
+                    codigo_fornecedor=primeiro.codigo_fornecedor,
+                    marca=primeiro.marca,
+                )
+
+    # Resumo
+    total = len(itens)
+    com_resultado = sum(1 for r in resultados.values() if r)
+    com_variacao = sum(1 for r in resultados.values()
+                       if r and any(x.confianca == "variacao" for x in r))
+    sem_resultado = total - com_resultado
+    selecionados = len(st.session_state.selecoes)
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Itens", total)
+    c2.metric("✅ Com preço", com_resultado - com_variacao,
+              help="Casamento exato com a descrição do edital")
+    c3.metric("⚠️ Variação", com_variacao,
+              help="Encontrado, mas por busca aproximada — conferir")
+    c4.metric("❌ Sem resultado", sem_resultado)
+
+    st.divider()
+
+    # Paginação simples
+    POR_PAGINA = 20
+    n_paginas = (total + POR_PAGINA - 1) // POR_PAGINA
+    if "pagina_busca" not in st.session_state:
+        st.session_state.pagina_busca = 0
+    pag = st.session_state.pagina_busca
+    inicio = pag * POR_PAGINA
+    fim = min(inicio + POR_PAGINA, total)
+
+    pcol1, pcol2, pcol3 = st.columns([1, 2, 1])
+    with pcol1:
+        if st.button("◀ Anterior", disabled=(pag == 0)):
+            st.session_state.pagina_busca = max(0, pag - 1)
+            st.rerun()
+    with pcol2:
+        st.caption(f"Página {pag + 1} de {n_paginas} — itens {inicio + 1}–{fim}")
+    with pcol3:
+        if st.button("Próxima ▶", disabled=(pag >= n_paginas - 1)):
+            st.session_state.pagina_busca = min(n_paginas - 1, pag + 1)
+            st.rerun()
+
+    # Lista de itens da página atual
+    for idx in range(inicio, fim):
+        item = itens[idx]
+        opcoes = resultados.get(idx, [])
+        sel_atual = st.session_state.selecoes.get(idx)
+
+        if not opcoes:
+            cor = "🔴"
+            label_status = "Não encontrado"
+        elif any(o.confianca == "variacao" for o in opcoes):
+            cor = "🟡"
+            label_status = f"{len(opcoes)} resultado(s) por variação"
+        else:
+            cor = "🟢"
+            label_status = f"{len(opcoes)} resultado(s)"
+
+        with st.expander(
+            f"{cor} **#{item.item_numero or idx + 1}** — {item.descricao[:80]}  ·  {label_status}",
+            expanded=False,
+        ):
+            if not opcoes:
+                st.warning("Nenhum resultado nos fornecedores. Coluna L ficará em branco.")
+                continue
+
+            # Selectbox: operador escolhe entre as opções
+            labels = ["(não usar)"] + [
+                f"{o.marca} — R$ {o.preco:.2f} — código {o.codigo_fornecedor} — {o.descricao_encontrada[:60]}"
+                for o in opcoes
+            ]
+            default_idx = 0
+            if sel_atual is not None:
+                # Encontra a opção que casa com a seleção atual
+                for i, o in enumerate(opcoes):
+                    if (o.preco == sel_atual.preco and o.marca == sel_atual.marca
+                            and o.codigo_fornecedor == sel_atual.codigo_fornecedor):
+                        default_idx = i + 1
+                        break
+
+            escolha = st.selectbox(
+                "Marca / preço",
+                options=range(len(labels)),
+                format_func=lambda i: labels[i],
+                index=default_idx,
+                key=f"sel_{idx}",
+            )
+            if escolha == 0:
+                st.session_state.selecoes.pop(idx, None)
+            else:
+                op = opcoes[escolha - 1]
+                st.session_state.selecoes[idx] = SelecaoFornecedor(
+                    preco=op.preco, codigo_fornecedor=op.codigo_fornecedor, marca=op.marca,
+                )
+
+    st.divider()
+    st.caption(f"{selecionados} de {total} itens com marca/preço selecionados.")
+
+    if st.button("📊 Gerar planilha matriz com preços", type="primary",
+                 use_container_width=True):
+        df = st.session_state.df_editavel
+        markup = st.session_state.get("markup", config.MARKUP_DEFAULT)
+        _gerar_excel(df, markup=markup, selecoes=st.session_state.selecoes)
+
+
 # === Roteador ===
 TELAS = {
     "home": tela_home,
     "upload": tela_upload,
     "revisao": tela_revisao,
+    "busca_precos": tela_busca_precos,
+    "configuracoes": tela_configuracoes,
 }
 
 TELAS[st.session_state.tela]()

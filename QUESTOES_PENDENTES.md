@@ -8,7 +8,7 @@
 
 **Contexto.** O cliente declarou base mental de ~5.000 produtos acumulados em pregões anteriores.
 
-**Default em uso.** Sistema começa do zero. O importador `pregoes/importador.py` está pronto para rodar em lote, mas sem dados de entrada ele não roda.
+**Default em uso.** Sistema começa do zero. O importador (`pregoes/importador.py`) ainda não foi escrito — será criado na Fase 3, quando as planilhas históricas chegarem. Sem importador rodado, o catálogo nasce vazio.
 
 **Próximo passo necessário.** O cliente nos passar 10-20 planilhas de pregões anteriores no mesmo formato da `MATRIZ`. Idealmente cobrindo categorias variadas: construção, hidráulico, elétrico.
 
@@ -33,6 +33,9 @@
 | Cache de preço | TTL de 2 dias | Resp. final 9 |
 | Variação de nome no scraper | **Amarelo** (avisa, não bloqueia). Tag "encontrado por variação — conferir" | Q1 — Resp. 2026-05-12 |
 | Tipo de PDF dos editais | Textuais (como `anexo_1.pdf`). Sem necessidade de OCR | Q5 — Resp. 2026-05-12 |
+| Credenciais de fornecedores | `data/credenciais.json` (gitignored). UI tem tela "Configurações" para o operador editar. Só email + senha (CNPJ é one-shot do primeiro acesso, não armazenamos) | Q8 — Resp. 2026-05-15 |
+| Almeida: login obrigatório para preço | Login com `email + senha` (campo CNPJ só no 1º acesso). Submit por Enter no campo senha. Sessão via cookie `PHPSESSID + token` | Q8 — Inspeção 2026-05-15 |
+| Almeida: parse de produto | Atributos `data-*` em `.product-card__info[data-codigo-produto]`: `data-preco`, `data-marca`, `data-codigo-produto`, `data-nome` | Q8 — Inspeção 2026-05-15 |
 
 ---
 

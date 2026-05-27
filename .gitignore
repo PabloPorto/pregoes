@@ -13,7 +13,11 @@ venv/
 # Banco e artefatos gerados
 data/pregoes.db
 data/exports/*.xlsx
-data/editais/tmp*.pdf
+
+# Editais reais do cliente — nunca versionar (dados privados, podem ser grandes).
+# Exceção: o PDF sintético usado em tests/test_mvp.py fica versionado.
+data/editais/*.pdf
+!data/editais/araruna_teste_sintetico.pdf
 
 # Credenciais de fornecedores (Q8) — NUNCA versionar
 data/credenciais.json

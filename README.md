@@ -3,18 +3,24 @@
 Sistema para automatizar a parte mais chata da preparação de pregões:
 extrair os itens do edital em PDF e gerar a planilha matriz preenchida.
 
-## O que esta versão entrega (MVP — primeira parte)
+## O que esta versão entrega
 
+**Da primeira entrega (Fase 1):**
 - ✅ Você arrasta o **PDF do edital** para o sistema
 - ✅ Ele detecta a tabela de itens automaticamente e extrai todos
 - ✅ Você confere e edita o que quiser numa tabela na tela
 - ✅ Ele gera o **arquivo Excel da matriz**, no mesmo formato que você já usa,
    com todas as suas fórmulas preservadas
 
+**Em andamento (Fase 2):**
+- ✅ Busca automática de preços na **Almeida** com seleção de marca pelo operador
+- ✅ Tela de **Configurações** para você guardar a senha do site
+- 🟡 Busca automática na **Dantas** (em andamento, próxima entrega)
+- ⏳ Memória dos produtos já vistos antes (cache de 2 dias) — chega junto com a Dantas
+
 ## O que vem depois (próximas entregas)
 
-- ⏳ Consulta automática de preços em **Almeida** e **Dantas**
-- ⏳ Memória dos produtos já vistos antes (não pesquisa duas vezes a mesma coisa)
+- ⏳ Bootstrap do histórico (importar seus pregões antigos para o catálogo)
 - ⏳ Inteligência de impostos baseada nas notas fiscais que você recebe
 - ⏳ Painel de variação de preços por marca
 
@@ -33,17 +39,28 @@ extrair os itens do edital em PDF e gerar a planilha matriz preenchida.
   Ela é o "motor" do sistema rodando.
 - O navegador (Chrome / Edge / Firefox) abre automaticamente no sistema.
 
-### 3. Usar
+### 3. Configurar senhas dos fornecedores (uma única vez)
+- Clique em **"Configurações"**.
+- Preencha seu **e-mail e senha da Almeida** e clique em "Salvar credenciais".
+- A senha fica salva só no seu computador, em `data/credenciais.json` —
+  nada vai para a internet.
+
+### 4. Usar
 - Clique em **"Novo pregão"**.
 - Arraste o PDF do edital para a área indicada.
 - Preencha o nome do órgão e número do pregão (opcional).
 - Clique em **"Extrair itens do PDF"**.
 - Confira a tabela. Edite o que quiser. Desmarque o quadradinho "OK?"
   para descartar uma linha.
-- Clique em **"Gerar planilha matriz"**.
+- Ajuste o **markup** se for o caso (padrão 1.45).
+- Clique em **"🔍 Buscar preços"** para o robô pesquisar na Almeida
+  (ou em **"📊 Gerar sem buscar"** para gerar a planilha em branco
+  e preencher preços à mão como antes).
+- Quando a busca terminar, escolha a **marca** desejada para cada item
+  e clique em **"Gerar planilha matriz com preços"**.
 - Clique em **"Baixar planilha matriz"** para salvar o Excel.
 
-### 4. Para encerrar
+### 5. Para encerrar
 - Apenas feche a janela preta. Pode fechar o navegador normalmente.
 
 ## Onde os arquivos ficam
@@ -70,7 +87,8 @@ Tudo dentro da pasta `data/`:
 - Suporta editais com **até 500 itens** com fórmulas pré-preparadas;
   acima disso, o sistema expande automaticamente o template (testar com
   cuidado nos primeiros usos).
-- A coluna **PREÇO** (L), **CÓDIGO INTERNO** (T) e **MARCA** (U) ainda
-  ficam em branco — vai ser preenchido pelo robô das próximas entregas.
-- Os percentuais de **ST**, **IPI** e **FRETE** seguem em branco também
+- A busca de preços hoje é **só na Almeida**. Dantas vem na próxima entrega.
+- Os percentuais de **ST**, **IPI** e **FRETE** seguem em branco
   (você preenche manualmente por enquanto, como já faz hoje).
+- Sem credenciais Almeida configuradas, o botão **"Buscar preços"** fica
+  indisponível — use **"Gerar sem buscar"** para a planilha em branco.

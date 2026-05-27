@@ -69,26 +69,33 @@ pregoes_app/
 ├── pregoes/                   # Pacote Python
 │   ├── __init__.py
 │   ├── config.py              # Constantes — único arquivo a editar para tweaks
-│   ├── db.py                  # Schema SQLite + conexão
-│   ├── extrator.py            # PDF → ItemExtraido
-│   ├── exportador.py          # ItemExtraido → Excel matriz
-│   ├── normalizador.py        # (TODO fase 2)
-│   ├── matcher.py             # (TODO fase 3)
-│   ├── scraper.py             # (TODO fase 2)
-│   ├── importador.py          # (TODO fase 3 — bootstrap histórico)
+│   ├── db.py                  # Schema SQLite + preco_em_cache + gravar_preco
+│   ├── extrator.py            # PDF → ItemExtraido (3 heurísticas, Q6)
+│   ├── exportador.py          # ItemExtraido + SelecaoFornecedor → Excel matriz
+│   ├── normalizador.py        # ✅ normalizar_descricao + keywords + relevancia
+│   ├── credenciais.py         # ✅ CRUD de data/credenciais.json (Q8)
+│   ├── scraper.py             # 🟡 Almeida pronto; Dantas esqueleto
+│   ├── matcher.py             # ⏳ TODO fase 3
+│   ├── importador.py          # ⏳ TODO fase 3 — bootstrap histórico
 │   └── ui/
 │       ├── __init__.py
-│       └── app.py             # Streamlit
+│       └── app.py             # Streamlit — 5 telas (home, upload, revisão,
+│                              # busca de preços, configurações)
 ├── data/
-│   ├── pregoes.db             # SQLite (criado em runtime)
+│   ├── pregoes.db             # SQLite (criado em runtime, gitignored)
+│   ├── credenciais.json       # email/senha Almeida + Dantas (gitignored)
 │   ├── templates/
 │   │   └── matriz_template.xlsx
-│   ├── editais/               # PDFs originais
-│   └── exports/               # Excels gerados
+│   ├── editais/               # PDFs originais (gitignored, exceto sintético)
+│   └── exports/               # Excels gerados (gitignored)
 └── tests/
     ├── gerar_pdf_teste.py
-    └── test_mvp.py            # 19 testes — caminho crítico todo coberto
+    ├── test_mvp.py            # 27 testes Fase 1 (com parametrize)
+    └── test_fase2_inicial.py  # 33 testes Fase 2 (scraper, normalizador,
+                                # credenciais, orquestrador)
 ```
+
+Total atual: **60 testes verdes** (`pytest -v`).
 
 ## Schema SQLite
 
@@ -102,12 +109,14 @@ mapeamentos_pdf       — heurísticas aprendidas para schemas não-padrão
 
 ## Próximas fases (em ordem)
 
-### Fase 2 — Scraper Almeida + Dantas (3-5 dias)
-- Playwright para navegar nos sites
-- Busca em camadas: descrição exata → limpa → keywords → código
-- Cache TTL=2 dias na `precos_historico`
-- UI: tela de revisão com preço Almeida vs Dantas, seleção manual de marca
-- Trigger: cliente confirma Q1 (amarelo vs vermelho)
+### Fase 2 — Scraper Almeida + Dantas (3-5 dias) — 🟡 em andamento
+- Playwright para navegar nos sites — ✅ pronto (sync API, headless)
+- Busca em 3 camadas: descrição normalizada → top-3 keywords → top-2 keywords. A 4ª camada (código histórico) fica para a Fase 3, quando `produtos.codigo_almeida` for populado pelo importador.
+- Almeida (`AlmeidaDistribuidor`) — ✅ login via cookies PHPSESSID+token, parse via `data-*` em `.product-card__info`
+- Dantas (`DantasDistribuidora`) — ⏳ esqueleto, precisa sessão de inspeção do site
+- Cache TTL=2 dias — schema pronto em `db.preco_em_cache` mas ainda não integrado ao orquestrador
+- UI: tela de busca de preços com seleção manual de marca por item — ✅ pronta
+- Polimento e paralelismo do scraper — pendente
 
 ### Fase 3 — Bootstrap, fuzzy matching, dashboard (2-3 dias)
 - `importador.py` lê N planilhas históricas e popula catálogo

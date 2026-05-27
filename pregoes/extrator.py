@@ -285,12 +285,12 @@ def _extrai_item(linha: list, mapa: dict[str, int], pagina: int) -> Optional[Ite
         return None
 
     item = ItemExtraido(
-        item_numero=_para_int(_get("codigo_orgao")),
-        codigo_orgao=_get("codigo_orgao"),
+        item_numero=_para_int(codigo),
+        codigo_orgao=codigo,
         descricao=descricao,
         unidade=_get("unidade"),
         quantidade=quantidade,
-        valor_referencia=_para_numero(_get("valor_referencia")),
+        valor_referencia=valor_ref,
         pagina=pagina,
     )
 

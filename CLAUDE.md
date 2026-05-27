@@ -171,6 +171,7 @@ PDF do edital
 | Markup | Variável por pregão, indicado pelo usuário antes de gerar a planilha (default 1.45) | Q7 — Resp 2026-05-12 |
 | Variação de nome no scraper | Amarelo (avisa, não bloqueia) | Q1 — Resp 2026-05-12 |
 | Tipo de PDF dos editais | Textuais. Sem necessidade de OCR | Q5 — Resp 2026-05-12 |
+| Credenciais de fornecedores | `data/credenciais.json` (gitignored), editável pela tela "Configurações" da UI. Só email + senha por fornecedor | Q8 — Resp 2026-05-15 |
 | Overhead | 3% / 5% / 7% fixo no MVP | Resp final 2 |
 | Modelo de usuário | Sem hierarquia. Os 2 operadores compartilham acesso | Resp 3 + 12 |
 | Marca | Sistema NUNCA decide. Sempre apresenta opções | Resp final 7 |
