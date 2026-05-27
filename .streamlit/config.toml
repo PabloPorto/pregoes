@@ -1,0 +1,22 @@
+# Tema base da UI Streamlit.
+# Refinamentos (componentes, badges, sidebar) ficam em pregoes/ui/style.py.
+
+[theme]
+base = "light"
+primaryColor = "#1E40AF"           # Azul-marinho — botões primários
+backgroundColor = "#F8FAFC"        # Fundo da página
+secondaryBackgroundColor = "#FFFFFF"  # Cards, sidebar, expanders
+textColor = "#0F172A"               # Texto principal
+font = "sans serif"
+
+[server]
+headless = true
+runOnSave = true
+fileWatcherType = "auto"
+
+[browser]
+gatherUsageStats = false
+
+[client]
+showErrorDetails = true
+toolbarMode = "minimal"

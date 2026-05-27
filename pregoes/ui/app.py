@@ -6,6 +6,10 @@ Filosofia:
 - Tudo em português
 - Cada tela cabe sem rolar (na medida do possível)
 - Cores e estados visuais claros (verde = ok, amarelo = conferir, vermelho = problema)
+
+A camada visual (CSS, badges, headers, cards) mora em ``pregoes/ui/style.py``.
+Este arquivo cuida apenas de **roteamento, estado e composição** das telas —
+não escreve HTML cru nem repete cores hex.
 """
 from pathlib import Path
 import tempfile
@@ -17,6 +21,7 @@ from pregoes import config, credenciais, mapeamento_manual
 from pregoes.extrator import extrair_com_pipeline
 from pregoes.exportador import exportar
 from pregoes.db import init_db, get_conn
+from pregoes.ui import style
 
 
 # === Configuração da página ===
@@ -24,8 +29,9 @@ st.set_page_config(
     page_title=config.TITULO_APP,
     page_icon="📋",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
+style.aplicar_estilo()
 
 # Inicializa banco no primeiro load
 init_db()
@@ -45,52 +51,114 @@ def ir_para(tela: str):
     st.rerun()
 
 
+# === Sidebar fixa ===
+def _renderizar_sidebar():
+    """Navegação global + status do operador. Sempre visível."""
+    with st.sidebar:
+        style.sidebar_marca()
+
+        # Navegação principal — botão "ativo" via type='primary'
+        tela_atual = st.session_state.tela
+        nav_items = [
+            ("home",          "Início"),
+            ("upload",        "Novo pregão"),
+            ("configuracoes", "Configurações"),
+        ]
+        # Telas de meio-de-fluxo não viram itens de menu, mas mantêm a navegação
+        # consistente sem botão "ativo" (revisão, busca_precos, mapeamento).
+        for tela_id, rotulo in nav_items:
+            ativo = tela_atual == tela_id or (
+                tela_id == "upload" and tela_atual in {"revisao", "mapeamento", "busca_precos"}
+            )
+            if st.button(
+                rotulo,
+                key=f"nav_{tela_id}",
+                use_container_width=True,
+                type="primary" if ativo else "secondary",
+            ):
+                # "Novo pregão" pelo menu sempre limpa estado (mesma intenção do
+                # botão antigo na home).
+                if tela_id == "upload":
+                    for k in ("extracao", "df_editavel", "resultados_busca",
+                              "selecoes", "pagina_busca", "itens_revisados",
+                              "usando_tabelas_docling", "mapeamento_tabela_idx"):
+                        st.session_state.pop(k, None)
+                ir_para(tela_id)
+
+        st.markdown("###### Status", unsafe_allow_html=True)
+        cred_almeida = credenciais.carregar("almeida")
+        almeida_status = ("Configurada", "success") if cred_almeida else ("Pendente", "warning")
+        style.sidebar_status([
+            ("Almeida", almeida_status[0], almeida_status[1]),
+            ("Dantas", "Em breve", "neutro"),
+        ])
+
+        st.caption(
+            f"\n\nv. MVP · porta {config.PORTA_UI}\n\nDados locais em "
+            f"`data/pregoes.db`"
+        )
+
+
 # === Tela: HOME ===
 def tela_home():
-    st.title("Pregões")
-    st.caption("Automação da formação de preços para licitações")
+    style.header_pagina(
+        "Início",
+        "Visão geral dos pregões processados e atalho para um novo.",
+    )
 
-    col1, col2, col3 = st.columns([1, 1, 2])
-    with col1:
-        if st.button("➕ Novo pregão", type="primary", use_container_width=True):
-            for k in ("extracao", "df_editavel", "resultados_busca",
-                      "selecoes", "pagina_busca", "itens_revisados",
-                      "usando_tabelas_docling", "mapeamento_tabela_idx"):
-                st.session_state.pop(k, None)
-            ir_para("upload")
-    with col2:
-        if st.button("⚙️ Configurações", use_container_width=True):
-            ir_para("configuracoes")
-
-    st.divider()
-    st.subheader("Pregões recentes")
-
+    # KPIs do mês — usando o que já temos em editais.
     with get_conn() as conn:
-        rows = conn.execute("""
+        rows_all = conn.execute("""
             SELECT id, orgao, numero_pregao, status, criado_em
             FROM editais
             ORDER BY criado_em DESC
-            LIMIT 20
         """).fetchall()
 
-    if not rows:
-        st.info("Nenhum pregão registrado ainda. Clique em **Novo pregão** para começar.")
+    total = len(rows_all)
+    por_status = {"rascunho": 0, "precificado": 0, "exportado": 0,
+                  "ganho": 0, "perdido": 0}
+    for r in rows_all:
+        por_status[r["status"]] = por_status.get(r["status"], 0) + 1
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Pregões registrados", total)
+    c2.metric("Em rascunho", por_status.get("rascunho", 0))
+    c3.metric("Precificados", por_status.get("precificado", 0))
+    c4.metric("Ganhos", por_status.get("ganho", 0))
+
+    # Atalho principal — sidebar tem o mesmo, mas o CTA principal aqui ajuda
+    # quem chega na tela home e quer começar imediatamente.
+    st.write("")
+    if st.button("Iniciar novo pregão", type="primary"):
+        for k in ("extracao", "df_editavel", "resultados_busca",
+                  "selecoes", "pagina_busca", "itens_revisados",
+                  "usando_tabelas_docling", "mapeamento_tabela_idx"):
+            st.session_state.pop(k, None)
+        ir_para("upload")
+
+    st.markdown("## Pregões recentes")
+    if not rows_all:
+        style.bloco_aviso(
+            "Nenhum pregão registrado ainda. Clique em <b>Iniciar novo pregão</b> "
+            "acima para começar.",
+            tipo="info",
+        )
         return
 
-    df = pd.DataFrame([dict(r) for r in rows])
+    df = pd.DataFrame([dict(r) for r in rows_all[:20]])
     df.columns = ["ID", "Órgão", "Pregão", "Status", "Criado em"]
     st.dataframe(df, use_container_width=True, hide_index=True)
 
 
 # === Tela: UPLOAD ===
 def tela_upload():
-    if st.button("← Voltar"):
-        ir_para("home")
-
-    st.title("Novo pregão — upload do edital")
+    style.header_pagina(
+        "Novo pregão",
+        "Envie o PDF do edital para extração automática dos itens.",
+    )
 
     arquivo = st.file_uploader(
-        "Arraste o PDF do edital aqui ou clique para escolher",
+        "Arraste o PDF aqui ou clique para escolher",
         type=["pdf"],
         accept_multiple_files=False,
     )
@@ -114,7 +182,7 @@ def tela_upload():
             try:
                 resultado = extrair_com_pipeline(tmp_path)
             except Exception as exc:
-                st.error(f"Falha ao ler PDF: {exc}")
+                style.bloco_aviso(f"Falha ao ler PDF: {exc}", tipo="danger")
                 return
 
         # Pipeline automático ficou abaixo do limite? Tenta mapas aprendidos
@@ -163,22 +231,23 @@ def tela_revisao():
         ir_para("home")
         return
 
-    if st.button("← Voltar"):
-        ir_para("upload")
-
-    st.title("Revisão dos itens extraídos")
+    style.header_pagina(
+        "Revisão dos itens extraídos",
+        "Confira o que foi lido do PDF, edite o que precisar e marque o que entra na planilha.",
+    )
 
     # Badge de confiança da extração — semáforo para o operador entender
     # rapidamente se pode confiar no resultado ou precisa revisar com lupa.
     conf = res.confianca_global
-    if conf >= 0.95:
-        st.success(f"✅ Confiança da extração: **{conf:.0%}** — pode seguir.")
-    elif conf >= 0.80:
-        st.warning(f"⚠️ Confiança da extração: **{conf:.0%}** — revise com atenção.")
-    elif conf > 0:
-        st.error(f"🔴 Confiança da extração: **{conf:.0%}** — recomendado mapeamento manual ou conferência item a item.")
-    else:
-        st.error("🔴 Não foi possível identificar uma tabela de itens neste PDF.")
+    rotulo_conf, tipo_conf = style.confianca_para_badge(conf)
+    style.bloco_aviso(
+        {
+            "success": f"<b>{rotulo_conf}</b> — pode seguir para precificar.",
+            "warning": f"<b>{rotulo_conf}</b> — revise com atenção antes de gerar a planilha.",
+            "danger":  f"<b>{rotulo_conf}</b> — recomendado usar o mapeamento manual.",
+        }[tipo_conf],
+        tipo=tipo_conf,
+    )
 
     # Indicadores
     c1, c2, c3, c4 = st.columns(4)
@@ -190,28 +259,29 @@ def tela_revisao():
     c4.metric("Tabelas detectadas", len(res.tabelas_brutas))
 
     if res.avisos:
-        for aviso in res.avisos:
-            st.warning(aviso)
+        style.bloco_avisos(res.avisos, tipo="warning")
 
     # Quando a confiança automática não é alta o bastante OU não saiu item
     # algum, oferece mapeamento manual. O operador escolhe a tabela bruta
     # certa e indica o que é cada coluna — o sistema aprende e usa em
     # próximos editais com mesmo cabeçalho.
     if conf < 0.95 and res.tabelas_brutas:
-        st.info(
-            "💡 A confiança automática ficou abaixo de 95%. Você pode entrar "
-            "no **Mapeamento Manual** para indicar qual é a tabela de itens "
-            "e quais são as colunas. O sistema aprende e usa o mapeamento "
-            "em próximos editais com o mesmo formato."
+        style.bloco_aviso(
+            "A confiança automática ficou abaixo de 95%. Você pode usar o "
+            "<b>Mapeamento Manual</b> para indicar qual é a tabela de itens "
+            "e o que é cada coluna. O sistema aprende e reaproveita o "
+            "mapeamento em próximos editais com o mesmo formato.",
+            tipo="info",
         )
-        if st.button("🛠️ Mapeamento Manual", use_container_width=False):
+        if st.button("Mapeamento Manual"):
             ir_para("mapeamento")
 
     if res.total_itens == 0:
-        st.error(
+        style.bloco_aviso(
             "Nenhum item foi extraído automaticamente. Se o PDF tem uma "
-            "tabela de itens visível, use o **Mapeamento Manual** acima. "
-            "Se o PDF está escaneado (imagem), precisa OCR — avise o time."
+            "tabela de itens visível, use o <b>Mapeamento Manual</b> acima. "
+            "Se o PDF está escaneado (imagem), precisa OCR — avise o time.",
+            tipo="danger",
         )
         return
 
@@ -236,12 +306,12 @@ def tela_revisao():
 
     bcol1, bcol2, bcol3 = st.columns([1, 1, 5])
     with bcol1:
-        if st.button("☑️ Marcar todos", use_container_width=True):
+        if st.button("Marcar todos", use_container_width=True):
             st.session_state.df_editavel["OK"] = True
             st.session_state.editor_version += 1
             st.rerun()
     with bcol2:
-        if st.button("⬜ Desmarcar todos", use_container_width=True):
+        if st.button("Desmarcar todos", use_container_width=True):
             st.session_state.df_editavel["OK"] = False
             st.session_state.editor_version += 1
             st.rerun()
@@ -288,17 +358,20 @@ def tela_revisao():
     st.session_state.itens_revisados = _df_para_itens(edited)
 
     with col2:
-        if st.button("🔍 Buscar preços", type="primary", use_container_width=True,
+        if st.button("Buscar preços", type="primary", use_container_width=True,
                      help="Consulta Almeida (e futuramente Dantas). Pode demorar alguns minutos."):
             if not st.session_state.itens_revisados:
-                st.error("Nenhum item marcado como OK — nada para buscar.")
+                style.bloco_aviso("Nenhum item marcado como OK — nada para buscar.", tipo="danger")
             elif credenciais.carregar("almeida") is None:
-                st.error("Credenciais Almeida não configuradas. Vá em ⚙️ Configurações.")
+                style.bloco_aviso(
+                    "Credenciais Almeida não configuradas. Acesse <b>Configurações</b> na barra lateral.",
+                    tipo="danger",
+                )
             else:
                 ir_para("busca_precos")
 
     with col3:
-        if st.button("📊 Gerar sem buscar", use_container_width=True,
+        if st.button("Gerar sem buscar", use_container_width=True,
                      help="Gera a planilha matriz com colunas L/T/U vazias (preço, código, marca em branco)."):
             _gerar_excel(edited, markup=markup, selecoes={})
 
@@ -327,7 +400,7 @@ def _gerar_excel(df: pd.DataFrame, markup: float, selecoes: dict):
     """
     itens = _df_para_itens(df)
     if not itens:
-        st.error("Nenhum item marcado como OK — nada para exportar.")
+        style.bloco_aviso("Nenhum item marcado como OK — nada para exportar.", tipo="danger")
         return
 
     with st.spinner("Gerando planilha matriz a partir do template..."):
@@ -340,18 +413,18 @@ def _gerar_excel(df: pd.DataFrame, markup: float, selecoes: dict):
                 selecoes=selecoes,
             )
         except Exception as exc:
-            st.error(f"Falha ao gerar planilha: {exc}")
+            style.bloco_aviso(f"Falha ao gerar planilha: {exc}", tipo="danger")
             return
 
         # Persistir edital + itens no banco (Fase 2: itens vinculados às seleções)
         _persistir_edital(itens, selecoes)
 
-    st.success(f"✅ Planilha gerada: `{destino.name}`")
+    style.bloco_aviso(f"Planilha gerada: <code>{destino.name}</code>", tipo="success")
     if selecoes:
         st.caption(f"Inclui preço/marca/código para {len(selecoes)} de {len(itens)} itens.")
     with open(destino, "rb") as f:
         st.download_button(
-            "⬇️ Baixar planilha matriz",
+            "Baixar planilha matriz",
             data=f.read(),
             file_name=destino.name,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -398,59 +471,82 @@ def _persistir_edital(itens: list, selecoes: dict) -> None:
 
 # === Tela: CONFIGURAÇÕES ===
 def tela_configuracoes():
-    if st.button("← Voltar"):
-        ir_para("home")
-
-    st.title("Configurações")
-    st.caption(
-        "Credenciais dos sites de fornecedores. Salvas apenas localmente, "
-        "no arquivo `data/credenciais.json` — nunca enviadas para nenhum servidor."
+    style.header_pagina(
+        "Configurações",
+        "Credenciais dos fornecedores. Tudo fica salvo apenas no seu computador "
+        "(arquivo <code>data/credenciais.json</code>), sem envio para servidores externos.",
     )
 
-    st.subheader("Almeida Distribuidor")
-    atual = credenciais.carregar("almeida") or {"email": "", "senha": ""}
-    with st.form("form_almeida"):
-        email = st.text_input("E-mail", value=atual.get("email", ""))
-        senha = st.text_input("Senha", value=atual.get("senha", ""), type="password")
-        salvar_btn = st.form_submit_button("Salvar credenciais", type="primary")
-        if salvar_btn:
-            if not email or not senha:
-                st.error("Preencha e-mail e senha antes de salvar.")
-            else:
-                credenciais.salvar("almeida", email.strip(), senha)
-                st.success("Credenciais da Almeida salvas com sucesso.")
+    aba_almeida, aba_dantas = st.tabs(["Almeida", "Dantas"])
 
-    if atual.get("email"):
-        st.caption(f"✅ Credencial atual: `{atual['email']}` (senha oculta).")
-    else:
-        st.warning("⚠️ Nenhuma credencial salva ainda. O scraper de preços não funcionará até configurar.")
+    with aba_almeida:
+        atual = credenciais.carregar("almeida") or {"email": "", "senha": ""}
+        if atual.get("email"):
+            style.bloco_aviso(
+                f"Credencial ativa: <code>{atual['email']}</code> (senha oculta).",
+                tipo="success",
+            )
+        else:
+            style.bloco_aviso(
+                "Nenhuma credencial salva. A busca de preços não funciona até configurar.",
+                tipo="warning",
+            )
 
-    st.divider()
-    st.subheader("Dantas Distribuidora")
-    st.info("Configuração será adicionada quando o scraper da Dantas estiver pronto.")
+        with st.form("form_almeida"):
+            email = st.text_input("E-mail", value=atual.get("email", ""))
+            senha = st.text_input("Senha", value=atual.get("senha", ""), type="password")
+            salvar_btn = st.form_submit_button("Salvar credenciais", type="primary")
+            if salvar_btn:
+                if not email or not senha:
+                    style.bloco_aviso("Preencha e-mail e senha antes de salvar.", tipo="danger")
+                else:
+                    credenciais.salvar("almeida", email.strip(), senha)
+                    style.bloco_aviso(
+                        "Credenciais da Almeida salvas com sucesso.", tipo="success",
+                    )
+
+    with aba_dantas:
+        style.bloco_aviso(
+            "A integração com a Dantas Distribuidora está em desenvolvimento. "
+            "A configuração ficará disponível assim que o scraper estiver pronto.",
+            tipo="info",
+        )
 
 
 # === Tela: BUSCA DE PREÇOS ===
 def tela_busca_precos():
-    if st.button("← Voltar para revisão"):
-        ir_para("revisao")
-
-    st.title("🔍 Busca de preços nos fornecedores")
+    style.header_pagina(
+        "Busca de preços nos fornecedores",
+        "Consulta cada item na Almeida (e futuramente Dantas) e mostra as marcas "
+        "disponíveis. Você escolhe qual marca entra na planilha.",
+    )
 
     itens = st.session_state.get("itens_revisados") or []
     if not itens:
-        st.error("Nenhum item para buscar. Volte para a revisão.")
+        style.bloco_aviso(
+            "Nenhum item para buscar. Volte para a revisão.", tipo="danger"
+        )
+        if st.button("Voltar para revisão"):
+            ir_para("revisao")
         return
 
-    st.caption(f"{len(itens)} itens serão buscados na Almeida. "
-               "Estimativa: ~1.5s por item (ou seja, ~{:.0f}min para esta lista).".format(
-                   len(itens) * 1.5 / 60))
+    st.caption(
+        f"{len(itens)} itens serão buscados na Almeida. "
+        "Estimativa: ~1,5s por item (~{:.0f} min nesta lista).".format(
+            len(itens) * 1.5 / 60
+        )
+    )
 
     # Se ainda não buscou, oferecer botão para começar
     if "resultados_busca" not in st.session_state:
-        if st.button("▶️ Iniciar busca", type="primary"):
-            _executar_busca(itens)
-            st.rerun()
+        col_a, col_b = st.columns([1, 5])
+        with col_a:
+            if st.button("Iniciar busca", type="primary"):
+                _executar_busca(itens)
+                st.rerun()
+        with col_b:
+            if st.button("Voltar para revisão"):
+                ir_para("revisao")
         return
 
     # Já buscou: mostrar resultados + seleção
@@ -463,7 +559,7 @@ def _executar_busca(itens: list) -> None:
 
     cred = credenciais.carregar("almeida")
     if cred is None:
-        st.error("Credenciais Almeida não configuradas.")
+        style.bloco_aviso("Credenciais Almeida não configuradas.", tipo="danger")
         return
 
     progress = st.progress(0.0, text="Fazendo login na Almeida...")
@@ -477,11 +573,14 @@ def _executar_busca(itens: list) -> None:
             progress.progress(0.0, text="Login OK. Iniciando buscas...")
             resultados = buscar_precos_para_itens(itens, [alm], progresso_callback=cb)
     except Exception as exc:
-        st.error(f"Falha técnica na busca: {exc}")
+        style.bloco_aviso(f"Falha técnica na busca: {exc}", tipo="danger")
         return
 
     st.session_state.resultados_busca = resultados
-    status_box.success(f"Busca concluída — {len(resultados)} itens processados.")
+    with status_box.container():
+        style.bloco_aviso(
+            f"Busca concluída — {len(resultados)} itens processados.", tipo="success",
+        )
 
 
 def _mostrar_selecao(itens: list, resultados: dict) -> None:
@@ -510,11 +609,11 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Itens", total)
-    c2.metric("✅ Com preço", com_resultado - com_variacao,
+    c2.metric("Com preço", com_resultado - com_variacao,
               help="Casamento exato com a descrição do edital")
-    c3.metric("⚠️ Variação", com_variacao,
+    c3.metric("Por variação", com_variacao,
               help="Encontrado, mas por busca aproximada — conferir")
-    c4.metric("❌ Sem resultado", sem_resultado)
+    c4.metric("Sem resultado", sem_resultado)
 
     st.divider()
 
@@ -546,21 +645,24 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
         sel_atual = st.session_state.selecoes.get(idx)
 
         if not opcoes:
-            cor = "🔴"
             label_status = "Não encontrado"
+            tipo_status: style.TipoBadge = "danger"
         elif any(o.confianca == "variacao" for o in opcoes):
-            cor = "🟡"
-            label_status = f"{len(opcoes)} resultado(s) por variação"
+            label_status = f"{len(opcoes)} por variação"
+            tipo_status = "warning"
         else:
-            cor = "🟢"
-            label_status = f"{len(opcoes)} resultado(s)"
+            label_status = f"{len(opcoes)} encontrado(s)"
+            tipo_status = "success"
 
         with st.expander(
-            f"{cor} **#{item.item_numero or idx + 1}** — {item.descricao[:80]}  ·  {label_status}",
+            f"#{item.item_numero or idx + 1} · {item.descricao[:80]}  —  {label_status}",
             expanded=False,
         ):
             if not opcoes:
-                st.warning("Nenhum resultado nos fornecedores. Coluna L ficará em branco.")
+                style.bloco_aviso(
+                    "Nenhum resultado nos fornecedores. Coluna L ficará em branco.",
+                    tipo="warning",
+                )
                 continue
 
             # Selectbox: operador escolhe entre as opções
@@ -595,7 +697,7 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
     st.divider()
     st.caption(f"{selecionados} de {total} itens com marca/preço selecionados.")
 
-    if st.button("📊 Gerar planilha matriz com preços", type="primary",
+    if st.button("Gerar planilha matriz com preços", type="primary",
                  use_container_width=True):
         df = st.session_state.df_editavel
         markup = st.session_state.get("markup", config.MARKUP_DEFAULT)
@@ -608,48 +710,55 @@ def tela_mapeamento():
 
     res = st.session_state.extracao
     if res is None or not res.tabelas_brutas:
-        st.error("Nada para mapear — volte e suba um PDF primeiro.")
-        if st.button("← Início"):
+        style.bloco_aviso(
+            "Nada para mapear — volte e envie um PDF primeiro.", tipo="danger",
+        )
+        if st.button("Voltar para o início"):
             ir_para("home")
         return
 
-    if st.button("← Voltar para revisão"):
-        ir_para("revisao")
-
-    st.title("🛠️ Mapeamento Manual da Tabela de Itens")
-    st.caption(
-        "Passo 1: escolha qual das tabelas abaixo é a tabela de itens do edital. "
-        "Passo 2: indique o que é cada coluna. O sistema aprende e usa esse "
-        "mapeamento automaticamente em próximos editais com o mesmo formato."
+    style.header_pagina(
+        "Mapeamento manual da tabela de itens",
+        "Quando a extração automática não acerta, você indica qual é a tabela "
+        "certa e o que é cada coluna. O sistema aprende para os próximos editais.",
     )
+
+    if st.button("Voltar para revisão"):
+        ir_para("revisao")
 
     # === Opcional: recarregar tabelas com Docling (mais preciso, mais lento) ===
     from pregoes import extrator_docling
     if extrator_docling.disponivel() and not st.session_state.get("usando_tabelas_docling"):
-        with st.expander("🔬 Não encontrou a tabela certa? Carregar com extração profunda (Docling)"):
+        with st.expander("Não encontrou a tabela certa? Carregar com extração profunda (Docling)"):
             st.caption(
-                "Docling usa modelo de visão para detectar tabelas que o "
+                "Docling usa um modelo de visão para detectar tabelas que o "
                 "pdfplumber não viu. Funciona melhor em PDFs com layout "
                 "complexo, mas demora **5-10 minutos** por edital. Use só "
                 "quando a tabela certa não está na lista abaixo."
             )
             pdf_path = st.session_state.get("pdf_path")
-            if pdf_path and st.button("▶️ Carregar tabelas com Docling"):
+            if pdf_path and st.button("Carregar tabelas com Docling"):
                 with st.spinner("Rodando Docling… pode demorar alguns minutos."):
                     try:
                         tabs = extrator_docling.coletar_tabelas_brutas_docling(pdf_path)
                     except Exception as exc:
-                        st.error(f"Docling falhou: {exc}")
+                        style.bloco_aviso(f"Docling falhou: {exc}", tipo="danger")
                         return
                 # Substitui as tabelas brutas — operador escolhe entre as do Docling
                 res.tabelas_brutas = tabs
                 st.session_state.extracao = res
                 st.session_state.usando_tabelas_docling = True
                 st.session_state.pop("mapeamento_tabela_idx", None)
-                st.success(f"Docling detectou {len(tabs)} tabelas. Escolha abaixo.")
+                style.bloco_aviso(
+                    f"Docling detectou {len(tabs)} tabelas. Escolha abaixo.",
+                    tipo="success",
+                )
                 st.rerun()
     elif st.session_state.get("usando_tabelas_docling"):
-        st.info("Mostrando tabelas detectadas pelo Docling (extração profunda).")
+        style.bloco_aviso(
+            "Mostrando tabelas detectadas pelo Docling (extração profunda).",
+            tipo="info",
+        )
 
     # === Passo 1 ===
     st.subheader("Passo 1 — Qual das tabelas é a de itens?")
@@ -702,8 +811,11 @@ def tela_mapeamento():
         mapa_salvo = mapeamento_manual.carregar_mapa(conn, assinatura)
 
     if mapa_salvo:
-        st.success(f"Encontrei um mapa salvo desta assinatura de cabeçalho — "
-                   f"valores abaixo já vieram preenchidos. Ajuste se precisar.")
+        style.bloco_aviso(
+            "Encontrei um mapa salvo desta assinatura de cabeçalho — "
+            "os campos abaixo já vieram preenchidos. Ajuste se precisar.",
+            tipo="success",
+        )
 
     mapa_atual: dict[str, int] = {}
     cabecalho = tabela_alvo[0] if tabela_alvo else []
@@ -740,16 +852,19 @@ def tela_mapeamento():
     faltando = [mapeamento_manual.ROTULOS_CAMPOS[c]
                 for c in obrigatorios if c not in mapa_atual]
     if faltando:
-        st.error(f"Mapeamento incompleto — faltam: **{', '.join(faltando)}**.")
+        style.bloco_aviso(
+            f"Mapeamento incompleto — faltam: <b>{', '.join(faltando)}</b>.",
+            tipo="danger",
+        )
         return
 
     salvar_mapa_check = st.checkbox(
-        "💾 Salvar este mapeamento para reuso automático em próximos editais "
+        "Salvar este mapeamento para reuso automático em próximos editais "
         "com o mesmo formato",
         value=True,
     )
 
-    if st.button("✅ Aplicar mapeamento", type="primary"):
+    if st.button("Aplicar mapeamento", type="primary"):
         novo_res = mapeamento_manual.aplicar_mapa(
             tabela_alvo, mapa_atual,
             arquivo=res.arquivo,
@@ -762,10 +877,11 @@ def tela_mapeamento():
         if salvar_mapa_check:
             with get_conn() as conn:
                 mapeamento_manual.salvar_mapa(conn, assinatura, mapa_atual)
-            st.success(
+            style.bloco_aviso(
                 f"Mapeamento salvo. Próximos PDFs com este cabeçalho usam "
-                f"automaticamente. Itens extraídos: **{novo_res.total_itens}**, "
-                f"confiança: **{novo_res.confianca_global:.0%}**."
+                f"automaticamente. Itens extraídos: <b>{novo_res.total_itens}</b>, "
+                f"confiança: <b>{novo_res.confianca_global:.0%}</b>.",
+                tipo="success",
             )
 
         st.session_state.extracao = novo_res
@@ -783,4 +899,5 @@ TELAS = {
     "configuracoes": tela_configuracoes,
 }
 
+_renderizar_sidebar()
 TELAS[st.session_state.tela]()

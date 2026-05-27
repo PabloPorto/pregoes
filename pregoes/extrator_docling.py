@@ -37,30 +37,48 @@ def _obter_converter():
     return _converter
 
 
-def coletar_tabelas_brutas_docling(caminho_pdf: str | Path) -> list[list[list[str]]]:
-    """Coleta TODAS as tabelas que Docling detecta no PDF, sem aplicar
-    pipeline de score nem heurísticas.
+def coletar_tabelas_brutas_docling(
+    caminho_pdf: str | Path,
+    *,
+    reconstruir_fatias: bool = True,
+) -> list[list[list[str]]]:
+    """Coleta TODAS as tabelas que Docling detecta no PDF, opcionalmente
+    aplicando reconstrução de fatias.
 
     Devolve `list[list[list[str]]]` — formato compatível com
     `ResultadoExtracao.tabelas_brutas`. Cada tabela vem como:
     `[cabeçalho_linha, linha_dados_1, linha_dados_2, ...]`.
 
+    Args:
+        caminho_pdf: PDF a processar.
+        reconstruir_fatias: se True (default), tenta fundir fatias que
+            Docling fragmentou (tabelas multi-página viram peças
+            separadas no Docling 2.7). Ver `reconstrutor_docling.reconstruir`
+            para a heurística e seus limites. Passe False quando quiser
+            inspecionar a saída crua do Docling (debug).
+
     Usado pela tela de Mapeamento Manual quando o operador clica em
     "Carregar tabelas com Docling" — Docling encontra MAIS tabelas
-    (modelo visual) mas fragmenta as multi-página; o operador escolhe
-    qual fatia é a relevante e mapeia colunas manualmente.
+    (modelo visual) mas fragmenta as multi-página; a reconstrução
+    automática funde o que parece continuação para que o operador
+    consiga mapear UMA tabela e capturar todos os itens.
     """
     caminho_pdf = Path(caminho_pdf)
     converter = _obter_converter()
     conv_res = converter.convert(str(caminho_pdf))
 
-    out: list[list[list[str]]] = []
+    cruas: list[list[list[str]]] = []
     for table in conv_res.document.tables:
         df = table.export_to_dataframe(doc=conv_res.document)
         cabecalho = [str(c) for c in df.columns]
         linhas_dados = [[_celula_str(v) for v in row] for row in df.values.tolist()]
-        out.append([cabecalho] + linhas_dados)
-    return out
+        cruas.append([cabecalho] + linhas_dados)
+
+    if not reconstruir_fatias:
+        return cruas
+
+    from .reconstrutor_docling import reconstruir
+    return reconstruir(cruas)
 
 
 def extrair_via_docling(caminho_pdf: str | Path) -> ResultadoExtracao:
