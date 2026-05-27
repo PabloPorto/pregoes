@@ -329,32 +329,73 @@ adicionadas a `QUESTOES_PENDENTES.md`** com:
 - Volume: 500 itens × 2 fornecedores = 1.000 requisições por edital. Use
   pool de páginas paralelas (3-5) e respeite os fornecedores parceiros.
 
-### Fase 3 — Bootstrap, fuzzy matching, dashboard
+### Fase 3 — Busca robusta multi-camada + catálogo + dashboard
+
+**Plano completo em `QUESTOES_PENDENTES.md` Q12.** Resumo abaixo.
 
 **Pré-requisitos:**
-- Q2 confirmada (cliente entrega 10-20 planilhas históricas)
+- Q2 confirmada (cliente entrega 10-20 planilhas históricas) —
+  destrava Camada 0 (catálogo + busca por código)
+- ✅ Gemini integrado (Fase 2.7) — destrava Camada 3 (LLM judge)
+- ✅ Q11 flexibilizou §9 do briefing (LLM externo OK no pipeline)
 
-**Tarefas:**
+**Mudança importante em relação ao plano original:**
+A *busca por código* virou a **PRIORIDADE 1**, não fallback. O cliente
+armazena código do produto em suas planilhas históricas, e o site
+Almeida/Dantas devolve produto exato quando o código é informado em
+`/busca?s={codigo}`. Isso evita disputa de relevância textual (que é
+inevitavelmente cega a abreviações, sinônimos, ordem).
 
-1. **`pregoes/importador.py`** — script standalone que lê N planilhas
-   antigas (mesmo formato MATRIZ) e popula `produtos` e
-   `precos_historico`.
-   - Detecta colunas C (descrição), L (preço), T (código fornecedor),
-     U (marca).
-   - Deduplica por (descrição_canônica, marca).
-   - Comando: `python -m pregoes.importador data/historico/*.xlsx`
+**Pipeline em 5 camadas (do mais preciso ao mais cobertor):**
 
-2. **`pregoes/matcher.py`** — casamento de item de edital com produto
-   do catálogo:
-   - Usa `rapidfuzz.process.extractOne` com `scorer=token_set_ratio`.
-   - Threshold default 85. Acima disso = match automático. Abaixo =
-     sugestão para revisão humana.
-   - Após match, vincula `edital_itens.produto_id`.
+1. **Camada 0**: catálogo histórico + matcher fuzzy → busca POR CÓDIGO
+   (resolve produto exato sem ambiguidade quando temos histórico)
+2. **Camada 1**: match textual aprimorado (✅ commit b18eeb2 — prefix/substring)
+3. **Camada 2**: rapidfuzz `token_sort_ratio` (resolve ordem + typos)
+4. **Camada 3**: Gemini LLM judge sob demanda (resolve sinônimos)
+5. **Camada 4**: aprendizado por feedback do operador
 
-3. **Dashboard de variação.** Nova tela na UI:
-   - Filtro por marca, período, fornecedor.
-   - Gráfico de variação % de preço (usar `st.line_chart` ou `plotly`).
-   - Lista dos top 20 produtos com maior aumento no período selecionado.
+**Tarefas concretas:**
+
+1. **`pregoes/importador.py`** (~1-2 dias) — Camada 0
+   - CLI: `python -m pregoes.importador data/historico/*.xlsx`
+   - Lê planilhas históricas formato MATRIZ
+   - Popula `produtos` (descricao_canonica, codigo_almeida,
+     codigo_dantas, marca, unidade_padrao, ncm) e `precos_historico`
+   - Deduplica por `(descricao_canonica, marca)`
+
+2. **`pregoes/matcher.py`** (~0.5 dia) — Camada 0
+   - `rapidfuzz.process.extractOne(scorer=token_sort_ratio)` threshold 90
+   - Match descrição-edital → produto do catálogo → códigos
+     `(almeida, dantas)`
+
+3. **`AlmeidaDistribuidor.buscar_por_codigo` / `DantasDistribuidora.buscar_por_codigo`** (~0.5 dia)
+   - `page.goto(f"/busca?s={codigo}")` retorna 1 produto exato
+   - Reusa parser `_parse_card_*` existente
+
+4. **Refator `buscar_precos_para_itens`** (~0.5 dia)
+   - Antes de chamar scraper, consulta matcher
+   - Se encontra código histórico, chama `buscar_por_codigo`
+   - Senão cai pra pipeline textual atual
+
+5. **Substituir `relevancia()` por híbrido** (~0.5 dia) — Camada 2
+   - 60% lógica atual (substring/prefix) + 40% `rapidfuzz.token_sort_ratio`
+
+6. **`pregoes/extrator_llm.julgar_candidatos`** (~1 dia) — Camada 3
+   - Dispara só quando Camadas 0+1+2 não acham relevância >= 0.6
+   - Manda top-N candidatos pro Gemini decidir
+   - Cache infinito por SHA256(desc + codigos)
+
+7. **Camada 4 — aprendizado** (~0.5 dia)
+   - Tabela `mapeamentos_aprendidos` (descricao_norm, produto_id,
+     fornecedor, codigo, marca, criado_em)
+   - UI: ao trocar seleção, grava feedback
+   - Próxima busca de descrição similar (fuzzy >= 95) reusa
+
+8. **Dashboard de variação** (~0.5 dia) — extra
+   - Nova tela: filtro por marca/período/fornecedor
+   - Gráfico de variação % de preço
+   - Top 20 produtos com maior aumento
 
 ### Fase 4 — Inteligência tributária via NF-e (futuro distante)
 

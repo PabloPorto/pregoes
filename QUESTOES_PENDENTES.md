@@ -4,6 +4,158 @@
 
 ## Bloco 1 — Defaults provisórios em uso (precisam confirmação para continuar fase 2 em diante)
 
+### Q12. Busca robusta de produtos: pipeline em 5 camadas (95%+ qualidade)
+
+**Contexto.** Em 2026-05-27 o operador relatou que o mesmo produto
+físico aparece em diferentes editais com nomes DIFERENTES, e o scraper
+atual erra muitos casos. Causa: matching textual é cego a variações
+naturais:
+
+- Abreviações: `"SOLD."` vs `"SOLDÁVEL"`
+- Sinônimos: `"CANO"` vs `"TUBO"` vs `"TUBULAÇÃO"`
+- Ordem das palavras: `"PVC ADAPTADOR"` vs `"ADAPTADOR PVC"`
+- Erros de digitação: `"PARAFUZO"` em vez de `"PARAFUSO"`
+- Dimensão variável: `"1.1/2"` vs `"1 1/2"` vs `"1½"` vs `"11/2"`
+
+O fix recente (commit `b18eeb2`) tolera prefix/substring, melhorou
+casos típicos como `"sold."` → `"soldavel"`, mas não resolve sinônimos
+nem semântica complexa.
+
+**Insumo CRÍTICO disponibilizado pelo operador (2026-05-27):**
+- O cliente **armazena código do produto** em suas planilhas de
+  precificação histórica.
+- Buscar `/busca?s={codigo}` no site Almeida ou Dantas retorna o
+  produto EXATO sem ambiguidade.
+- Isso **deve ser a PRIORIDADE 1** do pipeline — busca por código
+  histórico é determinística, rápida, livre de erro de matching textual.
+
+**Arquitetura proposta** — Pipeline em 5 camadas, do mais barato/preciso
+ao mais caro:
+
+```
+Item do edital (descrição + opcional valor de referência)
+   │
+   ▼
+[Camada 0: catálogo histórico]
+   │  Importador lê N planilhas antigas → produtos (desc canônica + codigo_almeida + codigo_dantas)
+   │  Matcher fuzzy (rapidfuzz token_sort_ratio >= 90) busca em `produtos`
+   │  Se match alto: extrai códigos → busca DIRETA por código no site
+   │  → retorna produto exato sem precisar disputar relevância textual
+   │
+   ├─ acertou? → entrega (variacao se score < 95, exato se >= 95)
+   │
+   ▼
+[Camada 1: match textual aprimorado] (já implementado)
+   │  Substring/prefix matching (commit b18eeb2)
+   │  Resolve abreviações triviais: "sold." ↔ "soldavel", "1.1/2" ↔ "50x1.1/2"
+   │
+   ├─ acertou com relevância >= 0.6? → entrega
+   │
+   ▼
+[Camada 2: rapidfuzz scoring]
+   │  token_sort_ratio entre descrição do edital e cada candidato
+   │  Threshold ~75 (ajustável)
+   │  Resolve: ordem das palavras, erros de digitação leves
+   │
+   ├─ acertou com score >= 75? → entrega
+   │
+   ▼
+[Camada 3: LLM judge (Gemini)]
+   │  Manda top-N candidatos pro Gemini com prompt:
+   │  "Item do edital: {X}. Estes candidatos correspondem? Devolva os IDs em
+   │  ordem de melhor match, ou [] se nenhum corresponde."
+   │  Cache por chave semântica (hash da descrição normalizada + cod candidatos)
+   │  Custo: ~$0.001/item ANTES do cache; $0 depois
+   │
+   ├─ Gemini retornou correspondências? → entrega como 'variacao'
+   │
+   ▼
+[Camada 4: aprendizado via operador]
+   │  Operador clica em "trocar marca" / "não é esse"
+   │  Sistema grava o "ground truth" (descricao_edital → produto_correto)
+   │  Próxima busca da mesma descrição (ou similar via fuzzy) usa essa marca
+```
+
+**Cobertura esperada:**
+- Camada 0 sozinha: ~70% dos itens em editais recorrentes (assumindo
+  catálogo bem populado, ≥1000 produtos históricos)
+- Camadas 0+1+2: ~85-90%
+- Camadas 0+1+2+3: ~95-98%
+- Camada 4 fecha o resto com o tempo
+
+**Plano de implementação** (4 etapas, ~3-4 dias totais):
+
+1. **Etapa 3.1 (1-2 dias) — Camada 0: catálogo + matcher + busca por código**
+   - `pregoes/importador.py`: CLI lê N planilhas antigas, popula
+     `produtos` (descricao_canonica, codigo_almeida, codigo_dantas, marca,
+     unidade_padrao, ncm)
+   - `pregoes/matcher.py`: `rapidfuzz.process.extractOne(descricao_edital,
+     produtos_choices, scorer=token_sort_ratio)`; threshold 90
+   - `AlmeidaDistribuidor.buscar_por_codigo(codigo)`: nova função, faz
+     `/busca?s={codigo}` e devolve produto exato
+   - `DantasDistribuidora.buscar_por_codigo(codigo)`: idem
+   - `buscar_precos_para_itens`: na primeira passada, tenta matcher;
+     se acha código, usa `buscar_por_codigo`; só cai pra texto se falhar
+
+2. **Etapa 3.2 (~0.5 dia) — Camada 2: rapidfuzz no scoring textual**
+   - Substituir `normalizador.relevancia()` por híbrido:
+     - 60%: score atual (substring/prefix)
+     - 40%: `fuzz.token_sort_ratio / 100`
+   - Threshold combinado mantém em 0.6
+   - Resolve ordem de palavras + erros de digitação leves
+
+3. **Etapa 3.3 (1 dia) — Camada 3: LLM judge sob demanda**
+   - Função em `pregoes/extrator_llm.py`:
+     `julgar_candidatos(desc_edital, candidatos: list[ResultadoBusca]) -> list[int]`
+     Retorna IDs dos candidatos que correspondem, em ordem de melhor match.
+   - Disparado APENAS quando Camadas 0+1+2 retornaram fallback "top 3
+     variação" (commit b18eeb2). Sinal: confiança < 0.6 em todos.
+   - Cache em SQLite com chave SHA256 de `(desc_normalizada, [codigos])`
+     → TTL infinito (semântica não muda)
+   - Custo real: ~$0.001/chamada × 30% dos itens = ~$0.15 por edital
+     de 500 itens. Free tier Gemini cobre.
+
+4. **Etapa 3.4 (~0.5 dia) — Camada 4: aprendizado por feedback**
+   - Quando operador troca seleção na UI, grava `mapeamento_aprendido`
+     (descricao_edital_normalizada, produto_id, fornecedor, codigo,
+     marca, data_aprendizado)
+   - Próxima busca de descrição similar (via matcher fuzzy >= 95)
+     reusa esse mapeamento direto
+   - Decai com o tempo se nenhum operador o reusar (sinal de produto
+     descontinuado)
+
+**Pré-requisitos para iniciar:**
+- ✅ Gemini integrado (Fase 2.7)
+- ✅ rapidfuzz já reservado no requirements.txt (`# rapidfuzz>=3.0.0`)
+- 🟡 Planilhas históricas do cliente (Q2) — bloqueia Etapa 3.1
+  parcialmente: dá pra estruturar o importador sem dados, mas só testa
+  end-to-end quando chegar
+- ⚠️ Endpoint Almeida/Dantas para busca por código — confirmado
+  empiricamente pelo operador que `/busca?s={codigo}` funciona
+
+**Trigger para começar:**
+- Cliente enviar pelo menos 1-2 planilhas históricas, OU
+- Operador sinalizar que a busca atual está derrubando muitos editais
+  na prática
+
+**Trade-offs aceitos pelo operador (2026-05-27):**
+- LLM externo (Gemini) já parte do pipeline (igual à extração)
+- Custo recorrente até $15/mês no volume máximo previsto
+- Latência adicional de ~2s/item na 1ª busca quando Camada 3 dispara
+- +1 dep (rapidfuzz, ~2MB, sem complicação no Windows)
+
+**Riscos / pontos de atenção:**
+- Catálogo histórico desatualizado: produtos podem ter sido
+  descontinuados; código não funciona. Tratar como erro recuperável:
+  cai pra Camada 1+ texto.
+- Múltiplos códigos para o mesmo produto (Almeida + Dantas diferentes):
+  schema já suporta (`codigo_almeida`, `codigo_dantas`).
+- LLM judge pode "alucinar" correspondência: SEMPRE validar com
+  match textual de pelo menos um token-chave para evitar.
+- Cache do LLM ficar enorme: TTL de N dias OU LRU 10k entradas.
+
+---
+
 ### Q11. Camada LLM (Gemini 2.0 Flash) — próxima grande frente de extração
 
 **Contexto.** Diagnóstico com 5 PDFs reais (2026-05-27) mostrou:
