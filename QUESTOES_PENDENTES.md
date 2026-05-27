@@ -4,6 +4,77 @@
 
 ## Bloco 1 — Defaults provisórios em uso (precisam confirmação para continuar fase 2 em diante)
 
+### Q11. Camada LLM (Gemini 2.0 Flash) — próxima grande frente de extração
+
+**Contexto.** Diagnóstico com 5 PDFs reais (2026-05-27) mostrou:
+- 2 dos 5 editais resolvem 100% automático
+- 1 resolve parcial (60%)
+- 2 dos 5 exigem mapeamento manual + uso do Docling (5-10min/edital)
+
+Etapa 1.0.D (reconstrução de fatias Docling) trouxe ganho marginal,
+mas ainda há **bugs estruturais** observados em uso real:
+- Encoding: Docling produz `'DOBRADI˙A'` em vez de `'DOBRADIÇA'` em
+  alguns PDFs.
+- Multi-página: extrator às vezes fragmenta a tabela em N peças;
+  operador mapeava só uma (corrigido em commit 907bbb3, mas é band-aid).
+- Falsos positivos: tabelas-lixo (contatos, rubricas, totais) ainda
+  contaminam alguns resultados.
+- Necessidade de mapeamento manual cresce linearmente com a variedade
+  de formatos de edital. **Com 5 amostras, 40% pedem intervenção. Com
+  20-50, isso provavelmente vira a regra, não exceção.** Quando o
+  trabalho humano por edital cresce, o sistema vira fardo em vez de
+  ferramenta.
+
+**Conclusão do operador (2026-05-27)**: a inviabilização do sistema
+em volume real é **dor previsível, não hipotética**.
+
+**Default em uso.** Sistema sem LLM. Sistema atual está commitado e
+estável; LLM fica como próxima frente prioritária.
+
+**Plano de implementação (ativar logo após Fase 3 ou conforme dor):**
+
+Provedor: **Gemini 2.0 Flash** (Google).
+- Free tier cobre folgadamente o volume alvo (10-30 editais/mês usa
+  <1% do limite diário gratuito de 1500 req/dia).
+- Vision multimodal nativo, estado da arte em tabelas estruturadas.
+- API estável (GA desde fev/2025).
+- Cliente cria chave gratuita em [aistudio.google.com](https://aistudio.google.com).
+
+Implementação (estimativa 1.5-2 dias):
+- `pregoes/extrator_llm.py` (~250 linhas): chamada por página com
+  prompt estruturado + parsing JSON validado.
+- `pregoes/credenciais.py`: slot para `gemini_api_key`.
+- UI: aba "IA" em Configurações + opção na revisão.
+- Cache: reusa infra de cache existente (TTL=2d por descrição).
+- Posicionamento no pipeline: **Camada 2 automática** quando pdfplumber
+  ficar < 95%. Substitui ou complementa Docling.
+- Fallback se Gemini falhar (sem internet, rate limit, key inválida):
+  cai para Docling/manual.
+
+Ganhos esperados:
+- Encoding correto (modelo lê visual, não depende de fonte do PDF).
+- Multi-página resolvida (modelo entende contexto).
+- ~98-99% acurácia em tabelas BR (testado em casos similares).
+- ~30-90s/edital vs ~5-10min do Docling.
+- Setup mais leve para o cliente.
+
+Trade-offs aceitos pelo operador:
+- Dependência de internet para Camada 2 (Camada 1 continua offline).
+- Dados do edital vão para servidor externo do Google — aceitável
+  porque editais são públicos por definição.
+- Flexibiliza CLAUDE.md §9 ("Não adicione LLM externo") — confirmado
+  pelo operador como decisão revisável quando há ganho real.
+
+**Trigger para implementar.** Acende quando UM acontecer:
+- Operador reportar fadiga com mapeamento manual após 10+ editais.
+- 3+ formatos novos quebrando heurística em sequência.
+- Cliente perguntar "por que demora tanto" / "tem como ser mais
+  preciso".
+- Fase 3 (importador + matcher) concluída — abre janela natural
+  para reorganizar pipeline.
+
+---
+
 ### Q10. Etapa 1.0.B (PyMuPDF + Camelot) — adiar até benchmark do Docling
 
 **Contexto.** Em 2026-05-27, na proposta de 3 etapas para robustez de
