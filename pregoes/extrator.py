@@ -510,29 +510,91 @@ def extrair_pdf(caminho_pdf: str | Path) -> ResultadoExtracao:
 _CONFIANCA_SUFICIENTE = 0.95
 
 
-def extrair_com_pipeline(caminho_pdf: str | Path) -> ResultadoExtracao:
-    """Extração rápida automática (pdfplumber + score semântico).
+def extrair_com_pipeline(
+    caminho_pdf: str | Path,
+    *,
+    callback_progresso_llm=None,
+) -> ResultadoExtracao:
+    """Pipeline em camadas com fallback automático.
 
-    Devolve resultado imediato. Quando a confiança é baixa, a UI oferece
-    duas saídas para o operador:
-    - Mapeamento manual com tabelas detectadas por pdfplumber (rápido)
-    - Mapeamento manual com tabelas detectadas por Docling (mais
-      precisa em PDFs complexos, mas demora 5-10min por edital)
+    Ordem:
+    1. **pdfplumber** + score semântico (rápido, offline, sem custo).
+       Se conf ≥ 95% → entrega; senão segue.
+    2. **Gemini 2.0 Flash** (LLM) — automático quando Camada 1 falha
+       E o operador configurou API key. Resolve encoding, multi-página
+       e falsos positivos. Free tier do Google cobre o volume alvo.
+       Se conf ≥ 95% → entrega; senão devolve o melhor dos dois.
+    3. **Mapeamento manual** (UI) — quando 1 e 2 falham, operador
+       escolhe tabela e mapeia colunas. Sistema aprende para próximos
+       editais.
 
-    Por que Docling não roda automático: benchmark em 2026-05-27 mostrou
-    que Docling demora ~6-8s por página em CPU e fragmenta tabelas
-    multi-página de jeito que o nosso pipeline não reconstrói direito.
-    Em vez de pagar esse custo silenciosamente, deixamos ao operador
-    decidir se quer pagar (via tela de mapeamento manual).
+    Args:
+        caminho_pdf: PDF a processar.
+        callback_progresso_llm: opcional, callback de progresso da Camada 2
+            (Gemini). Útil para UI mostrar barra de progresso já que LLM
+            demora 30-90s. Assinatura: `cb(pag_atual, total_pag, msg)`.
+
+    Por que Docling não é mais Camada 2 automática:
+    - Era lento (5-10min/edital, vs 30-90s do Gemini)
+    - Fragmentava tabelas multi-página
+    - Tinha problemas de encoding
+    - Continua disponível SOB DEMANDA na tela de mapeamento manual.
     """
     res = extrair_pdf(caminho_pdf)
     if res.confianca_global >= _CONFIANCA_SUFICIENTE:
         res.avisos.insert(0, "Extração rápida (pdfplumber): confiança suficiente.")
-    else:
+        return res
+
+    # Camada 1 < 95%. Tenta Gemini se disponível.
+    try:
+        from . import extrator_llm
+        if not extrator_llm.disponivel():
+            res.avisos.insert(
+                0,
+                "Camada rápida (pdfplumber) abaixo de 95%. "
+                "Configure a IA (Gemini) em Configurações para extração automática "
+                "mais precisa, ou use o Mapeamento Manual."
+            )
+            return res
+    except ImportError:
+        res.avisos.insert(0, "Camada rápida (pdfplumber) abaixo de 95% — "
+                             "use Mapeamento Manual.")
+        return res
+
+    # Roda Gemini
+    try:
+        res_llm = extrator_llm.extrair_via_gemini(
+            caminho_pdf,
+            callback_progresso=callback_progresso_llm,
+        )
+    except Exception as exc:
         res.avisos.insert(
             0,
-            "Camada rápida (pdfplumber) abaixo de 95%. "
-            "Você pode usar o Mapeamento Manual — opcionalmente com "
-            "as tabelas detectadas por Docling (mais preciso, demora alguns minutos)."
+            f"Camada IA falhou tecnicamente ({type(exc).__name__}: {exc}). "
+            "Caindo de volta para Mapeamento Manual."
         )
+        return res
+
+    # Escolhe o melhor resultado entre Camada 1 e Camada 2
+    if res_llm.total_itens >= res.total_itens and (
+        res_llm.confianca_global > res.confianca_global
+        or res_llm.total_itens > res.total_itens * 1.2
+    ):
+        # Preserva tabelas brutas do pdfplumber para a UI mostrar no
+        # mapeamento manual caso operador queira ajustar
+        res_llm.tabelas_brutas = res.tabelas_brutas
+        res_llm.avisos.insert(
+            0,
+            f"Camada IA (Gemini) escolhida: {res_llm.total_itens} itens, "
+            f"confiança {res_llm.confianca_global:.0%} (pdfplumber: "
+            f"{res.total_itens} itens, {res.confianca_global:.0%})."
+        )
+        return res_llm
+
+    res.avisos.insert(
+        0,
+        f"Camada pdfplumber mantida ({res.total_itens} itens, "
+        f"{res.confianca_global:.0%}); Gemini não trouxe melhoria significativa "
+        f"({res_llm.total_itens} itens, {res_llm.confianca_global:.0%})."
+    )
     return res

@@ -88,11 +88,14 @@ def _renderizar_sidebar():
         st.markdown("###### Status", unsafe_allow_html=True)
         cred_almeida = credenciais.carregar("almeida")
         cred_dantas = credenciais.carregar("dantas")
+        cred_gemini = credenciais.carregar_chave_api("gemini")
         almeida_status = ("Configurada", "success") if cred_almeida else ("Pendente", "warning")
         dantas_status = ("Configurada", "success") if cred_dantas else ("Pendente", "warning")
+        gemini_status = ("Configurada", "success") if cred_gemini else ("Opcional", "neutro")
         style.sidebar_status([
             ("Almeida", almeida_status[0], almeida_status[1]),
             ("Dantas", dantas_status[0], dantas_status[1]),
+            ("IA (Gemini)", gemini_status[0], gemini_status[1]),
         ])
 
         st.caption(
@@ -461,7 +464,7 @@ def tela_configuracoes():
         "(arquivo <code>data/credenciais.json</code>), sem envio para servidores externos.",
     )
 
-    aba_almeida, aba_dantas = st.tabs(["Almeida", "Dantas"])
+    aba_almeida, aba_dantas, aba_ia = st.tabs(["Almeida", "Dantas", "IA (Gemini)"])
 
     with aba_almeida:
         atual = credenciais.carregar("almeida") or {"email": "", "senha": ""}
@@ -528,6 +531,86 @@ def tela_configuracoes():
                     style.bloco_aviso(
                         "Credenciais da Dantas salvas com sucesso.", tipo="success",
                     )
+
+    with aba_ia:
+        gemini_key = credenciais.carregar_chave_api("gemini") or ""
+        if gemini_key:
+            style.bloco_aviso(
+                f"Chave configurada: <code>{gemini_key[:8]}…{gemini_key[-4:]}</code>. "
+                "A IA roda automaticamente quando a extração rápida ficar abaixo "
+                "de 95%.",
+                tipo="success",
+            )
+        else:
+            style.bloco_aviso(
+                "Sem chave configurada. A IA fica desligada — o sistema usa "
+                "só extração rápida + mapeamento manual.",
+                tipo="warning",
+            )
+
+        st.markdown(
+            "**Como obter a chave gratuita (5min):**\n"
+            "1. Acesse https://aistudio.google.com\n"
+            "2. Faça login com sua conta Google\n"
+            "3. Clique em **Get API key** → **Create API key**\n"
+            "4. Copie a chave e cole abaixo\n\n"
+            "**Custo:** *Gratuito* dentro do free tier do Google "
+            "(1500 requisições/dia — folga ampla para 10–30 editais/mês)."
+        )
+
+        with st.form("form_gemini"):
+            chave_input = st.text_input(
+                "Chave de API (Gemini)",
+                value=gemini_key,
+                type="password",
+                help="Começa com 'AIza...'. Salva apenas no seu computador.",
+            )
+            col_a, col_b = st.columns(2)
+            with col_a:
+                salvar_g = st.form_submit_button("Salvar chave", type="primary")
+            with col_b:
+                testar_g = st.form_submit_button("Salvar e testar")
+
+            if salvar_g or testar_g:
+                if not chave_input.strip():
+                    style.bloco_aviso("Cole a chave antes de salvar.", tipo="danger")
+                elif not chave_input.startswith("AIza"):
+                    style.bloco_aviso(
+                        "Chave parece inválida (esperado começar com <code>AIza</code>). "
+                        "Salva mesmo assim, mas verifique.",
+                        tipo="warning",
+                    )
+                    credenciais.salvar_chave_api("gemini", chave_input.strip())
+                else:
+                    credenciais.salvar_chave_api("gemini", chave_input.strip())
+                    style.bloco_aviso(
+                        "Chave Gemini salva com sucesso.", tipo="success",
+                    )
+
+                if testar_g and chave_input.strip():
+                    with st.spinner("Testando chave…"):
+                        try:
+                            from google import genai
+                            client = genai.Client(api_key=chave_input.strip())
+                            resp = client.models.generate_content(
+                                model="gemini-2.0-flash",
+                                contents="Responda apenas 'OK'.",
+                            )
+                            if resp.text and "OK" in resp.text.upper():
+                                style.bloco_aviso(
+                                    "Conexão com Gemini funcionando.",
+                                    tipo="success",
+                                )
+                            else:
+                                style.bloco_aviso(
+                                    f"Resposta inesperada: {resp.text[:80] if resp.text else '(vazio)'}",
+                                    tipo="warning",
+                                )
+                        except Exception as exc:
+                            style.bloco_aviso(
+                                f"Falha ao chamar Gemini: {type(exc).__name__}: {exc}",
+                                tipo="danger",
+                            )
 
 
 # === Tela: BUSCA DE PREÇOS ===

@@ -24,12 +24,16 @@ pytest>=8.0.0
 playwright>=1.40.0
 
 # Extração robusta de PDF — camada visual (Docling IBM, TableFormer + DocLayNet).
-# Necessário para editais com layout complexo onde pdfplumber sozinho falha.
-# Pesada (~1.5GB com PyTorch CPU). Instalação no Windows pelo setup.bat já
-# inclui o --extra-index-url do PyTorch CPU.
-# A primeira execução do app baixa ~500MB de modelos para
-# C:/Users/<u>/.cache/docling (depois funciona offline).
+# Mantido como opção sob demanda na tela de Mapeamento Manual. Para extração
+# automática quando pdfplumber falha, a Camada 2 padrão agora é Gemini (LLM).
+# Pesada (~1.5GB com PyTorch CPU). Pode ser removida se for confirmado que
+# 100% dos editais reais resolvem com pdfplumber + Gemini.
 docling>=2.0.0
+
+# Camada de extração via LLM (Gemini 2.0 Flash) — Camada 2 automática.
+# Free tier do Google cobre folgadamente o volume alvo (1500 req/dia).
+# Decisão Q11 em QUESTOES_PENDENTES.md.
+google-genai>=1.0.0
 
 # === Reservado para fase 3 ===
 # rapidfuzz>=3.0.0   # fuzzy matching de descrições (matcher)
