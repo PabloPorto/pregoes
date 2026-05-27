@@ -372,7 +372,7 @@ def tela_revisao():
     with col_btn2:
         if st.button("Gerar sem buscar", use_container_width=True,
                      help="Gera a planilha matriz com colunas L/T/U vazias (preço, código, marca em branco)."):
-            _gerar_excel(edited, markup=markup, selecoes={})
+            _gerar_excel(_df_para_itens(edited), markup=markup, selecoes={})
 
 
 def _df_para_itens(df: pd.DataFrame) -> list:
@@ -391,13 +391,19 @@ def _df_para_itens(df: pd.DataFrame) -> list:
     ]
 
 
-def _gerar_excel(df: pd.DataFrame, markup: float, selecoes: dict):
-    """Converte DataFrame editado de volta para ItemExtraido e exporta.
+def _gerar_excel(itens: list, markup: float, selecoes: dict):
+    """Exporta uma lista de ItemExtraido para a planilha matriz.
 
     `selecoes` é o mapa {indice_item: SelecaoFornecedor} já preparado pela
     tela de busca. Vazio = planilha sem preço (operador preenche manualmente).
+
+    Aceita lista de ItemExtraido (não DataFrame). O caller é responsável
+    por converter `edited` do data_editor via `_df_para_itens(edited)`.
+    Isso evita inconsistência entre o estado do widget e `df_editavel`
+    que existia antes (bug visto na busca de preços: operador marca 5
+    itens, busca preços, mas planilha não exportava porque pegava
+    snapshot antiga do df).
     """
-    itens = _df_para_itens(df)
     if not itens:
         style.bloco_aviso("Nenhum item marcado como OK — nada para exportar.", tipo="danger")
         return
@@ -941,9 +947,13 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
 
     if st.button("Gerar planilha matriz com preços", type="primary",
                  use_container_width=True):
-        df = st.session_state.df_editavel
+        # Usa itens_revisados (populado em tela_revisao a partir do
+        # estado ATUAL do data_editor, via `edited`). df_editavel não
+        # serve aqui porque é só snapshot inicial — não reflete as
+        # marcações do operador feitas em tempo real no widget.
+        itens = st.session_state.get("itens_revisados") or []
         markup = st.session_state.get("markup", config.MARKUP_DEFAULT)
-        _gerar_excel(df, markup=markup, selecoes=st.session_state.selecoes)
+        _gerar_excel(itens, markup=markup, selecoes=st.session_state.selecoes)
 
 
 # === Tela: MAPEAMENTO MANUAL ===
