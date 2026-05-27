@@ -575,26 +575,34 @@ def extrair_com_pipeline(
         )
         return res
 
-    # Escolhe o melhor resultado entre Camada 1 e Camada 2
-    if res_llm.total_itens >= res.total_itens and (
-        res_llm.confianca_global > res.confianca_global
-        or res_llm.total_itens > res.total_itens * 1.2
-    ):
+    # Escolhe o melhor resultado entre Camada 1 e Camada 2.
+    #
+    # Princípio: confiança vale mais que quantidade. pdfplumber tende a
+    # inflar a contagem capturando linhas-fragmento (continuação visual)
+    # como itens duvidosos; Gemini distingue itens reais e devolve menos
+    # itens mas todos limpos. Em PDFs reais, "23 itens a 100%" é melhor
+    # que "85 itens a 60%" para colocar na planilha do cliente.
+    if res_llm.total_itens > 0 and res_llm.confianca_global >= res.confianca_global:
         # Preserva tabelas brutas do pdfplumber para a UI mostrar no
         # mapeamento manual caso operador queira ajustar
         res_llm.tabelas_brutas = res.tabelas_brutas
         res_llm.avisos.insert(
             0,
-            f"Camada IA (Gemini) escolhida: {res_llm.total_itens} itens, "
-            f"confiança {res_llm.confianca_global:.0%} (pdfplumber: "
-            f"{res.total_itens} itens, {res.confianca_global:.0%})."
+            f"Camada IA (Gemini) escolhida: {res_llm.total_itens} itens a "
+            f"{res_llm.confianca_global:.0%} confiança "
+            f"(pdfplumber tinha {res.total_itens} itens a "
+            f"{res.confianca_global:.0%}, mais quantidade mas menos limpos)."
         )
         return res_llm
 
+    # Gemini falhou (0 itens) OU pdfplumber tem confiança maior — mantém
+    # pdfplumber. O 2º caso é raro mas pode acontecer se Gemini retornar
+    # JSON parcial; nesse caso pdfplumber é o melhor disponível.
     res.avisos.insert(
         0,
         f"Camada pdfplumber mantida ({res.total_itens} itens, "
-        f"{res.confianca_global:.0%}); Gemini não trouxe melhoria significativa "
-        f"({res_llm.total_itens} itens, {res_llm.confianca_global:.0%})."
+        f"{res.confianca_global:.0%}); Gemini retornou "
+        f"{res_llm.total_itens} itens a {res_llm.confianca_global:.0%} "
+        f"— confiança não foi maior."
     )
     return res
