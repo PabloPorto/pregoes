@@ -98,10 +98,6 @@ def _renderizar_sidebar():
             ("IA (Gemini)", gemini_status[0], gemini_status[1]),
         ])
 
-        st.caption(
-            f"\n\nv. MVP · porta {config.PORTA_UI}\n\nDados locais em "
-            f"`data/pregoes.db`"
-        )
 
 
 # === Tela: HOME ===
@@ -284,8 +280,11 @@ def tela_revisao():
             "Valor referência": item.valor_referencia,
         } for item in res.itens])
 
-    # Botões de marcação em massa. Mudar a key do data_editor força o
-    # Streamlit a redesenhar a tabela com os novos valores de OK?.
+    # Botões de marcação em massa: incrementam `editor_version` para
+    # forçar Streamlit a recriar o data_editor com novos valores de OK?.
+    # Sem essa key dinâmica, o widget cacheia o estado anterior e os
+    # cliques individuais ficavam inconsistentes (bug reportado pelo
+    # operador, 2026-05-27).
     if "editor_version" not in st.session_state:
         st.session_state.editor_version = 0
 
@@ -304,11 +303,13 @@ def tela_revisao():
         n_marcados = int(st.session_state.df_editavel["OK"].sum())
         st.caption(f"**{n_marcados}** de **{len(st.session_state.df_editavel)}** itens marcados.")
 
+    # `num_rows="fixed"` (default) em vez de "dynamic": evita que o
+    # data_editor crie linhas vazias quando o usuário clica em uma área
+    # vazia — comportamento que confundia o checkbox individual.
     edited = st.data_editor(
         st.session_state.df_editavel,
         use_container_width=True,
         height=500,
-        num_rows="dynamic",
         column_config={
             "OK": st.column_config.CheckboxColumn("OK?", default=True),
             "Item": st.column_config.NumberColumn("Item", format="%d"),
@@ -323,26 +324,28 @@ def tela_revisao():
     st.session_state.df_editavel = edited
 
     st.divider()
-    col1, col2, col3 = st.columns([2, 1, 1])
-    with col1:
-        markup = st.number_input(
-            "Markup deste pregão",
-            min_value=1.00,
-            max_value=3.00,
-            value=float(config.MARKUP_DEFAULT),
-            step=0.05,
-            help=(
-                "Multiplicador sobre o custo de aquisição. "
-                f"Padrão {config.MARKUP_DEFAULT}; reduza para 1.30 em "
-                "pregões com concorrência apertada."
-            ),
-        )
 
-    # Salva estado para a tela seguinte usar
+    # Markup em linha própria — antes ficava espremido na mesma linha
+    # dos botões e o componente "- + 1,45" ficava maior que os botões,
+    # quebrando o alinhamento (reportado pelo operador, 2026-05-27).
+    markup = st.number_input(
+        "Markup deste pregão",
+        min_value=1.00,
+        max_value=3.00,
+        value=float(config.MARKUP_DEFAULT),
+        step=0.05,
+        help=(
+            "Multiplicador sobre o custo de aquisição. "
+            f"Padrão {config.MARKUP_DEFAULT}; reduza para 1.30 em "
+            "pregões com concorrência apertada."
+        ),
+    )
     st.session_state.markup = markup
     st.session_state.itens_revisados = _df_para_itens(edited)
 
-    with col2:
+    # Botões em linha própria, com proporções iguais.
+    col_btn1, col_btn2 = st.columns(2)
+    with col_btn1:
         if st.button("Buscar preços", type="primary", use_container_width=True,
                      help="Consulta Almeida e Dantas (qualquer um configurado). Pode demorar minutos."):
             if not st.session_state.itens_revisados:
@@ -357,7 +360,7 @@ def tela_revisao():
             else:
                 ir_para("busca_precos")
 
-    with col3:
+    with col_btn2:
         if st.button("Gerar sem buscar", use_container_width=True,
                      help="Gera a planilha matriz com colunas L/T/U vazias (preço, código, marca em branco)."):
             _gerar_excel(edited, markup=markup, selecoes={})

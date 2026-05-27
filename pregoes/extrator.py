@@ -567,42 +567,25 @@ def extrair_com_pipeline(
             caminho_pdf,
             callback_progresso=callback_progresso_llm,
         )
-    except Exception as exc:
-        res.avisos.insert(
-            0,
-            f"Camada IA falhou tecnicamente ({type(exc).__name__}: {exc}). "
-            "Caindo de volta para Mapeamento Manual."
-        )
+    except Exception:
+        # Operador não precisa saber do stack trace; o aviso vermelho
+        # da Camada 1 já indica que vai pra mapeamento manual.
         return res
 
     # Escolhe o melhor resultado entre Camada 1 e Camada 2.
-    #
     # Princípio: confiança vale mais que quantidade. pdfplumber tende a
-    # inflar a contagem capturando linhas-fragmento (continuação visual)
-    # como itens duvidosos; Gemini distingue itens reais e devolve menos
-    # itens mas todos limpos. Em PDFs reais, "23 itens a 100%" é melhor
-    # que "85 itens a 60%" para colocar na planilha do cliente.
+    # inflar a contagem capturando linhas-fragmento como itens duvidosos;
+    # a IA distingue itens reais e devolve menos itens mas todos limpos.
     if res_llm.total_itens > 0 and res_llm.confianca_global >= res.confianca_global:
         # Preserva tabelas brutas do pdfplumber para a UI mostrar no
         # mapeamento manual caso operador queira ajustar
         res_llm.tabelas_brutas = res.tabelas_brutas
-        res_llm.avisos.insert(
-            0,
-            f"Camada IA (Gemini) escolhida: {res_llm.total_itens} itens a "
-            f"{res_llm.confianca_global:.0%} confiança "
-            f"(pdfplumber tinha {res.total_itens} itens a "
-            f"{res.confianca_global:.0%}, mais quantidade mas menos limpos)."
-        )
+        # Avisos técnicos do extrator_llm são removidos — UI já mostra
+        # o banner de confiança alta no topo, é suficiente.
+        res_llm.avisos = []
         return res_llm
 
-    # Gemini falhou (0 itens) OU pdfplumber tem confiança maior — mantém
-    # pdfplumber. O 2º caso é raro mas pode acontecer se Gemini retornar
-    # JSON parcial; nesse caso pdfplumber é o melhor disponível.
-    res.avisos.insert(
-        0,
-        f"Camada pdfplumber mantida ({res.total_itens} itens, "
-        f"{res.confianca_global:.0%}); Gemini retornou "
-        f"{res_llm.total_itens} itens a {res_llm.confianca_global:.0%} "
-        f"— confiança não foi maior."
-    )
+    # Mantém pdfplumber sem aviso adicional — o aviso vermelho de baixa
+    # confiança da Camada 1 (que já está no resultado) é o sinal certo
+    # para o operador entrar no mapeamento manual.
     return res
