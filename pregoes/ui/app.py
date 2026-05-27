@@ -54,7 +54,8 @@ def tela_home():
     with col1:
         if st.button("➕ Novo pregão", type="primary", use_container_width=True):
             for k in ("extracao", "df_editavel", "resultados_busca",
-                      "selecoes", "pagina_busca", "itens_revisados"):
+                      "selecoes", "pagina_busca", "itens_revisados",
+                      "usando_tabelas_docling", "mapeamento_tabela_idx"):
                 st.session_state.pop(k, None)
             ir_para("upload")
     with col2:
@@ -147,6 +148,8 @@ def tela_upload():
         # DataFrame em cache da extração anterior e o usuário vê itens
         # desatualizados na revisão (o data_editor não repopula sozinho).
         st.session_state.df_editavel = None
+        st.session_state.pop("usando_tabelas_docling", None)
+        st.session_state.pop("mapeamento_tabela_idx", None)
         st.session_state.orgao = orgao
         st.session_state.numero = numero
         st.session_state.pdf_path = str(tmp_path)
@@ -619,6 +622,34 @@ def tela_mapeamento():
         "Passo 2: indique o que é cada coluna. O sistema aprende e usa esse "
         "mapeamento automaticamente em próximos editais com o mesmo formato."
     )
+
+    # === Opcional: recarregar tabelas com Docling (mais preciso, mais lento) ===
+    from pregoes import extrator_docling
+    if extrator_docling.disponivel() and not st.session_state.get("usando_tabelas_docling"):
+        with st.expander("🔬 Não encontrou a tabela certa? Carregar com extração profunda (Docling)"):
+            st.caption(
+                "Docling usa modelo de visão para detectar tabelas que o "
+                "pdfplumber não viu. Funciona melhor em PDFs com layout "
+                "complexo, mas demora **5-10 minutos** por edital. Use só "
+                "quando a tabela certa não está na lista abaixo."
+            )
+            pdf_path = st.session_state.get("pdf_path")
+            if pdf_path and st.button("▶️ Carregar tabelas com Docling"):
+                with st.spinner("Rodando Docling… pode demorar alguns minutos."):
+                    try:
+                        tabs = extrator_docling.coletar_tabelas_brutas_docling(pdf_path)
+                    except Exception as exc:
+                        st.error(f"Docling falhou: {exc}")
+                        return
+                # Substitui as tabelas brutas — operador escolhe entre as do Docling
+                res.tabelas_brutas = tabs
+                st.session_state.extracao = res
+                st.session_state.usando_tabelas_docling = True
+                st.session_state.pop("mapeamento_tabela_idx", None)
+                st.success(f"Docling detectou {len(tabs)} tabelas. Escolha abaixo.")
+                st.rerun()
+    elif st.session_state.get("usando_tabelas_docling"):
+        st.info("Mostrando tabelas detectadas pelo Docling (extração profunda).")
 
     # === Passo 1 ===
     st.subheader("Passo 1 — Qual das tabelas é a de itens?")

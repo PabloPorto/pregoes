@@ -4,6 +4,30 @@
 
 ## Bloco 1 — Defaults provisórios em uso (precisam confirmação para continuar fase 2 em diante)
 
+### Q10. Etapa 1.0.B (PyMuPDF + Camelot) — adiar até benchmark do Docling
+
+**Contexto.** Em 2026-05-27, na proposta de 3 etapas para robustez de
+extração (1.0.A score semântico, 1.0.B PyMuPDF+Camelot, 1.0.C Docling +
+mapeamento manual), o usuário optou por pular a 1.0.B e ir direto para
+1.0.C. A 1.0.A e 1.0.C foram entregues.
+
+**Default em uso.** Pipeline atual tem 3 camadas:
+pdfplumber (Camada 1) → Docling visual (Camada 2) → mapeamento manual
+com aprendizado (Camada 3). PyMuPDF e Camelot **não** estão integrados.
+
+**Próximo passo necessário.** Após o diagnóstico final dos 5 PDFs reais
+com Docling ativo, decidir:
+- Se Docling resolve com latência aceitável (< 30s/edital típico) →
+  Etapa 1.0.B fica permanentemente fora do escopo. Princípio "não
+  inventar abstração antes da dor real".
+- Se Docling for lento demais ou deixar buracos → adicionar PyMuPDF
+  e Camelot stream como Camada 1.5 (entre pdfplumber e Docling).
+
+**Não bloqueia.** Sistema atual já funciona em 3 dos 5 PDFs de teste;
+mapeamento manual cobre os 2 restantes com aprendizado para reuso.
+
+---
+
 ### Q2. Bootstrap do catálogo histórico (5.000 produtos mencionados)
 
 **Contexto.** O cliente declarou base mental de ~5.000 produtos acumulados em pregões anteriores.

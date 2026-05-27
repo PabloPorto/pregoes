@@ -37,34 +37,46 @@ def _obter_converter():
     return _converter
 
 
-def extrair_via_docling(caminho_pdf: str | Path) -> ResultadoExtracao:
-    """Coleta tabelas via Docling e processa com o mesmo pipeline de score
-    semântico da camada principal.
+def coletar_tabelas_brutas_docling(caminho_pdf: str | Path) -> list[list[list[str]]]:
+    """Coleta TODAS as tabelas que Docling detecta no PDF, sem aplicar
+    pipeline de score nem heurísticas.
 
-    Lança `ImportError` se Docling não estiver instalado — quem chama deve
-    capturar (já feito em `extrair_com_pipeline`).
+    Devolve `list[list[list[str]]]` — formato compatível com
+    `ResultadoExtracao.tabelas_brutas`. Cada tabela vem como:
+    `[cabeçalho_linha, linha_dados_1, linha_dados_2, ...]`.
+
+    Usado pela tela de Mapeamento Manual quando o operador clica em
+    "Carregar tabelas com Docling" — Docling encontra MAIS tabelas
+    (modelo visual) mas fragmenta as multi-página; o operador escolhe
+    qual fatia é a relevante e mapeia colunas manualmente.
     """
     caminho_pdf = Path(caminho_pdf)
     converter = _obter_converter()
     conv_res = converter.convert(str(caminho_pdf))
 
-    tabelas_brutas: list[_TabelaBruta] = []
+    out: list[list[list[str]]] = []
     for table in conv_res.document.tables:
         df = table.export_to_dataframe(doc=conv_res.document)
-        # Linha 0 do nosso modelo = cabeçalho. DataFrame tem cabeçalho nos
-        # nomes das colunas → reconstruímos como primeira linha.
         cabecalho = [str(c) for c in df.columns]
-        linhas_dados = [
-            [_celula_str(v) for v in row]
-            for row in df.values.tolist()
-        ]
-        linhas = [cabecalho] + linhas_dados
+        linhas_dados = [[_celula_str(v) for v in row] for row in df.values.tolist()]
+        out.append([cabecalho] + linhas_dados)
+    return out
 
-        # Página: Docling não expõe número de página por tabela na API
-        # estável. Para nosso pipeline o número exato não é crítico —
-        # usamos só para metadado de debug. Marcamos como 0 (desconhecido).
-        tabelas_brutas.append(_TabelaBruta(pagina=0, indice_pagina=0, linhas=linhas))
 
+def extrair_via_docling(caminho_pdf: str | Path) -> ResultadoExtracao:
+    """Aplica pipeline automático de score em tabelas Docling.
+
+    Mantido para uso em diagnóstico/script; o caminho usual da UI é
+    `coletar_tabelas_brutas_docling` → mapeamento manual.
+
+    Lança `ImportError` se Docling não estiver instalado.
+    """
+    caminho_pdf = Path(caminho_pdf)
+    tabelas_listas = coletar_tabelas_brutas_docling(caminho_pdf)
+    tabelas_brutas = [
+        _TabelaBruta(pagina=0, indice_pagina=ix, linhas=linhas)
+        for ix, linhas in enumerate(tabelas_listas)
+    ]
     return processar_tabelas_brutas(tabelas_brutas, arquivo=str(caminho_pdf))
 
 

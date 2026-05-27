@@ -119,13 +119,23 @@ class ResultadoExtracao:
 
 # === Funções utilitárias ===
 
+_WHITESPACE_RE = re.compile(r"\s+")
+
+
 def _normaliza(texto) -> str:
-    """Caixa baixa e remove acentos para comparar cabeçalhos."""
+    """Caixa baixa, remove acentos e colapsa espaços múltiplos.
+
+    Colapsar espaços é crítico: tabelas extraídas com modelos visuais
+    (Docling) frequentemente devolvem `'Preço  Unitário  Máximo'` com
+    espaços duplos ou triplos entre palavras — sem colapsar, o teste
+    `'preço unitário máximo' in texto_normalizado` falha.
+    """
     if not texto:
         return ""
     s = unicodedata.normalize("NFD", str(texto))
     s = "".join(c for c in s if unicodedata.category(c) != "Mn")
-    return s.lower().strip()
+    s = s.lower().strip()
+    return _WHITESPACE_RE.sub(" ", s)
 
 
 def _para_numero(valor) -> Optional[float]:
@@ -501,46 +511,28 @@ _CONFIANCA_SUFICIENTE = 0.95
 
 
 def extrair_com_pipeline(caminho_pdf: str | Path) -> ResultadoExtracao:
-    """Extração em múltiplas camadas com fallback automático.
+    """Extração rápida automática (pdfplumber + score semântico).
 
-    Ordem:
-    1. pdfplumber + score semântico (rápido)
-    2. Docling visual (TableFormer, ~3-10s/página) — se disponível e
-       camada 1 < 95% de confiança
+    Devolve resultado imediato. Quando a confiança é baixa, a UI oferece
+    duas saídas para o operador:
+    - Mapeamento manual com tabelas detectadas por pdfplumber (rápido)
+    - Mapeamento manual com tabelas detectadas por Docling (mais
+      precisa em PDFs complexos, mas demora 5-10min por edital)
 
-    Sempre devolve o melhor resultado disponível. A camada usada vira o
-    primeiro aviso em `resultado.avisos` para a UI mostrar.
+    Por que Docling não roda automático: benchmark em 2026-05-27 mostrou
+    que Docling demora ~6-8s por página em CPU e fragmenta tabelas
+    multi-página de jeito que o nosso pipeline não reconstrói direito.
+    Em vez de pagar esse custo silenciosamente, deixamos ao operador
+    decidir se quer pagar (via tela de mapeamento manual).
     """
-    res1 = extrair_pdf(caminho_pdf)
-    if res1.confianca_global >= _CONFIANCA_SUFICIENTE:
-        res1.avisos.insert(0, "Extração rápida (pdfplumber): confiança suficiente.")
-        return res1
-
-    # Tenta camada Docling. Import local porque a dep é pesada (~1.5GB)
-    # e pode não estar instalada em ambientes leves.
-    try:
-        from .extrator_docling import extrair_via_docling
-    except ImportError:
-        res1.avisos.insert(
+    res = extrair_pdf(caminho_pdf)
+    if res.confianca_global >= _CONFIANCA_SUFICIENTE:
+        res.avisos.insert(0, "Extração rápida (pdfplumber): confiança suficiente.")
+    else:
+        res.avisos.insert(
             0,
-            "Camada Docling não disponível neste ambiente — "
-            "para PDFs complexos, instale `pip install docling`."
+            "Camada rápida (pdfplumber) abaixo de 95%. "
+            "Você pode usar o Mapeamento Manual — opcionalmente com "
+            "as tabelas detectadas por Docling (mais preciso, demora alguns minutos)."
         )
-        return res1
-
-    try:
-        res2 = extrair_via_docling(caminho_pdf)
-    except Exception as exc:
-        res1.avisos.insert(0, f"Camada Docling falhou tecnicamente: {exc}")
-        return res1
-
-    if res2.confianca_global > res1.confianca_global:
-        res2.avisos.insert(
-            0,
-            f"Camada Docling escolhida (confiança {res2.confianca_global:.0%} "
-            f"vs pdfplumber {res1.confianca_global:.0%})."
-        )
-        return res2
-
-    res1.avisos.insert(0, "Camada pdfplumber escolhida (Docling não melhorou).")
-    return res1
+    return res

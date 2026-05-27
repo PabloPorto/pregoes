@@ -40,6 +40,15 @@ def test_normaliza_remove_acentos():
     assert _normaliza(None) == ""
 
 
+def test_normaliza_colapsa_espacos_multiplos():
+    """Cabeçalhos vindos de modelos visuais (Docling) costumam ter
+    espaços duplos/triplos entre palavras. Sem colapsar, a busca
+    `'preço unitário máximo' in texto_normalizado` falha."""
+    assert _normaliza("Preço  Unitário  Máximo") == "preco unitario maximo"
+    assert _normaliza("Quant.   Eleiçã   o") == "quant. eleica o"
+    assert _normaliza("Item\n\nNúmero") == "item numero"
+
+
 # === Extrator: integração com PDF real ===
 
 def test_extrator_pdf_sintetico():
