@@ -33,6 +33,14 @@ CACHE_PRECO_DIAS = 2                # TTL conforme decisão (resp 9)
 # === Scraping ===
 SCRAPER_TIMEOUT_SEGUNDOS = 30
 SCRAPER_RETRY = 2
+# Pool de páginas Playwright por fornecedor — paraleliza as buscas
+# em um lote. 4 é equilíbrio: ganho linear até ~5 antes do site começar
+# a competir por sessões. Acima de 5 não compensa.
+SCRAPER_POOL_SIZE = 4
+# Throttling: máximo de buscas iniciadas por segundo POR FORNECEDOR.
+# Respeita os parceiros — não confunda com pool_size (paralelismo).
+# Pool 4 + rate 2 req/s = sustentação de ~2 req/s com burst até 4.
+SCRAPER_MAX_REQ_POR_SEGUNDO = 2.0
 FORNECEDORES = {
     "almeida": "https://www.almeidadistribuidor.com.br",
     "dantas": "https://www.dantasdistribuidora.com.br",

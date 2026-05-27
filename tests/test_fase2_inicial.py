@@ -454,3 +454,81 @@ def test_cache_db_buscar_gravar_round_trip(tmp_path, monkeypatch):
         # Mesma chave → upsert (substitui, não duplica)
         db.cache_gravar(conn, "abracadeira", "almeida", '[{"a":2}]')
         assert db.cache_buscar(conn, "abracadeira", "almeida") == '[{"a":2}]'
+
+
+# === Paralelismo (Fase 2.5) ===
+
+def test_rate_limiter_respeita_intervalo_minimo():
+    """RateLimiter bloqueia até a janela abrir. 5 req com 5 req/s deve
+    levar ~0.8s (intervalo 0.2s × 4 esperas)."""
+    import time
+    from pregoes.scraper import _RateLimiter
+
+    rl = _RateLimiter(max_req_por_segundo=5)
+    t0 = time.monotonic()
+    for _ in range(5):
+        rl.acquire()
+    elapsed = time.monotonic() - t0
+    # 5 acquires com intervalo mínimo 0.2s entre eles = ~0.8s (4 esperas)
+    # Tolerância ampla pra robustez em CI lenta.
+    assert 0.7 <= elapsed <= 1.5, f"RateLimiter levou {elapsed:.2f}s (esperado ~0.8s)"
+
+
+def test_buscar_paralelo_com_fornecedor_pool(tmp_path, monkeypatch):
+    """Fornecedor com _pool_size=4 + 8 itens → executor usa 4 threads
+    e cada chamada `buscar()` é serializada por uma página do pool."""
+    from pregoes import db, config
+
+    db_path = tmp_path / "par.db"
+    monkeypatch.setattr(config, "DB_PATH", db_path)
+    db.init_db(db_path)
+
+    chamadas_paralelas: list[float] = []
+    lock = __import__("threading").Lock()
+
+    class ForncPool:
+        nome = "pool_fake"
+        _pool_size = 4
+
+        def buscar(self, descricao):
+            import time
+            with lock:
+                chamadas_paralelas.append(time.monotonic())
+            time.sleep(0.05)
+            return [_r(descricao, "M", 1.0, fornecedor=self.nome)]
+
+    itens = [ItemExtraido(descricao=f"I{i}") for i in range(8)]
+    lote = buscar_precos_para_itens(itens, [ForncPool()], usar_cache=False)
+    assert len(lote.resultados) == 8
+    assert all(len(lote.resultados[i]) == 1 for i in range(8))
+
+    # Evidência de paralelismo: 8 itens com 50ms cada serial = 400ms;
+    # paralelo com pool 4 = ~100-150ms. Verificamos que tempo total foi <300ms.
+    tempo_total = chamadas_paralelas[-1] - chamadas_paralelas[0]
+    assert tempo_total < 0.3, (
+        f"Esperava paralelismo, mas chamadas levaram {tempo_total:.2f}s "
+        f"(serial seria ~0.4s)"
+    )
+
+
+def test_buscar_paralelo_serial_quando_mock_sem_pool(tmp_path, monkeypatch):
+    """Fornecedor mock sem _pool_size cai em max_workers=1 (serial).
+    Garante que callback de progresso vem em ordem determinística."""
+    from pregoes import db, config
+
+    db_path = tmp_path / "serial.db"
+    monkeypatch.setattr(config, "DB_PATH", db_path)
+    db.init_db(db_path)
+
+    forn = _FornecedorFake("fake", {f"I{i}": [_r(f"I{i}", "M", 1.0)]
+                                     for i in range(5)})
+    itens = [ItemExtraido(descricao=f"I{i}") for i in range(5)]
+    progresso = []
+
+    def cb(atual, total, msg):
+        progresso.append((atual, msg))
+
+    buscar_precos_para_itens(itens, [forn], progresso_callback=cb,
+                              usar_cache=False)
+    # Como pool não definido → serial → ordem garantida
+    assert progresso == [(1, "I0"), (2, "I1"), (3, "I2"), (4, "I3"), (5, "I4")]
