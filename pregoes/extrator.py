@@ -542,7 +542,8 @@ def extrair_com_pipeline(
     """
     res = extrair_pdf(caminho_pdf)
     if res.confianca_global >= _CONFIANCA_SUFICIENTE:
-        res.avisos.insert(0, "Extração rápida (pdfplumber): confiança suficiente.")
+        # Caminho feliz: banner verde de "alta confiança" da revisão já
+        # comunica o sucesso. Não precisa de aviso técnico extra.
         return res
 
     # Camada 1 < 95%. Tenta Gemini se disponível.
@@ -551,14 +552,15 @@ def extrair_com_pipeline(
         if not extrator_llm.disponivel():
             res.avisos.insert(
                 0,
-                "Camada rápida (pdfplumber) abaixo de 95%. "
-                "Configure a IA (Gemini) em Configurações para extração automática "
-                "mais precisa, ou use o Mapeamento Manual."
+                "Confiança abaixo de 95%. Configure a IA em "
+                "Configurações para extração automática mais precisa, "
+                "ou use o Mapeamento Manual."
             )
             return res
     except ImportError:
-        res.avisos.insert(0, "Camada rápida (pdfplumber) abaixo de 95% — "
-                             "use Mapeamento Manual.")
+        res.avisos.insert(
+            0, "Confiança abaixo de 95% — use Mapeamento Manual."
+        )
         return res
 
     # Roda Gemini
