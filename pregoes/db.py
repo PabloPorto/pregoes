@@ -84,6 +84,23 @@ CREATE TABLE IF NOT EXISTS mapeamentos_pdf (
     aprendido_em    TEXT DEFAULT CURRENT_TIMESTAMP,
     usado_count     INTEGER DEFAULT 1
 );
+
+-- Cache de resultados do scraper indexado por (descrição_normalizada, fornecedor).
+-- Diferente de precos_historico (que é histórico granular por produto_id),
+-- este cache evita re-buscar a MESMA descrição no MESMO fornecedor dentro
+-- de uma janela curta. Útil antes da Fase 3 existir, quando ainda não há
+-- matcher fuzzy ligando ItemExtraido a produto_id.
+CREATE TABLE IF NOT EXISTS precos_cache_descricao (
+    id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+    descricao_normalizada  TEXT NOT NULL,
+    fornecedor             TEXT NOT NULL,
+    payload                TEXT NOT NULL,    -- JSON list de ResultadoBusca
+    consultado_em          TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(descricao_normalizada, fornecedor)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cache_desc_data
+    ON precos_cache_descricao(descricao_normalizada, fornecedor, consultado_em DESC);
 """
 
 
@@ -168,3 +185,66 @@ def gravar_preco(
         (produto_id, fornecedor, preco, unidade, fonte),
     )
     return cursor.lastrowid
+
+
+# === Cache de resultados do scraper por descrição normalizada ===
+# Solução prática enquanto a Fase 3 (matcher fuzzy) não existe: usa a
+# descrição já normalizada (`normalizador.normalizar_descricao`) como
+# chave. Quando matcher existir, podemos migrar pra `produto_id` e
+# manter este cache só como fallback.
+
+def cache_buscar(
+    conn: sqlite3.Connection,
+    descricao_normalizada: str,
+    fornecedor: str,
+    ttl_dias: int = config.CACHE_PRECO_DIAS,
+) -> Optional[str]:
+    """
+    Devolve o payload JSON cacheado para a chave `(desc, fornecedor)`
+    se ainda dentro do TTL; senão `None`.
+
+    O payload é JSON cru (string). O caller decide como desserializar —
+    desacopla este módulo do dataclass `ResultadoBusca`.
+    """
+    if not descricao_normalizada or not fornecedor:
+        return None
+    limite = (datetime.utcnow() - timedelta(days=ttl_dias)).isoformat(sep=" ")
+    row = conn.execute(
+        """
+        SELECT payload
+        FROM precos_cache_descricao
+        WHERE descricao_normalizada = ?
+          AND fornecedor = ?
+          AND consultado_em >= ?
+        ORDER BY consultado_em DESC
+        LIMIT 1
+        """,
+        (descricao_normalizada, fornecedor, limite),
+    ).fetchone()
+    return row["payload"] if row else None
+
+
+def cache_gravar(
+    conn: sqlite3.Connection,
+    descricao_normalizada: str,
+    fornecedor: str,
+    payload: str,
+) -> None:
+    """
+    Salva (ou substitui) o payload JSON para a chave `(desc, fornecedor)`.
+    UPSERT manual: SQLite `INSERT OR REPLACE` mantém o `id` se já existia
+    a tupla, mas reseta `consultado_em` para o momento atual via DEFAULT.
+    """
+    if not descricao_normalizada or not fornecedor:
+        return
+    conn.execute(
+        """
+        INSERT INTO precos_cache_descricao
+            (descricao_normalizada, fornecedor, payload, consultado_em)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(descricao_normalizada, fornecedor) DO UPDATE SET
+            payload = excluded.payload,
+            consultado_em = CURRENT_TIMESTAMP
+        """,
+        (descricao_normalizada, fornecedor, payload),
+    )

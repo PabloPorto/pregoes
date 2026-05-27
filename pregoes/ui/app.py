@@ -571,15 +571,26 @@ def _executar_busca(itens: list) -> None:
     try:
         with AlmeidaDistribuidor(cred["email"], cred["senha"]) as alm:
             progress.progress(0.0, text="Login OK. Iniciando buscas...")
-            resultados = buscar_precos_para_itens(itens, [alm], progresso_callback=cb)
+            lote = buscar_precos_para_itens(itens, [alm], progresso_callback=cb)
     except Exception as exc:
         style.bloco_aviso(f"Falha técnica na busca: {exc}", tipo="danger")
         return
 
-    st.session_state.resultados_busca = resultados
+    # Compatível com UI anterior (dict de resultados) + dados extras
+    st.session_state.resultados_busca = lote.resultados
+    st.session_state.erros_busca = lote.erros
+    st.session_state.cache_stats = (lote.cache_hits, lote.cache_misses)
     with status_box.container():
+        hits, misses = lote.cache_hits, lote.cache_misses
+        extras = []
+        if hits or misses:
+            extras.append(f"{hits} do cache, {misses} buscas reais")
+        if lote.erros:
+            extras.append(f"⚠️ {len(lote.erros)} erro(s) — ver painel abaixo")
+        sub = f" ({' · '.join(extras)})" if extras else ""
         style.bloco_aviso(
-            f"Busca concluída — {len(resultados)} itens processados.", tipo="success",
+            f"Busca concluída — {len(lote.resultados)} itens processados{sub}.",
+            tipo="success",
         )
 
 
@@ -614,6 +625,24 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
     c3.metric("Por variação", com_variacao,
               help="Encontrado, mas por busca aproximada — conferir")
     c4.metric("Sem resultado", sem_resultado)
+
+    # Painel de erros do batch — só aparece quando há falhas técnicas.
+    # Não bloqueia o fluxo: o operador pode prosseguir com o que deu certo.
+    erros_busca = st.session_state.get("erros_busca") or []
+    if erros_busca:
+        with st.expander(f"⚠️ Ver erros técnicos ({len(erros_busca)})"):
+            st.caption(
+                "Erros isolados durante a busca — esses itens ficaram sem "
+                "preço pelo fornecedor que falhou. Verifique se o site mudou "
+                "de layout ou se a sessão expirou."
+            )
+            for err in erros_busca[:50]:
+                st.markdown(
+                    f"- Item **#{err.indice_item + 1}** ({err.fornecedor}) — "
+                    f"`{err.descricao_resumo}`: {err.mensagem}"
+                )
+            if len(erros_busca) > 50:
+                st.caption(f"... e mais {len(erros_busca) - 50} erros.")
 
     st.divider()
 

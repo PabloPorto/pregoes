@@ -327,39 +327,130 @@ def test_buscar_precos_chama_callback_em_cada_item():
     def cb(atual, total, msg):
         chamadas.append((atual, total, msg))
 
-    res = buscar_precos_para_itens(itens, [forn], progresso_callback=cb)
+    lote = buscar_precos_para_itens(itens, [forn], progresso_callback=cb,
+                                     usar_cache=False)
     assert chamadas == [(1, 3, "AAA"), (2, 3, "BBB"), (3, 3, "CCC")]
-    assert len(res) == 3
-    assert len(res[0]) == 1 and res[0][0].marca == "MX"
-    assert res[1] == [] and res[2] == []
+    assert len(lote.resultados) == 3
+    assert len(lote.resultados[0]) == 1 and lote.resultados[0][0].marca == "MX"
+    assert lote.resultados[1] == [] and lote.resultados[2] == []
+    assert lote.erros == []
 
 
 def test_buscar_precos_concatena_de_multiplos_fornecedores():
     itens = [ItemExtraido(descricao="ABC")]
     f1 = _FornecedorFake("almeida", {"ABC": [_r("ABC", "M1", 10.0)]})
     f2 = _FornecedorFake("dantas", {"ABC": [_r("ABC", "M2", 11.0)]})
-    res = buscar_precos_para_itens(itens, [f1, f2])
-    assert len(res[0]) == 2
-    marcas = {r.marca for r in res[0]}
+    lote = buscar_precos_para_itens(itens, [f1, f2], usar_cache=False)
+    assert len(lote.resultados[0]) == 2
+    marcas = {r.marca for r in lote.resultados[0]}
     assert marcas == {"M1", "M2"}
 
 
-def test_buscar_precos_segue_apos_falha_isolada():
-    """Se um fornecedor falha em UM item, o batch continua e o item fica vazio."""
+def test_buscar_precos_segue_apos_falha_isolada_e_registra_erro():
+    """Se um fornecedor falha em UM item, o batch continua, o item fica
+    vazio em `resultados` E o erro entra em `erros`."""
     itens = [ItemExtraido(descricao=d) for d in ("OK1", "FAIL", "OK2")]
     forn = _FornecedorFake("fake",
                            mapa={"OK1": [_r("OK1", "M", 1.0)],
                                  "OK2": [_r("OK2", "M", 2.0)]},
                            raise_para={"FAIL"})
-    res = buscar_precos_para_itens(itens, [forn])
-    assert len(res[0]) == 1
-    assert res[1] == []   # falha não derrubou o batch
-    assert len(res[2]) == 1
+    lote = buscar_precos_para_itens(itens, [forn], usar_cache=False)
+    assert len(lote.resultados[0]) == 1
+    assert lote.resultados[1] == []  # falha não derrubou o batch
+    assert len(lote.resultados[2]) == 1
     assert forn.chamadas == ["OK1", "FAIL", "OK2"]
+    # Erro foi registrado com contexto suficiente para a UI mostrar
+    assert len(lote.erros) == 1
+    assert lote.erros[0].indice_item == 1
+    assert lote.erros[0].fornecedor == "fake"
+    assert "FAIL" in lote.erros[0].descricao_resumo
+    assert "RuntimeError" in lote.erros[0].mensagem
 
 
 def test_buscar_precos_lista_vazia_de_itens():
     forn = _FornecedorFake("fake", {})
-    res = buscar_precos_para_itens([], [forn])
-    assert res == {}
+    lote = buscar_precos_para_itens([], [forn], usar_cache=False)
+    assert lote.resultados == {}
+    assert lote.erros == []
     assert forn.chamadas == []
+
+
+# === Cache integrado (Fase 2.4) ===
+
+def test_buscar_precos_usa_cache_no_segundo_chamado(tmp_path, monkeypatch):
+    """Primeiro batch chama o scraper; segundo batch com a mesma descrição
+    deve servir do cache e NÃO chamar o scraper de novo."""
+    from pregoes import db, config
+    db_path = tmp_path / "cache_test.db"
+    monkeypatch.setattr(config, "DB_PATH", db_path)
+    db.init_db(db_path)
+
+    forn = _FornecedorFake("fakefornecedor",
+                           {"PARAFUSO 10MM": [_r("PARAFUSO 10MM", "M", 5.0)]})
+    itens = [ItemExtraido(descricao="PARAFUSO 10MM")]
+
+    # 1º batch: cache miss → chama scraper
+    lote1 = buscar_precos_para_itens(itens, [forn])
+    assert lote1.cache_misses == 1
+    assert lote1.cache_hits == 0
+    assert len(lote1.resultados[0]) == 1
+    assert forn.chamadas == ["PARAFUSO 10MM"]
+
+    # 2º batch: cache hit → NÃO chama scraper
+    lote2 = buscar_precos_para_itens(itens, [forn])
+    assert lote2.cache_hits == 1
+    assert lote2.cache_misses == 0
+    assert len(lote2.resultados[0]) == 1
+    assert lote2.resultados[0][0].marca == "M"
+    # Scraper não foi chamado de novo
+    assert forn.chamadas == ["PARAFUSO 10MM"]
+
+
+def test_cache_separado_por_fornecedor(tmp_path, monkeypatch):
+    """Cache de Almeida não vaza para Dantas."""
+    from pregoes import db, config
+    db_path = tmp_path / "cache_sep.db"
+    monkeypatch.setattr(config, "DB_PATH", db_path)
+    db.init_db(db_path)
+
+    f_alm = _FornecedorFake("almeida", {"X": [_r("X", "MA", 1.0, fornecedor="almeida")]})
+    f_dan = _FornecedorFake("dantas",  {"X": [_r("X", "MD", 2.0, fornecedor="dantas")]})
+    itens = [ItemExtraido(descricao="X")]
+
+    # Primeira passada com só Almeida — popula cache só para Almeida
+    buscar_precos_para_itens(itens, [f_alm])
+    # Segunda passada com ambos — Almeida vem do cache, Dantas é miss
+    lote = buscar_precos_para_itens(itens, [f_alm, f_dan])
+    assert lote.cache_hits == 1   # almeida
+    assert lote.cache_misses == 1  # dantas
+    assert f_dan.chamadas == ["X"]  # dantas chamou scraper
+
+
+def test_usar_cache_false_sempre_chama_scraper(tmp_path, monkeypatch):
+    from pregoes import db, config
+    db_path = tmp_path / "no_cache.db"
+    monkeypatch.setattr(config, "DB_PATH", db_path)
+    db.init_db(db_path)
+
+    forn = _FornecedorFake("fake", {"Y": [_r("Y", "M", 1.0)]})
+    itens = [ItemExtraido(descricao="Y")]
+
+    buscar_precos_para_itens(itens, [forn], usar_cache=False)
+    buscar_precos_para_itens(itens, [forn], usar_cache=False)
+    # Scraper foi chamado 2 vezes pois cache está desligado
+    assert forn.chamadas == ["Y", "Y"]
+
+
+def test_cache_db_buscar_gravar_round_trip(tmp_path, monkeypatch):
+    """Teste de baixo nível: db.cache_buscar/gravar funcionam diretamente."""
+    from pregoes import db, config
+    db_path = tmp_path / "cache_low.db"
+    monkeypatch.setattr(config, "DB_PATH", db_path)
+    db.init_db(db_path)
+    with db.get_conn() as conn:
+        assert db.cache_buscar(conn, "abracadeira", "almeida") is None
+        db.cache_gravar(conn, "abracadeira", "almeida", '[{"a":1}]')
+        assert db.cache_buscar(conn, "abracadeira", "almeida") == '[{"a":1}]'
+        # Mesma chave → upsert (substitui, não duplica)
+        db.cache_gravar(conn, "abracadeira", "almeida", '[{"a":2}]')
+        assert db.cache_buscar(conn, "abracadeira", "almeida") == '[{"a":2}]'

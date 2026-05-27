@@ -22,10 +22,12 @@ Uso típico:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
+from dataclasses import asdict, dataclass, field
 from typing import Callable, Optional, Protocol
 from urllib.parse import quote_plus
 
+from . import db
 from .extrator import ItemExtraido
 from .normalizador import keywords, normalizar_descricao, relevancia
 
@@ -275,46 +277,144 @@ class DantasDistribuidora:
 ProgressoCallback = Callable[[int, int, str], None]
 
 
+@dataclass(frozen=True)
+class ErroBusca:
+    """Falha isolada do scraper em um item — não bloqueia o batch, mas
+    aparece no painel de erros da UI."""
+    indice_item: int
+    fornecedor: str
+    descricao_resumo: str   # primeiros chars da descrição (para identificar)
+    mensagem: str            # tipo de erro + str do exception
+
+
+@dataclass
+class ResultadoLote:
+    """Resultado completo de um batch de busca.
+
+    A UI usa:
+    - `resultados` para mostrar opções por item e seleção do operador
+    - `erros` para o painel "ver erros (N)" quando o batch teve falhas
+    - `cache_hits`/`cache_misses` para o operador entender quanto a memória
+       do sistema economizou (transparência sobre cache)
+    """
+    resultados: dict[int, list[ResultadoBusca]]
+    erros: list[ErroBusca] = field(default_factory=list)
+    cache_hits: int = 0
+    cache_misses: int = 0
+
+
+def _payload_to_resultados(
+    payload_json: str, fornecedor: str
+) -> list[ResultadoBusca]:
+    """Reconstrói lista de ResultadoBusca a partir do JSON salvo no cache."""
+    try:
+        data = json.loads(payload_json)
+    except (TypeError, ValueError):
+        return []
+    out: list[ResultadoBusca] = []
+    for d in data:
+        try:
+            out.append(ResultadoBusca(
+                descricao_encontrada=d["descricao_encontrada"],
+                marca=d.get("marca", ""),
+                preco=float(d["preco"]),
+                codigo_fornecedor=d["codigo_fornecedor"],
+                confianca=d.get("confianca", "exato"),
+                fornecedor=d.get("fornecedor", fornecedor),
+            ))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
+
+
 def buscar_precos_para_itens(
     itens: list[ItemExtraido],
     fornecedores: list[Fornecedor],
     *,
     progresso_callback: Optional[ProgressoCallback] = None,
-) -> dict[int, list[ResultadoBusca]]:
-    """
-    Para cada item, busca em todos os fornecedores e concatena os resultados.
+    usar_cache: bool = True,
+) -> ResultadoLote:
+    """Busca em batch com cache TTL=2d e coleta de erros.
 
-    Retorna `{indice_do_item: [ResultadoBusca, ...]}`. Itens sem nenhum
-    resultado em nenhum fornecedor mapeiam para lista vazia (UI mostra
-    vermelho).
+    Antes de chamar `forn.buscar(item.descricao)`, consulta o cache em
+    `precos_cache_descricao` indexado por `(descricao_normalizada,
+    fornecedor)`. Hit → reusa; miss → busca e grava.
 
-    Falhas isoladas de um fornecedor (timeout, layout mudou) **não** quebram
-    o batch — o item é registrado com lista vazia e a busca continua.
+    Falhas isoladas (timeout, layout mudou) **não** quebram o batch:
+    são acumuladas em `ResultadoLote.erros` para a UI exibir num painel.
+    O item continua entrando em `resultados` (com lista vazia) — assim
+    a UI mantém numeração consistente.
 
     Args:
         itens: lista de ItemExtraido vindos da revisão.
         fornecedores: instâncias já abertas (login feito) de Almeida/Dantas.
             O orquestrador NÃO gerencia ciclo de vida — quem chama abre/fecha
             via context manager.
-        progresso_callback(atual, total, msg): chamado após cada item, para
-            a UI atualizar barra de progresso. `atual` começa em 1.
+        progresso_callback(atual, total, msg): chamado após cada item.
+        usar_cache: False quando o operador clicar 'Atualizar tudo' (futuro)
+            ou em testes que querem chamar scraper real.
 
-    TODO(cache): integrar com `db.preco_em_cache()` quando `produto_id` estiver
-    disponível em ItemExtraido (depende da Fase 3 — matcher fuzzy).
-    Hoje, cada chamada é uma busca real.
+    Migração futura para Fase 3: quando matcher fuzzy ligar ItemExtraido →
+    produto_id, podemos cachear por produto_id (mais robusto que descrição
+    normalizada). Por ora, descrição normalizada já é estável o bastante.
     """
     resultados: dict[int, list[ResultadoBusca]] = {}
+    erros: list[ErroBusca] = []
+    cache_hits = 0
+    cache_misses = 0
     total = len(itens)
-    for idx, item in enumerate(itens):
-        bag: list[ResultadoBusca] = []
-        for forn in fornecedores:
-            try:
-                bag.extend(forn.buscar(item.descricao))
-            except Exception:
-                # Fornecedor falhou neste item; segue o batch.
-                # A UI mostra vermelho para itens com bag vazio no fim.
-                continue
-        resultados[idx] = bag
-        if progresso_callback is not None:
-            progresso_callback(idx + 1, total, item.descricao[:60])
-    return resultados
+
+    # Uma conexão por batch — evita custo de abrir/fechar por item.
+    conn_cm = db.get_conn() if usar_cache else None
+    conn = conn_cm.__enter__() if conn_cm else None
+
+    try:
+        for idx, item in enumerate(itens):
+            bag: list[ResultadoBusca] = []
+            desc_norm = normalizar_descricao(item.descricao)
+
+            for forn in fornecedores:
+                # 1. Tenta cache
+                if conn is not None and desc_norm:
+                    payload = db.cache_buscar(conn, desc_norm, forn.nome)
+                    if payload is not None:
+                        cache_hits += 1
+                        bag.extend(_payload_to_resultados(payload, forn.nome))
+                        continue
+                    cache_misses += 1
+
+                # 2. Miss ou cache desligado: busca real
+                try:
+                    encontrados = forn.buscar(item.descricao)
+                except Exception as exc:
+                    erros.append(ErroBusca(
+                        indice_item=idx,
+                        fornecedor=forn.nome,
+                        descricao_resumo=(item.descricao or "")[:60],
+                        mensagem=f"{type(exc).__name__}: {exc}",
+                    ))
+                    continue
+
+                bag.extend(encontrados)
+
+                # 3. Grava cache (mesmo lista vazia conta — operador
+                # não precisa re-buscar produto inexistente em 2d)
+                if conn is not None and desc_norm:
+                    payload = json.dumps(
+                        [asdict(r) for r in encontrados], ensure_ascii=False
+                    )
+                    db.cache_gravar(conn, desc_norm, forn.nome, payload)
+
+            resultados[idx] = bag
+            if progresso_callback is not None:
+                progresso_callback(idx + 1, total, item.descricao[:60])
+    finally:
+        if conn_cm is not None:
+            conn_cm.__exit__(None, None, None)
+
+    return ResultadoLote(
+        resultados=resultados,
+        erros=erros,
+        cache_hits=cache_hits,
+        cache_misses=cache_misses,
+    )
