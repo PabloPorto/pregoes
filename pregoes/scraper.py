@@ -1,5 +1,5 @@
 """
-Scraper de fornecedores: Almeida (implementado) + Dantas (esqueleto).
+Scraper de fornecedores: Almeida + Dantas.
 
 Decisões registradas (CLAUDE.md Seção 7, QUESTOES_PENDENTES.md Bloco 2):
 - Sites parceiros, sem CAPTCHA visível, scraping autorizado.
@@ -15,6 +15,14 @@ Estratégia de busca em 3 camadas por fornecedor:
 A camada 4 (código histórico) prevista no roadmap fica para a Fase 3, quando
 `produtos.codigo_almeida` estiver populado pelo `importador.py`.
 
+**Modelo de execução SERIAL.** A tentativa anterior de paralelismo via
+ThreadPoolExecutor (commit 0d0d005) quebrou em produção com
+`greenlet.error: Cannot switch to a different thread`: Playwright sync
+API só pode ser usado na thread que iniciou `sync_playwright()`. Voltamos
+ao serial — mais simples, sem regressão. Quando o cache estiver populado
+(TTL 2d), o segundo edital do dia roda quase instantâneo. Se for dor real
+no volume alvo, refatoramos para asyncio com `playwright.async_api`.
+
 Uso típico:
     cred = credenciais.carregar("almeida")
     with AlmeidaDistribuidor(cred["email"], cred["senha"]) as alm:
@@ -23,10 +31,7 @@ Uso típico:
 from __future__ import annotations
 
 import json
-import queue
-import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
 from typing import Callable, Optional, Protocol
 from urllib.parse import quote_plus
@@ -118,47 +123,39 @@ def _parse_card_attributes(attrs: dict, confianca: str) -> Optional[ResultadoBus
 
 
 class _RateLimiter:
-    """Rate limiter simples por chamada — bloqueia a thread até abrir
-    janela para a próxima request.
+    """Rate limiter serial — intervalo mínimo entre requests.
 
-    Thread-safe via `threading.Lock`. Implementado como token bucket
-    mínimo: guarda timestamp da última chamada, espera `min_intervalo`
-    se necessário.
-
-    Não é preciso ser sub-segundo — escala atual (max 2 req/s) é bem
-    coberta. Para taxas mais altas valeria leaky bucket.
+    Não precisa de lock porque o scraper é serial agora (commit ____).
+    Mantém o uso para não sobrecarregar os sites parceiros: guarda
+    timestamp da última chamada e dorme se a próxima vem cedo demais.
     """
 
     def __init__(self, max_req_por_segundo: float):
         self._min_intervalo = 1.0 / max_req_por_segundo if max_req_por_segundo > 0 else 0.0
         self._ultimo = 0.0
-        self._lock = threading.Lock()
 
     def acquire(self) -> None:
-        with self._lock:
-            agora = time.monotonic()
-            espera = self._min_intervalo - (agora - self._ultimo)
-            if espera > 0:
-                time.sleep(espera)
-                self._ultimo = time.monotonic()
-            else:
-                self._ultimo = agora
+        agora = time.monotonic()
+        espera = self._min_intervalo - (agora - self._ultimo)
+        if espera > 0:
+            time.sleep(espera)
+            self._ultimo = time.monotonic()
+        else:
+            self._ultimo = agora
 
 
 class AlmeidaDistribuidor:
     """
-    Scraper de almeidadistribuidor.com.br com pool de páginas paralelas.
+    Scraper de almeidadistribuidor.com.br.
 
-    Gerenciado como context manager: o `__enter__` faz o login uma vez
-    e instancia `pool_size` páginas no mesmo `BrowserContext` (cookies
-    compartilhados — login vale para todas). O `__exit__` fecha o browser.
+    Gerenciado como context manager: o `__enter__` faz o login uma vez,
+    `__exit__` fecha o browser. Chamadas sucessivas a `.buscar()` reusam
+    a sessão (cookies PHPSESSID + token herdados).
 
-    Chamadas a `.buscar()` são **thread-safe**: cada thread pega uma
-    página livre da fila, usa, e devolve. `_RateLimiter` impede burst
-    de requests acima do limite acordado com o parceiro.
-
-    Múltiplas chamadas paralelas reutilizam a sessão (cookies PHPSESSID
-    + token); o login só roda 1x no `__enter__`.
+    **Modelo serial**: 1 página por instância. Não é thread-safe — todas
+    as chamadas devem vir da mesma thread que criou o context manager
+    (limitação do Playwright sync API). Rate limiter dorme entre buscas
+    para respeitar parceiros.
     """
 
     nome = "almeida"
@@ -169,17 +166,19 @@ class AlmeidaDistribuidor:
         senha: str,
         *,
         headless: bool = True,
-        pool_size: int = None,
+        pool_size: int = None,   # aceito mas ignorado (compat. com testes antigos)
         max_req_por_segundo: float = None,
     ):
         self._email = email
         self._senha = senha
         self._headless = headless
+        # Mantido para compat. com testes que ainda checam `_pool_size`,
+        # mas não usamos pool real — `_page` é única (serial).
         self._pool_size = pool_size or config.SCRAPER_POOL_SIZE
         self._playwright = None
         self._browser = None
         self._context = None
-        self._page_pool: queue.Queue = queue.Queue()
+        self._page = None
         self._rate_limiter = _RateLimiter(
             max_req_por_segundo or config.SCRAPER_MAX_REQ_POR_SEGUNDO
         )
@@ -192,13 +191,8 @@ class AlmeidaDistribuidor:
         self._playwright = sync_playwright().start()
         self._browser = self._playwright.chromium.launch(headless=self._headless)
         self._context = self._browser.new_context(viewport={"width": 1280, "height": 900})
-        # Login na 1ª página (cookies vão para o context inteiro).
-        primeira = self._context.new_page()
-        self._login(primeira)
-        self._page_pool.put(primeira)
-        # Demais páginas do pool herdam cookies automaticamente.
-        for _ in range(self._pool_size - 1):
-            self._page_pool.put(self._context.new_page())
+        self._page = self._context.new_page()
+        self._login(self._page)
         return self
 
     def __exit__(self, *_args) -> None:
@@ -232,11 +226,9 @@ class AlmeidaDistribuidor:
             )
 
     def buscar(self, descricao: str) -> list[ResultadoBusca]:
-        """Tenta as camadas de busca em ordem. Thread-safe via pool.
-
-        Aplica rate limit antes de cada busca real (não no cache hit —
-        cache não fala com o site). Para na primeira camada que produzir
-        resultados relevantes.
+        """Tenta as camadas de busca em ordem. Para na primeira que
+        produzir resultados relevantes. Aplica rate limit antes de cada
+        busca real para respeitar o site parceiro.
         """
         if not descricao or not descricao.strip():
             return []
@@ -260,22 +252,16 @@ class AlmeidaDistribuidor:
             if kws_curto not in (normalizada, " ".join(kws[:3])):
                 camadas.append(("variacao", kws_curto))
 
-        # Pega uma página do pool — bloqueia se todas estão ocupadas
-        # (orquestrador usa max_workers = pool_size, então não deadlocka).
-        page = self._page_pool.get()
-        try:
-            for confianca, query in camadas:
-                self._rate_limiter.acquire()
-                brutos = self._buscar_query(page, query, confianca)
-                relevantes = [
-                    r for r in brutos
-                    if relevancia(descricao, r.descricao_encontrada) >= _RELEVANCIA_MINIMA
-                ]
-                if relevantes:
-                    return relevantes
-            return []
-        finally:
-            self._page_pool.put(page)
+        for confianca, query in camadas:
+            self._rate_limiter.acquire()
+            brutos = self._buscar_query(self._page, query, confianca)
+            relevantes = [
+                r for r in brutos
+                if relevancia(descricao, r.descricao_encontrada) >= _RELEVANCIA_MINIMA
+            ]
+            if relevantes:
+                return relevantes
+        return []
 
     def _buscar_query(self, page, query: str, confianca: str) -> list[ResultadoBusca]:
         """Faz uma busca crua usando a página recebida e retorna até N
@@ -356,12 +342,14 @@ def _parse_card_dantas(attrs: dict, confianca: str) -> Optional[ResultadoBusca]:
 
 
 class DantasDistribuidora:
-    """Scraper de dantasdistribuidora.com.br com pool paralelo.
+    """Scraper de dantasdistribuidora.com.br.
 
     Estrutura idêntica ao `AlmeidaDistribuidor` (ver inspeção em
     scripts/inspecionar_dantas.py). Mantemos como classe separada porque
     são dois sites distintos: se um mudar layout, o outro continua
     funcionando sem mexer no código compartilhado.
+
+    Modelo serial — mesmas restrições do Almeida (1 página, mesma thread).
     """
 
     nome = "dantas"
@@ -372,7 +360,7 @@ class DantasDistribuidora:
         senha: str,
         *,
         headless: bool = True,
-        pool_size: int = None,
+        pool_size: int = None,   # ignorado, mantido para compat. com testes
         max_req_por_segundo: float = None,
     ):
         self._email = email
@@ -382,7 +370,7 @@ class DantasDistribuidora:
         self._playwright = None
         self._browser = None
         self._context = None
-        self._page_pool: queue.Queue = queue.Queue()
+        self._page = None
         self._rate_limiter = _RateLimiter(
             max_req_por_segundo or config.SCRAPER_MAX_REQ_POR_SEGUNDO
         )
@@ -393,11 +381,8 @@ class DantasDistribuidora:
         self._playwright = sync_playwright().start()
         self._browser = self._playwright.chromium.launch(headless=self._headless)
         self._context = self._browser.new_context(viewport={"width": 1280, "height": 900})
-        primeira = self._context.new_page()
-        self._login(primeira)
-        self._page_pool.put(primeira)
-        for _ in range(self._pool_size - 1):
-            self._page_pool.put(self._context.new_page())
+        self._page = self._context.new_page()
+        self._login(self._page)
         return self
 
     def __exit__(self, *_args) -> None:
@@ -444,20 +429,16 @@ class DantasDistribuidora:
             if kws_curto not in (normalizada, " ".join(kws[:3])):
                 camadas.append(("variacao", kws_curto))
 
-        page = self._page_pool.get()
-        try:
-            for confianca, query in camadas:
-                self._rate_limiter.acquire()
-                brutos = self._buscar_query(page, query, confianca)
-                relevantes = [
-                    r for r in brutos
-                    if relevancia(descricao, r.descricao_encontrada) >= _RELEVANCIA_MINIMA
-                ]
-                if relevantes:
-                    return relevantes
-            return []
-        finally:
-            self._page_pool.put(page)
+        for confianca, query in camadas:
+            self._rate_limiter.acquire()
+            brutos = self._buscar_query(self._page, query, confianca)
+            relevantes = [
+                r for r in brutos
+                if relevancia(descricao, r.descricao_encontrada) >= _RELEVANCIA_MINIMA
+            ]
+            if relevantes:
+                return relevantes
+        return []
 
     def _buscar_query(self, page, query: str, confianca: str) -> list[ResultadoBusca]:
         url = f"{_BASE_URL_DANTAS}/busca?s={quote_plus(query)}"
@@ -541,96 +522,38 @@ def _payload_to_resultados(
     return out
 
 
-def _processar_um_item(
-    idx: int,
-    item: ItemExtraido,
-    fornecedores: list,
-    conn,
-    cache_lock: threading.Lock,
-) -> tuple[int, list[ResultadoBusca], list[ErroBusca], int, int]:
-    """Worker thread-safe: processa 1 item × N fornecedores.
-
-    Retorna (indice, resultados, erros, cache_hits, cache_misses).
-    `conn` é compartilhada entre workers — `cache_lock` serializa acesso.
-    """
-    bag: list[ResultadoBusca] = []
-    erros_locais: list[ErroBusca] = []
-    hits = 0
-    misses = 0
-    desc_norm = normalizar_descricao(item.descricao)
-
-    for forn in fornecedores:
-        # 1. Cache (com lock — SQLite não é thread-safe nativo)
-        if conn is not None and desc_norm:
-            with cache_lock:
-                payload = db.cache_buscar(conn, desc_norm, forn.nome)
-            if payload is not None:
-                hits += 1
-                bag.extend(_payload_to_resultados(payload, forn.nome))
-                continue
-            misses += 1
-
-        # 2. Busca real (fora do lock — pode demorar; chamada do
-        # forn.buscar() é thread-safe via pool de páginas + rate limiter)
-        try:
-            encontrados = forn.buscar(item.descricao)
-        except Exception as exc:
-            erros_locais.append(ErroBusca(
-                indice_item=idx,
-                fornecedor=forn.nome,
-                descricao_resumo=(item.descricao or "")[:60],
-                mensagem=f"{type(exc).__name__}: {exc}",
-            ))
-            continue
-
-        bag.extend(encontrados)
-
-        # 3. Grava cache (com lock)
-        if conn is not None and desc_norm:
-            payload = json.dumps(
-                [asdict(r) for r in encontrados], ensure_ascii=False
-            )
-            with cache_lock:
-                db.cache_gravar(conn, desc_norm, forn.nome, payload)
-
-    return idx, bag, erros_locais, hits, misses
-
-
 def buscar_precos_para_itens(
     itens: list[ItemExtraido],
     fornecedores: list[Fornecedor],
     *,
     progresso_callback: Optional[ProgressoCallback] = None,
     usar_cache: bool = True,
-    max_workers: Optional[int] = None,
+    max_workers: Optional[int] = None,  # aceito mas ignorado (compat. legacy)
 ) -> ResultadoLote:
-    """Busca em batch paralela com cache TTL=2d e coleta de erros.
+    """Busca em batch SERIAL com cache TTL=2d e coleta de erros.
 
-    Paralelismo:
-    - `max_workers` threads processam itens concorrentemente.
-    - Default = maior `_pool_size` entre fornecedores (ou 1 para mocks).
-    - Cada `forn.buscar()` é thread-safe via pool de páginas Playwright
-      interno do fornecedor + rate limiter (respeita parceiros).
+    Por que serial: Playwright sync API atrela o browser à thread que
+    chamou `sync_playwright().start()`. Tentar paralelizar com
+    ThreadPoolExecutor gera `greenlet.error: Cannot switch to a different
+    thread` (visto em produção em 2026-05-27). Para retomar paralelismo,
+    refatorar para `playwright.async_api`.
 
     Cache:
     - Consulta `precos_cache_descricao` antes de chamar scraper. Hit
-      reaproveita; miss busca e grava. Lock global serializa SQLite.
+      reaproveita; miss busca e grava. Cache persistente entre execuções.
+    - Cliente típico processa o mesmo edital várias vezes (revisões) —
+      a 2ª execução fica praticamente instantânea.
 
     Erros isolados (timeout, layout mudou) **não** quebram batch — vão
     para `ResultadoLote.erros` que a UI mostra num painel.
 
-    Progresso:
-    - `progresso_callback(atual, total, msg)` é chamado da thread
-      principal após cada `future.result()`. Como os workers terminam
-      em ordem indeterminada, `msg` é a descrição do item que ACABOU
-      de terminar, não o próximo. `atual` cresce monotonicamente.
-
     Args:
         itens: lista de ItemExtraido vindos da revisão.
         fornecedores: instâncias já abertas (login feito) de Almeida/Dantas.
-        progresso_callback: callback de progresso.
+        progresso_callback: callback `(atual, total, msg)` a cada item.
         usar_cache: False em testes que querem chamar scraper real.
-        max_workers: override do nº de threads. Default usa pool dos forn.
+        max_workers: ignorado (mantido na assinatura para compat. com
+            chamadores antigos que ainda passam o argumento).
     """
     resultados: dict[int, list[ResultadoBusca]] = {}
     erros: list[ErroBusca] = []
@@ -641,62 +564,55 @@ def buscar_precos_para_itens(
     if total == 0:
         return ResultadoLote(resultados={}, erros=[])
 
-    # max_workers default = maior pool_size entre fornecedores. Mocks
-    # de teste não têm `_pool_size`, então cai em 1.
-    if max_workers is None:
-        max_workers = max(
-            (getattr(f, "_pool_size", 1) for f in fornecedores),
-            default=1,
-        )
-    max_workers = max(1, min(max_workers, total))
-
-    # SQLite com check_same_thread=False permite uma conexão entre
-    # threads desde que serializemos via lock.
+    # Conexão SQLite na thread do orquestrador. Sem lock — serial.
     conn = None
     if usar_cache:
         import sqlite3
         from . import config as _config
-        conn = sqlite3.connect(_config.DB_PATH, check_same_thread=False)
+        conn = sqlite3.connect(_config.DB_PATH)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON;")
-    cache_lock = threading.Lock()
 
     try:
-        if max_workers == 1:
-            # Caminho serial — útil em testes que esperam ordem
-            # determinística do progresso e nos casos com 1 fornecedor mock.
-            for idx, item in enumerate(itens):
-                idx_done, bag, erros_locais, h, m = _processar_um_item(
-                    idx, item, fornecedores, conn, cache_lock,
-                )
-                resultados[idx_done] = bag
-                erros.extend(erros_locais)
-                cache_hits += h
-                cache_misses += m
-                if progresso_callback is not None:
-                    progresso_callback(idx + 1, total, item.descricao[:60])
-        else:
-            # Caminho paralelo
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                futures = {
-                    executor.submit(
-                        _processar_um_item, idx, item, fornecedores, conn, cache_lock,
-                    ): idx
-                    for idx, item in enumerate(itens)
-                }
-                concluidos = 0
-                for fut in as_completed(futures):
-                    idx_done, bag, erros_locais, h, m = fut.result()
-                    resultados[idx_done] = bag
-                    erros.extend(erros_locais)
-                    cache_hits += h
-                    cache_misses += m
-                    concluidos += 1
-                    if progresso_callback is not None:
-                        item_done = itens[idx_done]
-                        progresso_callback(
-                            concluidos, total, item_done.descricao[:60]
-                        )
+        for idx, item in enumerate(itens):
+            bag: list[ResultadoBusca] = []
+            desc_norm = normalizar_descricao(item.descricao)
+
+            for forn in fornecedores:
+                # 1. Tenta cache
+                if conn is not None and desc_norm:
+                    payload = db.cache_buscar(conn, desc_norm, forn.nome)
+                    if payload is not None:
+                        cache_hits += 1
+                        bag.extend(_payload_to_resultados(payload, forn.nome))
+                        continue
+                    cache_misses += 1
+
+                # 2. Busca real
+                try:
+                    encontrados = forn.buscar(item.descricao)
+                except Exception as exc:
+                    erros.append(ErroBusca(
+                        indice_item=idx,
+                        fornecedor=forn.nome,
+                        descricao_resumo=(item.descricao or "")[:60],
+                        mensagem=f"{type(exc).__name__}: {exc}",
+                    ))
+                    continue
+
+                bag.extend(encontrados)
+
+                # 3. Grava no cache
+                if conn is not None and desc_norm:
+                    payload = json.dumps(
+                        [asdict(r) for r in encontrados], ensure_ascii=False
+                    )
+                    db.cache_gravar(conn, desc_norm, forn.nome, payload)
+
+            resultados[idx] = bag
+            if progresso_callback is not None:
+                progresso_callback(idx + 1, total, item.descricao[:60])
+
         if conn is not None:
             conn.commit()
     finally:

@@ -501,41 +501,32 @@ def test_rate_limiter_respeita_intervalo_minimo():
     assert 0.7 <= elapsed <= 1.5, f"RateLimiter levou {elapsed:.2f}s (esperado ~0.8s)"
 
 
-def test_buscar_paralelo_com_fornecedor_pool(tmp_path, monkeypatch):
-    """Fornecedor com _pool_size=4 + 8 itens → executor usa 4 threads
-    e cada chamada `buscar()` é serializada por uma página do pool."""
+def test_buscar_ordem_serial_garantida(tmp_path, monkeypatch):
+    """Modelo serial agora (revertido em commit ____ por incompatibilidade
+    do Playwright sync API com threads): chamadas vêm na ordem dos itens
+    e o retorno tem todos. Quando paralelizarmos via asyncio, este teste
+    documenta o contrato anterior — atualizar para o novo aqui."""
     from pregoes import db, config
 
     db_path = tmp_path / "par.db"
     monkeypatch.setattr(config, "DB_PATH", db_path)
     db.init_db(db_path)
 
-    chamadas_paralelas: list[float] = []
-    lock = __import__("threading").Lock()
+    chamadas: list[str] = []
 
-    class ForncPool:
-        nome = "pool_fake"
-        _pool_size = 4
+    class ForncRastreado:
+        nome = "rastreado"
+        _pool_size = 4   # ignorado no modelo serial atual
 
         def buscar(self, descricao):
-            import time
-            with lock:
-                chamadas_paralelas.append(time.monotonic())
-            time.sleep(0.05)
+            chamadas.append(descricao)
             return [_r(descricao, "M", 1.0, fornecedor=self.nome)]
 
     itens = [ItemExtraido(descricao=f"I{i}") for i in range(8)]
-    lote = buscar_precos_para_itens(itens, [ForncPool()], usar_cache=False)
+    lote = buscar_precos_para_itens(itens, [ForncRastreado()], usar_cache=False)
     assert len(lote.resultados) == 8
     assert all(len(lote.resultados[i]) == 1 for i in range(8))
-
-    # Evidência de paralelismo: 8 itens com 50ms cada serial = 400ms;
-    # paralelo com pool 4 = ~100-150ms. Verificamos que tempo total foi <300ms.
-    tempo_total = chamadas_paralelas[-1] - chamadas_paralelas[0]
-    assert tempo_total < 0.3, (
-        f"Esperava paralelismo, mas chamadas levaram {tempo_total:.2f}s "
-        f"(serial seria ~0.4s)"
-    )
+    assert chamadas == [f"I{i}" for i in range(8)]
 
 
 def test_buscar_paralelo_serial_quando_mock_sem_pool(tmp_path, monkeypatch):
