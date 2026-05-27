@@ -136,13 +136,19 @@ def relevancia(original: str | None, candidato: str | None) -> float:
     """
     Score 0..1 de quão bem `candidato` casa com `original`.
 
-    Definida como `|kws_orig ∩ kws_candidato| / |kws_orig|` — fração das
-    palavras-chave da descrição original que aparecem também no resultado
-    do fornecedor.
+    Conta, para cada keyword da descrição original, se ela tem
+    correspondência no candidato. Considera match em três casos:
+    - Match exato: `kw_orig == kw_cand`
+    - Prefixo/sufixo: `'sold'` casa com `'soldavel'` (abreviações de
+      edital, ex: "ADAPTADOR PVC SOLD." → o produto vem "SOLDÁVEL")
+    - Substring: `'1.1/2'` casa com `'50x1.1/2'` (dimensões que vêm
+      coladas a outro número no produto, ex: "50X1.1/2")
 
-    Usado pelo scraper para descartar resultados óbvios de lixo (caso
-    típico: site faz busca por palavras isoladas e retorna qualquer
-    produto que tenha QUALQUER token, mesmo irrelevante).
+    Antes era só `intersect / N`, o que ficava cego a abreviações
+    típicas de edital. Bug visto em produção (2026-05-27): busca por
+    "ADAPTADOR PVC SOLD. CURTO DE 50 X 1.1/2\\"" retornava 0.40 contra
+    "ADAPTADOR SOLDÁVEL CURTO AMANCO 50X1.1/2" porque "sold." e
+    "soldavel" não casavam, nem "1.1/2\\"" e "50x1.1/2".
 
     >>> relevancia("VERGALHAO ACO CA-50 12,5MM",
     ...            "CORRENTE SOLDADA SAO RAPHAEL 6.5MM SACO C/12,5KG")
@@ -150,11 +156,37 @@ def relevancia(original: str | None, candidato: str | None) -> float:
     >>> relevancia("ABRAÇADEIRA DE NYLON 100 X 2.5",
     ...            "ABRAÇADEIRA DE NYLON FOXLUX BRANCA 2.5X10CM C/100")
     1.0
+    >>> # Abreviação 'sold.' encontra 'soldavel':
+    >>> relevancia('ADAPTADOR PVC SOLD. CURTO DE 50 X 1.1/2"',
+    ...            'ADAPTADOR SOLDÁVEL CURTO AMANCO 50X1.1/2') >= 0.7
+    True
     """
     if not original or not candidato:
         return 0.0
-    kws_orig = set(keywords(original))
-    kws_cand = set(keywords(candidato))
+    kws_orig = keywords(original)
+    kws_cand = keywords(candidato)
     if not kws_orig:
         return 0.0
-    return len(kws_orig & kws_cand) / len(kws_orig)
+
+    n_match = 0
+    for ko in kws_orig:
+        # Limpa caracteres de fim que atrapalham (aspas, ponto, vírgula)
+        ko_limpo = ko.rstrip('".,')
+        if not ko_limpo:
+            continue
+        for kc in kws_cand:
+            kc_limpo = kc.rstrip('".,')
+            if not kc_limpo:
+                continue
+            if ko_limpo == kc_limpo:
+                n_match += 1
+                break
+            # Match parcial só com pelo menos 3 chars de cada lado:
+            # evita "x" casar com "xxxx" trivialmente.
+            if len(ko_limpo) >= 3 and ko_limpo in kc_limpo:
+                n_match += 1
+                break
+            if len(kc_limpo) >= 3 and kc_limpo in ko_limpo:
+                n_match += 1
+                break
+    return n_match / len(kws_orig)

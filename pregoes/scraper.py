@@ -252,16 +252,48 @@ class AlmeidaDistribuidor:
             if kws_curto not in (normalizada, " ".join(kws[:3])):
                 camadas.append(("variacao", kws_curto))
 
+        # Acumula o melhor `bruto` visto em qualquer camada — usado como
+        # fallback quando filtro estrito não deixa passar nenhum.
+        melhor_pool: list[tuple[float, ResultadoBusca]] = []
+
         for confianca, query in camadas:
             self._rate_limiter.acquire()
             brutos = self._buscar_query(self._page, query, confianca)
-            relevantes = [
-                r for r in brutos
-                if relevancia(descricao, r.descricao_encontrada) >= _RELEVANCIA_MINIMA
-            ]
+            relevantes = []
+            for r in brutos:
+                rel = relevancia(descricao, r.descricao_encontrada)
+                if rel >= _RELEVANCIA_MINIMA:
+                    relevantes.append(r)
+                else:
+                    melhor_pool.append((rel, r))
             if relevantes:
                 return relevantes
-        return []
+
+        # Fallback: nenhum resultado passou no filtro estrito. Em vez de
+        # entregar lista vazia (UI mostra "Não encontrado"), devolve os
+        # top 3 candidatos vistos marcados como 'variacao' (amarelo), pra
+        # operador decidir manualmente. Cenário típico: produto certo
+        # existe mas tem nome só parcialmente parecido com o do edital.
+        melhor_pool.sort(key=lambda x: x[0], reverse=True)
+        top = []
+        ja_vistos: set[tuple[str, float]] = set()
+        for rel, r in melhor_pool:
+            chave = (r.codigo_fornecedor, r.preco)
+            if chave in ja_vistos:
+                continue
+            ja_vistos.add(chave)
+            # Reforça que estes resultados são aproximados
+            top.append(ResultadoBusca(
+                descricao_encontrada=r.descricao_encontrada,
+                marca=r.marca,
+                preco=r.preco,
+                codigo_fornecedor=r.codigo_fornecedor,
+                confianca="variacao",
+                fornecedor=r.fornecedor,
+            ))
+            if len(top) >= 3:
+                break
+        return top
 
     def _buscar_query(self, page, query: str, confianca: str) -> list[ResultadoBusca]:
         """Faz uma busca crua usando a página recebida e retorna até N
@@ -429,16 +461,42 @@ class DantasDistribuidora:
             if kws_curto not in (normalizada, " ".join(kws[:3])):
                 camadas.append(("variacao", kws_curto))
 
+        # Mesma estratégia do Almeida (ver comentário lá): acumula
+        # candidatos não-passados e devolve top 3 como fallback.
+        melhor_pool: list[tuple[float, ResultadoBusca]] = []
+
         for confianca, query in camadas:
             self._rate_limiter.acquire()
             brutos = self._buscar_query(self._page, query, confianca)
-            relevantes = [
-                r for r in brutos
-                if relevancia(descricao, r.descricao_encontrada) >= _RELEVANCIA_MINIMA
-            ]
+            relevantes = []
+            for r in brutos:
+                rel = relevancia(descricao, r.descricao_encontrada)
+                if rel >= _RELEVANCIA_MINIMA:
+                    relevantes.append(r)
+                else:
+                    melhor_pool.append((rel, r))
             if relevantes:
                 return relevantes
-        return []
+
+        melhor_pool.sort(key=lambda x: x[0], reverse=True)
+        top = []
+        ja_vistos: set[tuple[str, float]] = set()
+        for rel, r in melhor_pool:
+            chave = (r.codigo_fornecedor, r.preco)
+            if chave in ja_vistos:
+                continue
+            ja_vistos.add(chave)
+            top.append(ResultadoBusca(
+                descricao_encontrada=r.descricao_encontrada,
+                marca=r.marca,
+                preco=r.preco,
+                codigo_fornecedor=r.codigo_fornecedor,
+                confianca="variacao",
+                fornecedor=r.fornecedor,
+            ))
+            if len(top) >= 3:
+                break
+        return top
 
     def _buscar_query(self, page, query: str, confianca: str) -> list[ResultadoBusca]:
         url = f"{_BASE_URL_DANTAS}/busca?s={quote_plus(query)}"
