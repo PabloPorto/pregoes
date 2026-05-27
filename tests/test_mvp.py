@@ -210,3 +210,69 @@ def test_db_idempotente(tmp_path):
     init_db(db)
     init_db(db)
     assert db.exists()
+
+
+# === Validador semântico ===
+
+from pregoes.validador import score_linha, score_tabela
+
+
+@pytest.mark.parametrize("desc,qtd,unid,vref,score_min", [
+    # Caso claramente válido: descrição longa, qtd, unidade, valor
+    ("ABRAÇADEIRA DE NYLON 100 X 2.5 PCT C/100UND", 40, "PACOTE", 16.40, 0.95),
+    # Sem valor de referência (vimos em vários editais reais): ainda alto
+    ("VERGALHÃO ACO CA-50 12,5 MM", 100, "BARRA", None, 0.80),
+    # Sem unidade explícita: cai mas continua aceitável
+    ("CIMENTO PORTLAND CP-II SACO 50KG", 30, None, 28.90, 0.70),
+])
+def test_score_linha_itens_validos_sao_aceitos(desc, qtd, unid, vref, score_min):
+    s = score_linha(desc, qtd, unid, vref)
+    assert s.score >= score_min, f"Esperado >= {score_min}, veio {s.score:.2f} ({s.motivos})"
+
+
+@pytest.mark.parametrize("desc,qtd,unid,vref", [
+    # Linhas tipicamente capturadas pelo extrator antigo como itens
+    ("Tatiana Araújo Monteiro da Cruz", None, None, None),    # nome de pessoa (TRE-PE)
+    ("XXXXXXXXXXXXXXXXXXXXXXXXXXXX", None, None, None),      # placeholder modelo de proposta
+    ("Total geral", None, None, 1234.56),                     # linha de total
+    ("GRUPO 01 - FERRAMENTAS R$ 10.184,60", None, None, None),  # cabeçalho de grupo
+    ("3.3.90.30", None, None, None),                           # rubrica orçamentária
+    ("Área Requisitante", None, None, None),                  # rótulo de formulário
+    ("", 100, "UND", 10.0),                                    # descrição vazia
+])
+def test_score_linha_lixo_e_descartado(desc, qtd, unid, vref):
+    s = score_linha(desc, qtd, unid, vref)
+    assert s.score < 0.4, f"Esperado < 0.4 (descartável), veio {s.score:.2f} ({s.motivos})"
+
+
+def test_score_tabela_alta_qualidade():
+    """Tabela com 10 linhas todas válidas → score alto."""
+    scores = [score_linha(f"ABRAÇADEIRA DE NYLON {i} MM", 100, "PCT", 5.0) for i in range(10)]
+    sc = score_tabela(scores)
+    assert sc.score >= 0.8
+    assert sc.n_linhas_validas == 10
+
+
+def test_score_tabela_lixo():
+    """Tabela com placeholders/lixo → score baixo."""
+    scores = [score_linha("XXXXXX", None, None, None) for _ in range(5)]
+    sc = score_tabela(scores)
+    assert sc.score < 0.4
+
+
+def test_score_tabela_poucas_linhas_validas_e_penalizado():
+    """Mesmo com 2 linhas perfeitas, tabela com só 2 itens válidos é
+    penalizada (não vale a pena lançar como tabela de itens)."""
+    scores_bons = [score_linha("ABRAÇADEIRA DE NYLON 100 X 2.5", 40, "PCT", 16.40)
+                   for _ in range(2)]
+    sc = score_tabela(scores_bons)
+    # fator_volume = 2/3 ≈ 0.66, então score < 0.7
+    assert sc.score < 0.7
+
+
+def test_extrator_expoe_confianca_global():
+    """Garante que o pipeline novo expõe confiança no resultado."""
+    res = extrair_pdf(PDF_TESTE)
+    assert 0.0 <= res.confianca_global <= 1.0
+    # PDF sintético é controlado: confiança deve ser alta
+    assert res.confianca_global >= 0.9

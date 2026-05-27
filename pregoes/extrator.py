@@ -1,55 +1,87 @@
 """
 Extração de itens de PDFs de edital.
 
-Estratégia em duas passadas (resp 9 — schemas variáveis):
+Pipeline em 3 passos:
 
-PASSADA 1 — heurística automática:
-  - pdfplumber abre o PDF, varre todas as páginas, extrai todas as tabelas
-  - identifica linha de cabeçalho por palavras-chave conhecidas
-  - mapeia colunas para campos canônicos (descrição, quantidade, etc.)
+1. **Coleta bruta** — pdfplumber abre o PDF, varre todas as páginas, junta
+   todas as tabelas extraídas com seus metadados (nº de página, índice).
 
-PASSADA 2 — quando heurística falha:
-  - retorna a tabela bruta + matriz de cabeçalhos detectados
-  - a UI exibe e o usuário faz mapeamento manual
-  - mapeamento é gravado em `mapeamentos_pdf` para o próximo edital
+2. **Identificação de candidatos** — para cada tabela, tenta identificar
+   cabeçalho considerando 1, 2 ou 3 linhas concatenadas (cabeçalhos de
+   edital quase sempre quebram em múltiplas linhas: "Quant. | Eleiçã | o").
+   Tabelas sem cabeçalho próprio mas em sequência com uma já válida são
+   tratadas como continuação.
 
-O cliente disse que SEMPRE tem nome do produto e quantidade — então mesmo
-com schema variável, esses dois campos aparecem em alguma coluna. A
-heurística identifica qual.
+3. **Filtragem por score semântico** — cada tabela candidata é pontuada
+   por `validador.score_tabela`. Só as tabelas com score alto (≥ 0.5)
+   contribuem itens. Dentro das tabelas aceitas, cada item é pontuado
+   individualmente:
+      - score ≥ 0.7  → confianca='extraido'
+      - 0.4 ≤ s < 0.7 → confianca='duvidoso'
+      - score < 0.4  → descartado (não entra no resultado)
+
+   O resultado final expõe `confianca_global` = (#extraido) / (#extraido+duvidoso)
+   para a UI mostrar o quão limpa foi a extração.
+
+Por que essa arquitetura: heurísticas baseadas só em "achei cabeçalho com
+palavras conhecidas" capturam várias tabelas-lixo (formulários de proposta,
+listas de contatos, tabelas de rubrica orçamentária) que existem em qualquer
+edital real. Score por conteúdo distingue tabela-de-itens de tabela-com-aparência-de-itens.
+
+Quando o extrator não conseguir produzir confiança suficiente, a UI ainda
+tem o fallback de mapeamento manual (Fase 1.0.C — tabela `mapeamentos_pdf`).
 """
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
 import pdfplumber
 
+from .validador import ScoreTabela, score_linha, score_tabela
+
 
 # === Vocabulário de cabeçalhos ===
-# Ordem importa: a primeira palavra-chave que casa em uma célula define o campo.
+# Ampliado a partir da inspeção de editais reais (TRE-PE, SEI/HU,
+# Hidráulicos, Hash, etc.). Quando aparecer cabeçalho novo, basta
+# adicionar aqui — não muda lógica.
 
 PALAVRAS_CHAVE = {
     "descricao": [
         "discriminação", "discriminacao", "descrição", "descricao",
         "especificação", "especificacao", "especificações", "especificacoes",
-        "produto", "objeto", "item descrição",
+        "produto", "objeto", "item descrição", "descricao do item",
+        "descritivo", "descrição do produto",
     ],
     "quantidade": [
-        "quantidade", "quant", "qtd", "qtde",
+        "quantidade", "quant", "qtd", "qtde", "quant.", "qtd.",
     ],
     "unidade": [
         "unidade", "unid", "und", "u.m.", "um",
+        "unidade de fornecimento", "unidade de medida",
     ],
     "valor_referencia": [
         "valor unit", "valor de referência", "valor de referencia",
         "preço unit", "preco unit", "preço estimado", "preco estimado",
         "valor unitário", "valor unitario", "preço de referência",
+        "preço unitário máximo", "preco unitario maximo",
+        "preço máximo", "preco maximo", "valor máximo", "valor maximo",
+        "valor unit.", "preço unit.",
     ],
     "codigo_orgao": [
-        "código", "codigo", "item", "nº",
+        # 'item' é frágil (várias tabelas têm); priorizamos 'nº item', 'cod'
+        "nº item", "no item", "nº do item", "código", "codigo",
+        "cod.", "cod ", "item nº",
     ],
+}
+
+# Aliás: 'item' sozinho aparece em muitas tabelas-lixo. Aceitamos só se NÃO
+# houver outro candidato a código (lookahead na função de detecção).
+PALAVRAS_CHAVE_FRACAS = {
+    "codigo_orgao": ["item", "nº", "n°", "n."],
 }
 
 
@@ -63,7 +95,7 @@ class ItemExtraido:
     quantidade: Optional[float] = None
     valor_referencia: Optional[float] = None
     pagina: Optional[int] = None
-    confianca: str = "extraido"   # "extraido" | "duvidoso" | "lixo"
+    confianca: str = "extraido"   # "extraido" | "duvidoso"
 
 
 @dataclass
@@ -74,6 +106,7 @@ class ResultadoExtracao:
     tabelas_brutas: list[list[list[str]]] = field(default_factory=list)
     mapa_colunas_detectado: dict[str, int] = field(default_factory=dict)
     avisos: list[str] = field(default_factory=list)
+    confianca_global: float = 1.0      # 0..1 — proporção de itens 'extraido'
 
     @property
     def total_itens(self) -> int:
@@ -86,11 +119,10 @@ class ResultadoExtracao:
 
 # === Funções utilitárias ===
 
-def _normaliza(texto: str) -> str:
+def _normaliza(texto) -> str:
     """Caixa baixa e remove acentos para comparar cabeçalhos."""
     if not texto:
         return ""
-    import unicodedata
     s = unicodedata.normalize("NFD", str(texto))
     s = "".join(c for c in s if unicodedata.category(c) != "Mn")
     return s.lower().strip()
@@ -103,9 +135,7 @@ def _para_numero(valor) -> Optional[float]:
     if isinstance(valor, (int, float)):
         return float(valor)
     s = str(valor).strip()
-    # Remove R$, espaços
     s = re.sub(r"[R\$\s]", "", s)
-    # Casos: "1.234,56" -> "1234.56"; "1234,56" -> "1234.56"; "1234.56" -> "1234.56"
     if "," in s and "." in s:
         s = s.replace(".", "").replace(",", ".")
     elif "," in s:
@@ -121,133 +151,138 @@ def _para_int(valor) -> Optional[int]:
     return int(n) if n is not None else None
 
 
-def _identifica_cabecalho(linha: list[str]) -> dict[str, int]:
+def _concatenar_celula(cel) -> str:
+    """Normaliza e junta múltiplas linhas internas de uma célula em
+    uma única string para detectar cabeçalhos quebrados em várias linhas."""
+    if cel is None:
+        return ""
+    return str(cel).replace("\n", " ").strip()
+
+
+def _identifica_cabecalho_em_linha(linha: list) -> dict[str, int]:
+    """Detecta mapa {campo: idx_coluna} olhando 1 linha.
+
+    Procura primeiro pelas palavras-chave fortes; só se nenhum campo
+    'codigo_orgao' bater, tenta as fracas ('item', 'nº'). Isso evita
+    capturar tabelas que têm só 'Item / Descrição / ...' (comuns em
+    sumários e formulários de fornecedor) sem o resto do contexto.
     """
-    Dado uma linha (presumida cabeçalho), retorna mapa {campo: indice_coluna}.
-    Retorna dict vazio se não conseguiu identificar nada útil.
-    """
-    mapa = {}
-    for idx, celula in enumerate(linha):
-        celula_norm = _normaliza(celula)
-        if not celula_norm:
+    mapa: dict[str, int] = {}
+    for idx, cel in enumerate(linha or []):
+        norm = _normaliza(_concatenar_celula(cel))
+        if not norm:
             continue
         for campo, palavras in PALAVRAS_CHAVE.items():
             if campo in mapa:
                 continue
             for pal in palavras:
-                if pal in celula_norm:
+                if pal in norm:
                     mapa[campo] = idx
                     break
+
+    if "codigo_orgao" not in mapa:
+        for idx, cel in enumerate(linha or []):
+            norm = _normaliza(_concatenar_celula(cel))
+            for pal in PALAVRAS_CHAVE_FRACAS["codigo_orgao"]:
+                if norm == pal or norm.startswith(pal + " ") or norm.endswith(" " + pal):
+                    mapa["codigo_orgao"] = idx
+                    break
+            if "codigo_orgao" in mapa:
+                break
+
     return mapa
 
 
+def _identifica_cabecalho_multilinha(tabela: list[list], max_linhas: int = 3) -> tuple[dict[str, int], int]:
+    """
+    Tenta identificar cabeçalho considerando até `max_linhas` iniciais
+    concatenadas. Algumas tabelas de edital têm cabeçalho quebrado em
+    2-3 linhas (Quant. / Eleiçã / o) — concatenar resolve.
+
+    Retorna (mapa, n_linhas_consumidas). Se nenhum cabeçalho válido for
+    encontrado, retorna ({}, 0).
+    """
+    if not tabela:
+        return {}, 0
+
+    melhor_mapa: dict[str, int] = {}
+    melhor_n = 0
+    for n in range(1, min(max_linhas, len(tabela)) + 1):
+        # Concatena as primeiras n linhas célula a célula
+        n_cols = max(len(l) for l in tabela[:n] if l)
+        linha_concat = []
+        for c in range(n_cols):
+            partes = []
+            for linha in tabela[:n]:
+                if c < len(linha or []) and linha[c]:
+                    partes.append(str(linha[c]).replace("\n", " ").strip())
+            linha_concat.append(" ".join(partes))
+
+        mapa = _identifica_cabecalho_em_linha(linha_concat)
+        if _eh_cabecalho_valido(mapa) and len(mapa) > len(melhor_mapa):
+            melhor_mapa = mapa
+            melhor_n = n
+
+    return melhor_mapa, melhor_n
+
+
 def _eh_cabecalho_valido(mapa: dict[str, int]) -> bool:
-    """Cabeçalho útil precisa ter pelo menos descrição + quantidade
-    (mínimo garantido pelo cliente)."""
+    """Cabeçalho útil precisa ter descrição + quantidade. Unidade ajuda mas
+    não é obrigatória (algumas tabelas-itens não têm coluna unidade isolada
+    — incorporam dentro da descrição)."""
     return "descricao" in mapa and "quantidade" in mapa
 
 
-def _eh_modelo_de_proposta(linha: list[str]) -> bool:
-    """Detecta tabelas que são o modelo de proposta em branco do edital.
-
-    O 'Anexo - Modelo de Proposta' costuma vir com a coluna 'MARCA/MODELO'
-    (ou 'MARCA' isolada) entre descrição e unidade — diferente da tabela
-    real do Termo de Referência. Se entrarmos nela, capturamos os 2-3 itens
-    de exemplo (1, 2, 3 + 'Etc.') como se fossem do edital.
-
-    TODO(extrator): heurística frágil. Casa em um único marcador textual
-    ('marca/modelo' no cabeçalho) específico do edital de Araruna 06/2026.
-    Outros editais podem usar 'FABRICANTE', 'PROCEDÊNCIA', 'MODELO/MARCA'
-    em ordem diferente, ou anexar o modelo de proposta como tabela com
-    cabeçalho idêntico ao do Termo de Referência (e aí esta checagem não
-    pega). Revisitar quando aparecer o segundo edital real — provavelmente
-    trocando por (a) detecção de "número de item retrocede" entre tabelas
-    consecutivas, ou (b) parar de extrair após detectar a linha 'TOTAL'
-    do Termo de Referência. Por enquanto serve para destravar o cliente.
-    """
-    for celula in linha:
-        norm = _normaliza(celula)
+def _eh_modelo_de_proposta(linha: list) -> bool:
+    """Detecta linha-cabeçalho de modelo de proposta em branco. Casa em
+    'MARCA/MODELO' que aparece em anexos do edital de Araruna 06/2026."""
+    for cel in linha or []:
+        norm = _normaliza(_concatenar_celula(cel))
         if "marca/modelo" in norm or norm in ("marca", "modelo"):
             return True
     return False
 
 
-# === Extração principal ===
+# === Pipeline principal ===
 
-def extrair_pdf(caminho_pdf: str | Path) -> ResultadoExtracao:
-    """
-    Extrai itens de um PDF de edital.
+@dataclass
+class _TabelaBruta:
+    pagina: int
+    indice_pagina: int
+    linhas: list[list]
 
-    Retorna `ResultadoExtracao` mesmo quando falha — a UI vai mostrar
-    avisos e oferecer mapeamento manual.
-    """
-    caminho_pdf = Path(caminho_pdf)
-    resultado = ResultadoExtracao(arquivo=str(caminho_pdf))
 
+@dataclass
+class _TabelaCandidata:
+    bruta: _TabelaBruta
+    mapa: dict[str, int]
+    linha_inicial_dados: int
+    itens: list[ItemExtraido]
+    score: ScoreTabela
+
+
+def _coletar_tabelas(caminho_pdf: Path) -> list[_TabelaBruta]:
+    """Abre o PDF e devolve todas as tabelas em ordem de página/posição."""
+    out: list[_TabelaBruta] = []
     with pdfplumber.open(caminho_pdf) as pdf:
-        mapa_colunas: dict[str, int] = {}
-
-        for n_pagina, page in enumerate(pdf.pages, start=1):
-            tabelas = page.extract_tables() or []
-            for tabela in tabelas:
-                if not tabela or len(tabela) < 1:
-                    continue
-                resultado.tabelas_brutas.append(tabela)
-
-                # Procura o cabeçalho nas primeiras 3 linhas (preâmbulos comuns)
-                cabecalho_idx = None
-                for i in range(min(3, len(tabela))):
-                    if _eh_modelo_de_proposta(tabela[i]):
-                        # Sai do for e marca a tabela inteira para ser ignorada
-                        cabecalho_idx = "ignorar"
-                        break
-                    candidato = _identifica_cabecalho(tabela[i])
-                    if _eh_cabecalho_valido(candidato):
-                        mapa_colunas = candidato
-                        cabecalho_idx = i
-                        break
-
-                if cabecalho_idx == "ignorar":
-                    continue
-
-                # Se a tabela atual não tem cabeçalho próprio, mas já vimos um
-                # cabeçalho válido em página anterior, assumimos que esta tabela
-                # é continuação da anterior (caso típico de tabelas que quebram
-                # entre páginas sem repetir o header).
-                if cabecalho_idx is None:
-                    if mapa_colunas:
-                        linha_inicial = 0
-                    else:
-                        continue
-                else:
-                    linha_inicial = cabecalho_idx + 1
-
-                if not resultado.mapa_colunas_detectado:
-                    resultado.mapa_colunas_detectado = mapa_colunas
-
-                # Extrai linhas de dados
-                for linha in tabela[linha_inicial:]:
-                    item = _extrai_item(linha, mapa_colunas, n_pagina)
-                    if item is not None:
-                        resultado.itens.append(item)
-
-    if not resultado.itens:
-        if resultado.tabelas_brutas:
-            resultado.avisos.append(
-                "Tabelas encontradas, mas cabeçalho não identificado. "
-                "Mapeamento manual necessário."
-            )
-        else:
-            resultado.avisos.append(
-                "Nenhuma tabela detectada no PDF. "
-                "Pode ser PDF escaneado (precisa OCR) ou layout incomum."
-            )
-
-    return resultado
+        for n_pag, page in enumerate(pdf.pages, start=1):
+            try:
+                tabs = page.extract_tables() or []
+            except Exception:
+                continue
+            for idx, tab in enumerate(tabs):
+                if tab and len(tab) >= 1:
+                    out.append(_TabelaBruta(pagina=n_pag, indice_pagina=idx, linhas=tab))
+    return out
 
 
-def _extrai_item(linha: list, mapa: dict[str, int], pagina: int) -> Optional[ItemExtraido]:
-    """Extrai uma linha de tabela em ItemExtraido. Retorna None se for lixo."""
+def _extrair_item_da_linha(linha: list, mapa: dict[str, int], pagina: int) -> Optional[ItemExtraido]:
+    """Extrai uma linha de tabela em ItemExtraido seguindo o mapa de colunas.
+
+    Retorna None apenas quando a linha está completamente vazia. Filtragem
+    de lixo (totais, fragmentos) acontece DEPOIS via score, não aqui — esta
+    função é apenas parser estrutural.
+    """
     if not linha or all(_normaliza(c) == "" for c in linha):
         return None
 
@@ -261,30 +296,14 @@ def _extrai_item(linha: list, mapa: dict[str, int], pagina: int) -> Optional[Ite
         return str(v).strip().replace("\n", " ")
 
     descricao = _get("descricao") or ""
+    if not descricao or len(descricao) < 3:
+        return None
+
     quantidade = _para_numero(_get("quantidade"))
     valor_ref = _para_numero(_get("valor_referencia"))
     codigo = _get("codigo_orgao")
 
-    # Filtra linhas obviamente lixo (totais, subtotais, vazias)
-    if not descricao or len(descricao) < 3:
-        return None
-
-    descr_norm = _normaliza(descricao)
-    if any(p in descr_norm for p in ("total", "subtotal", "valor global", "etc.")):
-        return None
-
-    # Fragmentos órfãos: linhas em que o pdfplumber quebrou uma descrição
-    # longa (ex: "KG.", "URBANA)") chegam sem nenhum campo numérico e com
-    # descrição curta. Não é item; é continuação visual da linha anterior.
-    if (
-        len(descricao) < 12
-        and quantidade is None
-        and valor_ref is None
-        and not codigo
-    ):
-        return None
-
-    item = ItemExtraido(
+    return ItemExtraido(
         item_numero=_para_int(codigo),
         codigo_orgao=codigo,
         descricao=descricao,
@@ -294,8 +313,170 @@ def _extrai_item(linha: list, mapa: dict[str, int], pagina: int) -> Optional[Ite
         pagina=pagina,
     )
 
-    # Heurísticas de qualidade
-    if item.quantidade is None or item.quantidade <= 0:
-        item.confianca = "duvidoso"
 
-    return item
+def _processar_tabela(bruta: _TabelaBruta, mapa_herdado: dict[str, int]) -> Optional[_TabelaCandidata]:
+    """
+    Tenta tornar uma tabela bruta em candidata. Devolve:
+    - candidata com cabeçalho próprio (se conseguiu detectar)
+    - candidata usando mapa_herdado (se a tabela parece continuação)
+    - None se nem isso funciona
+
+    Ignora tabelas que parecem 'modelo de proposta'.
+    """
+    for i in range(min(3, len(bruta.linhas))):
+        if _eh_modelo_de_proposta(bruta.linhas[i]):
+            return None
+
+    mapa, n_consumidas = _identifica_cabecalho_multilinha(bruta.linhas)
+    if mapa:
+        itens = _extrair_itens(bruta, mapa, n_consumidas)
+        sc = score_tabela([
+            score_linha(i.descricao, i.quantidade, i.unidade, i.valor_referencia)
+            for i in itens
+        ])
+        return _TabelaCandidata(bruta=bruta, mapa=mapa, linha_inicial_dados=n_consumidas, itens=itens, score=sc)
+
+    if mapa_herdado:
+        itens = _extrair_itens(bruta, mapa_herdado, 0)
+        sc = score_tabela([
+            score_linha(i.descricao, i.quantidade, i.unidade, i.valor_referencia)
+            for i in itens
+        ])
+        return _TabelaCandidata(bruta=bruta, mapa=mapa_herdado, linha_inicial_dados=0, itens=itens, score=sc)
+
+    return None
+
+
+def _extrair_itens(bruta: _TabelaBruta, mapa: dict[str, int], linha_inicial: int) -> list[ItemExtraido]:
+    out: list[ItemExtraido] = []
+    for linha in bruta.linhas[linha_inicial:]:
+        it = _extrair_item_da_linha(linha, mapa, bruta.pagina)
+        if it is not None:
+            out.append(it)
+    return out
+
+
+def _agrupar_em_blocos(candidatas: list[_TabelaCandidata]) -> list[list[_TabelaCandidata]]:
+    """
+    Agrupa candidatas adjacentes em sequência que compartilham o mesmo mapa
+    de colunas (mesma "tabela de itens" quebrada em várias páginas).
+
+    Tabelas com mapa diferente quebram o bloco. Resultado: lista de blocos,
+    onde cada bloco é uma sequência de candidatas que representam a MESMA
+    tabela lógica.
+    """
+    blocos: list[list[_TabelaCandidata]] = []
+    atual: list[_TabelaCandidata] = []
+    mapa_atual: dict[str, int] = {}
+    for c in candidatas:
+        if not atual or c.mapa == mapa_atual:
+            atual.append(c)
+            mapa_atual = c.mapa
+        else:
+            blocos.append(atual)
+            atual = [c]
+            mapa_atual = c.mapa
+    if atual:
+        blocos.append(atual)
+    return blocos
+
+
+def _score_bloco(bloco: list[_TabelaCandidata]) -> float:
+    """Score agregado de um bloco: media ponderada pelo nº de linhas válidas."""
+    total_validas = sum(c.score.n_linhas_validas for c in bloco)
+    if total_validas == 0:
+        return 0.0
+    media_ponderada = sum(c.score.score * c.score.n_linhas_validas for c in bloco) / total_validas
+    return media_ponderada
+
+
+# Thresholds calibrados na inspeção dos 5 PDFs reais. Revisitar quando
+# aparecerem novos formatos que produzam falsos negativos.
+_THRESHOLD_TABELA_ACEITA = 0.5
+_THRESHOLD_LINHA_EXTRAIDA = 0.7
+_THRESHOLD_LINHA_DUVIDOSA = 0.4
+
+
+def extrair_pdf(caminho_pdf: str | Path) -> ResultadoExtracao:
+    """Extrai itens de um PDF de edital com seleção de tabelas por score.
+
+    Sempre retorna `ResultadoExtracao`. Itens claramente lixo (score < 0.4)
+    são silenciosamente descartados; itens duvidosos (0.4 ≤ s < 0.7) entram
+    com confianca='duvidoso' para a UI marcar visualmente. A propriedade
+    `confianca_global` mostra a fração de extraidos no resultado final.
+    """
+    caminho_pdf = Path(caminho_pdf)
+    resultado = ResultadoExtracao(arquivo=str(caminho_pdf))
+
+    tabelas_brutas = _coletar_tabelas(caminho_pdf)
+    resultado.tabelas_brutas = [t.linhas for t in tabelas_brutas]
+
+    if not tabelas_brutas:
+        resultado.avisos.append(
+            "Nenhuma tabela detectada no PDF. Pode ser PDF escaneado "
+            "(precisa OCR) ou layout incomum."
+        )
+        resultado.confianca_global = 0.0
+        return resultado
+
+    candidatas: list[_TabelaCandidata] = []
+    mapa_herdado: dict[str, int] = {}
+    for bruta in tabelas_brutas:
+        cand = _processar_tabela(bruta, mapa_herdado)
+        if cand is not None:
+            candidatas.append(cand)
+            mapa_herdado = cand.mapa
+
+    if not candidatas:
+        resultado.avisos.append(
+            "Tabelas encontradas, mas nenhum cabeçalho de itens identificado. "
+            "Mapeamento manual necessário."
+        )
+        resultado.confianca_global = 0.0
+        return resultado
+
+    # Agrupa em blocos e escolhe os blocos com score alto. Aceitar múltiplos
+    # blocos cobre o caso "edital com vários grupos" (TRE-PE: grupo 01, 02, ...).
+    blocos = _agrupar_em_blocos(candidatas)
+    blocos_aceitos = [b for b in blocos if _score_bloco(b) >= _THRESHOLD_TABELA_ACEITA]
+
+    if not blocos_aceitos:
+        # Não bateu o threshold em nenhum bloco. Pega o melhor mesmo assim
+        # como melhor esforço — a UI vai mostrar confiança baixa e o
+        # operador pode optar pelo mapeamento manual.
+        melhor = max(blocos, key=_score_bloco, default=None)
+        if melhor is not None:
+            blocos_aceitos = [melhor]
+            resultado.avisos.append(
+                "Confiança baixa nas tabelas detectadas — considere o "
+                "mapeamento manual ou revise os itens cuidadosamente."
+            )
+
+    if not blocos_aceitos:
+        resultado.confianca_global = 0.0
+        return resultado
+
+    # Mapa exposto na UI = o do primeiro bloco aceito (mais comum).
+    resultado.mapa_colunas_detectado = blocos_aceitos[0][0].mapa
+
+    n_extraidos = 0
+    n_duvidosos = 0
+    for bloco in blocos_aceitos:
+        for cand in bloco:
+            for item in cand.itens:
+                sc = score_linha(item.descricao, item.quantidade, item.unidade,
+                                  item.valor_referencia).score
+                if sc >= _THRESHOLD_LINHA_EXTRAIDA:
+                    item.confianca = "extraido"
+                    n_extraidos += 1
+                elif sc >= _THRESHOLD_LINHA_DUVIDOSA:
+                    item.confianca = "duvidoso"
+                    n_duvidosos += 1
+                else:
+                    # Descartado: lixo claro (placeholder, prefixo, etc.)
+                    continue
+                resultado.itens.append(item)
+
+    total_aceitos = n_extraidos + n_duvidosos
+    resultado.confianca_global = (n_extraidos / total_aceitos) if total_aceitos else 0.0
+    return resultado

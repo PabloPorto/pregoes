@@ -139,6 +139,18 @@ def tela_revisao():
 
     st.title("Revisão dos itens extraídos")
 
+    # Badge de confiança da extração — semáforo para o operador entender
+    # rapidamente se pode confiar no resultado ou precisa revisar com lupa.
+    conf = res.confianca_global
+    if conf >= 0.95:
+        st.success(f"✅ Confiança da extração: **{conf:.0%}** — pode seguir.")
+    elif conf >= 0.80:
+        st.warning(f"⚠️ Confiança da extração: **{conf:.0%}** — revise com atenção.")
+    elif conf > 0:
+        st.error(f"🔴 Confiança da extração: **{conf:.0%}** — recomendado mapeamento manual ou conferência item a item.")
+    else:
+        st.error("🔴 Não foi possível identificar uma tabela de itens neste PDF.")
+
     # Indicadores
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Total de itens", res.total_itens)
