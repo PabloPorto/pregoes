@@ -482,7 +482,9 @@ def tela_configuracoes():
         "(arquivo <code>data/credenciais.json</code>), sem envio para servidores externos.",
     )
 
-    aba_almeida, aba_dantas, aba_ia = st.tabs(["Almeida", "Dantas", "IA (Gemini)"])
+    aba_almeida, aba_dantas, aba_ia, aba_cat = st.tabs(
+        ["Almeida", "Dantas", "IA (Gemini)", "Catálogo histórico"]
+    )
 
     with aba_almeida:
         atual = credenciais.carregar("almeida") or {"email": "", "senha": ""}
@@ -630,6 +632,9 @@ def tela_configuracoes():
                                 tipo="danger",
                             )
 
+    with aba_cat:
+        _aba_catalogo()
+
 
 # === Tela: BUSCA DE PREÇOS ===
 def tela_busca_precos():
@@ -660,16 +665,14 @@ def tela_busca_precos():
         )
         return
 
-    # Estimativa: ~1,5s por item por fornecedor (modelo serial — cada
-    # fornecedor processado um por vez, ver _executar_busca). Cache hit
-    # encurta drasticamente nas revisões subsequentes.
-    n_forn = len(fornecedores_disponiveis)
-    minutos_est = max(1, round(len(itens) * 1.5 * n_forn / 60))
+    # Estimativa de tempo varia muito (rate limit do site, latência de
+    # rede, tamanho do edital) e dava números ruins na prática. Trocada
+    # por mensagem genérica + nota sobre cache.
     fornec_str = " + ".join(f.capitalize() for f in fornecedores_disponiveis)
     st.caption(
         f"{len(itens)} itens serão buscados em {fornec_str}. "
-        f"Estimativa: ~{minutos_est} min na primeira execução "
-        f"(revisões com cache de 2 dias ficam quase instantâneas)."
+        "Pode demorar alguns minutos. Revisões posteriores ficam "
+        "mais rápidas graças ao cache."
     )
 
     # Se ainda não buscou, oferecer botão para começar
@@ -953,7 +956,58 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
         # marcações do operador feitas em tempo real no widget.
         itens = st.session_state.get("itens_revisados") or []
         markup = st.session_state.get("markup", config.MARKUP_DEFAULT)
+        # Camada 4 (Q12): registra escolhas como aprendizado. Próximas
+        # buscas da MESMA descrição reusam direto a marca/código via
+        # `db.aprendido_buscar`, pulando scraper textual.
+        _registrar_aprendizado(itens, st.session_state.selecoes,
+                                st.session_state.get("resultados_busca") or {})
         _gerar_excel(itens, markup=markup, selecoes=st.session_state.selecoes)
+
+
+def _registrar_aprendizado(itens: list, selecoes: dict, resultados: dict) -> None:
+    """Grava em `mapeamentos_aprendidos` cada (descrição → marca/código)
+    escolhida pelo operador. Idempotente: UPSERT por (descricao_norm, forn).
+
+    Persistir tanto seleções 'default' (mais barato) quanto manuais — a
+    intenção é a mesma: "para esta descrição, esta foi a escolha válida".
+    Volume previsto: 500 itens × 2 fornecedores = ≤1000 registros/edital,
+    insignificante no SQLite.
+    """
+    from pregoes import db as _db
+    from pregoes.normalizador import normalizar_descricao as _norm
+
+    if not itens or not selecoes:
+        return
+    try:
+        with get_conn() as conn:
+            for idx, item in enumerate(itens):
+                sel = selecoes.get(idx)
+                if sel is None:
+                    continue
+                desc_norm = _norm(item.descricao)
+                if not desc_norm:
+                    continue
+                # Descobre fornecedor olhando o resultado escolhido pelo operador
+                opcoes = resultados.get(idx, [])
+                fornecedor = None
+                for o in opcoes:
+                    if (o.preco == sel.preco
+                            and o.codigo_fornecedor == sel.codigo_fornecedor
+                            and o.marca == sel.marca):
+                        fornecedor = o.fornecedor
+                        break
+                if not fornecedor:
+                    continue
+                _db.aprendido_gravar(
+                    conn, desc_norm, fornecedor,
+                    sel.codigo_fornecedor, sel.marca, sel.preco,
+                )
+    except Exception:
+        # Aprendizado é melhoria progressiva — falha aqui não bloqueia
+        # a geração da planilha. Logamos no console pra debug, mas a UI
+        # segue normal.
+        import traceback
+        traceback.print_exc()
 
 
 # === Tela: MAPEAMENTO MANUAL ===
@@ -1139,6 +1193,104 @@ def tela_mapeamento():
         st.session_state.extracao = novo_res
         st.session_state.df_editavel = None  # força refresh do data_editor
         ir_para("revisao")
+
+
+# === Aba Catálogo (em Configurações) ===
+
+def _aba_catalogo():
+    """Importa planilhas históricas (formato MATRIZ) para popular a
+    Camada 0 da busca de preços.
+
+    Mostra status: quantos produtos no catálogo, quantos com código por
+    fornecedor. Após upload + clique em "Importar", chama o módulo
+    `pregoes.importador` e mostra os números retornados.
+    """
+    from pregoes import importador as _importador
+
+    style.bloco_aviso(
+        "O <b>catálogo histórico</b> acelera a busca de preços nos "
+        "próximos pregões. Quando um item do edital casa com um produto "
+        "que você já comprou no passado, o sistema vai direto pelo "
+        "<b>código do produto</b> nos fornecedores — sem precisar "
+        "adivinhar pela descrição.",
+        tipo="info",
+    )
+
+    # Estatísticas atuais
+    with get_conn() as conn:
+        total = conn.execute("SELECT COUNT(*) FROM produtos").fetchone()[0]
+        com_almeida = conn.execute(
+            "SELECT COUNT(*) FROM produtos WHERE codigo_almeida IS NOT NULL AND codigo_almeida != ''"
+        ).fetchone()[0]
+        com_dantas = conn.execute(
+            "SELECT COUNT(*) FROM produtos WHERE codigo_dantas IS NOT NULL AND codigo_dantas != ''"
+        ).fetchone()[0]
+        n_historico = conn.execute("SELECT COUNT(*) FROM precos_historico").fetchone()[0]
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Produtos no catálogo", total)
+    c2.metric("Com código Almeida", com_almeida)
+    c3.metric("Com código Dantas", com_dantas)
+    c4.metric("Preços históricos", n_historico)
+
+    st.divider()
+    st.markdown(
+        "**Para importar:** envie 1 ou mais planilhas no mesmo formato da "
+        "MATRIZ (com colunas C/D/E/F preenchidas e idealmente L/T/U). "
+        "Indique de qual fornecedor é o código da coluna T (`almeida` ou "
+        "`dantas`). Cada planilha só é contabilizada uma vez — re-enviar "
+        "não duplica preços."
+    )
+
+    uploads = st.file_uploader(
+        "Planilhas históricas (.xlsx)",
+        type=["xlsx"],
+        accept_multiple_files=True,
+        key="catalogo_uploads",
+    )
+    fornecedor = st.radio(
+        "Fornecedor associado ao código (coluna T) das planilhas:",
+        options=["almeida", "dantas", "nenhum (só descrição/marca)"],
+        index=0,
+        horizontal=True,
+        help=(
+            "Se você consultou Almeida e cadastrou códigos da Almeida na "
+            "coluna T, escolha 'almeida'. Para planilhas sem códigos "
+            "específicos, escolha 'nenhum' — descrições e marcas ainda "
+            "entram no catálogo."
+        ),
+    )
+
+    if uploads and st.button("Importar planilhas", type="primary"):
+        # Salva uploads em disco temporário (importador lê de path)
+        import tempfile
+        paths = []
+        for upl in uploads:
+            tmp = tempfile.NamedTemporaryFile(
+                delete=False, suffix=".xlsx",
+                dir=str(config.DATA_DIR / "historico"),
+            )
+            tmp.write(upl.read())
+            tmp.close()
+            paths.append(Path(tmp.name))
+
+        forn_arg = None if fornecedor.startswith("nenhum") else fornecedor
+
+        with st.spinner(f"Importando {len(paths)} planilha(s)…"):
+            try:
+                stats = _importador.importar(paths, fornecedor=forn_arg)
+            except Exception as exc:
+                style.bloco_aviso(
+                    f"Falha ao importar: {type(exc).__name__}: {exc}",
+                    tipo="danger",
+                )
+                return
+
+        style.bloco_aviso(stats.resumo(), tipo="success")
+        if stats.avisos:
+            with st.expander(f"⚠️ Avisos ({len(stats.avisos)})"):
+                for av in stats.avisos:
+                    st.markdown(f"- {av}")
 
 
 # === Roteador ===
