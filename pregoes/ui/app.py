@@ -1423,11 +1423,56 @@ def _aba_catalogo():
         ).fetchone()[0]
         n_historico = conn.execute("SELECT COUNT(*) FROM precos_historico").fetchone()[0]
 
+    with get_conn() as conn:
+        n_canon = conn.execute("SELECT COUNT(*) FROM produtos_canonico").fetchone()[0]
+
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Produtos no catálogo", total)
     c2.metric("Com código Almeida", com_almeida)
     c3.metric("Com código Dantas", com_dantas)
-    c4.metric("Preços históricos", n_historico)
+    c4.metric("Nomes padronizados (IA)", n_canon)
+
+    # === Padronização de nomes (Fase B) ===
+    faltam = total - n_canon
+    if total > 0 and faltam > 0:
+        from pregoes import credenciais as _cred
+        tem_chave = bool(_cred.carregar_chave_api("gemini"))
+        style.bloco_aviso(
+            f"<b>{faltam}</b> produto(s) ainda sem nome padronizado. A "
+            "padronização usa a IA para alinhar o vocabulário do catálogo com "
+            "o dos editais (ex.: <code>sxt</code>→<code>sextavado</code>, "
+            "<code>cano</code>↔<code>tubo</code>), o que faz a busca por "
+            "código casar muito mais itens. Roda uma vez e fica salvo.",
+            tipo="info" if tem_chave else "warning",
+        )
+        if not tem_chave:
+            style.bloco_aviso(
+                "Configure a chave do Gemini na aba <b>IA</b> para padronizar.",
+                tipo="warning",
+            )
+        elif st.button("Padronizar nomes do catálogo (IA)", type="primary"):
+            from pregoes import alinhador
+            barra = st.progress(0.0, text="Padronizando…")
+            def _cb(feitos, tot):
+                barra.progress(min(feitos / max(tot, 1), 1.0),
+                               text=f"Padronizando… {feitos}/{tot}")
+            with st.spinner("Padronizando nomes (pode levar 1-2 minutos)…"):
+                try:
+                    stats = alinhador.normalizar_catalogo(callback=_cb)
+                except Exception as exc:
+                    style.bloco_aviso(
+                        f"Falha ao padronizar: {type(exc).__name__}: {exc}",
+                        tipo="danger")
+                    return
+            barra.progress(1.0, text="Concluído.")
+            style.bloco_aviso(
+                f"Padronização concluída: {stats['normalizados']} produto(s) "
+                f"processado(s).", tipo="success")
+            st.rerun()
+    elif total > 0:
+        style.bloco_aviso(
+            "Todos os produtos têm nome padronizado — a busca por código "
+            "está no máximo de cobertura.", tipo="success")
 
     st.divider()
     st.markdown(
