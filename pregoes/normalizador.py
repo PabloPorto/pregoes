@@ -321,10 +321,10 @@ _TYPO_SCORE_PISO = 0.85
 
 
 # === Tier 2: match de dimensão (Q12 / 2026-06) ===
-# Só eixos com semântica ÚNICA e confiável no domínio. Deliberadamente NÃO
-# captura "NxM" (8x6) nem "mm" soltos: são ambíguos (quantidade? espessura?
-# diâmetro? comprimento?) e gerariam falso negativo em matches bons, onde o
-# formato da dimensão difere entre edital e catálogo.
+# Eixos com semântica confiável no domínio. `mm` foi ADICIONADO em 2026-06
+# após um edital hidráulico real expor que joelho 60mm casava joelho 20mm
+# (mm é o diâmetro nominal — a dimensão #1 em conexões PVC). Mantém-se de
+# fora apenas o "NxM" solto (8x6), que é genuinamente ambíguo.
 _NUMERAL_MAP = {
     "um": "1", "uma": "1", "dois": "2", "duas": "2", "tres": "3",
     "quatro": "4", "cinco": "5", "seis": "6", "sete": "7", "oito": "8",
@@ -336,6 +336,10 @@ _RE_AMPERE = re.compile(r"\b(\d+)(?:a\b|\s*amperes?\b)")
 _RE_VOLT = re.compile(r"\b(\d+)\s*v(?:olts?)?\b")
 _RE_WATT = re.compile(r"\b(\d+)\s*w(?:atts?)?\b")
 _RE_CA = re.compile(r"\bca[\s-]?(\d+)\b")
+# Milímetro/centímetro: diâmetro nominal de conexões, bitola de cabo, etc.
+# Exige a unidade colada/adjacente — "6m" (metros) NÃO casa "mm".
+_RE_MM = re.compile(r"\b(\d+(?:\.\d+)?)\s*mm\b")
+_RE_CM = re.compile(r"\b(\d+(?:\.\d+)?)\s*cm\b")
 
 
 def _converter_numerais_extenso(texto: str) -> str:
@@ -375,6 +379,10 @@ def extrair_dimensoes(texto: str | None) -> set[tuple[str, str]]:
         dims.add(("w", v))
     for v in _RE_CA.findall(t):
         dims.add(("ca", v))
+    for v in _RE_MM.findall(t):
+        dims.add(("mm", v))
+    for v in _RE_CM.findall(t):
+        dims.add(("cm", v))
     return dims
 
 
