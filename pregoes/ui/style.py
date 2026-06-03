@@ -272,6 +272,142 @@ section[data-testid="stSidebar"] .block-container {{
     color: {PALETA['text_secondary']};
     font-size: 0.78rem;
 }}
+
+/* ===== Painel de progresso da busca de preços ===== */
+.pp-busca-painel {{
+    background: {PALETA['surface']};
+    border: 1px solid {PALETA['border']};
+    border-radius: 14px;
+    padding: 1.5rem 1.75rem;
+    margin: 0.5rem 0 1rem 0;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}}
+.pp-busca-cab {{
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+    margin-bottom: 1rem;
+}}
+.pp-busca-titulo {{
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: {PALETA['text']};
+    line-height: 1.3;
+}}
+.pp-busca-sub {{
+    color: {PALETA['text_secondary']};
+    font-size: 0.85rem;
+    margin-top: 0.15rem;
+}}
+.pp-busca-tempo {{
+    color: {PALETA['text_secondary']};
+    font-variant-numeric: tabular-nums;
+    font-size: 0.9rem;
+    background: {PALETA['bg']};
+    padding: 0.35rem 0.7rem;
+    border-radius: 8px;
+    border: 1px solid {PALETA['border']};
+    white-space: nowrap;
+}}
+.pp-busca-barra {{
+    height: 8px;
+    background: {PALETA['bg']};
+    border-radius: 999px;
+    overflow: hidden;
+    margin: 0.25rem 0 1rem 0;
+    border: 1px solid {PALETA['border']};
+}}
+.pp-busca-barra-fill {{
+    height: 100%;
+    background: linear-gradient(90deg, {PALETA['primary']}, {PALETA['primary_hover']});
+    transition: width 240ms ease-out;
+    border-radius: 999px;
+}}
+.pp-busca-counter {{
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 0.6rem;
+}}
+.pp-busca-item-label {{
+    color: {PALETA['text_secondary']};
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 600;
+}}
+.pp-busca-pct {{
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: {PALETA['primary']};
+    font-variant-numeric: tabular-nums;
+}}
+.pp-busca-item-desc {{
+    background: {PALETA['bg']};
+    border: 1px solid {PALETA['border']};
+    border-left: 3px solid {PALETA['primary']};
+    border-radius: 8px;
+    padding: 0.85rem 1rem;
+    margin-bottom: 1rem;
+    color: {PALETA['text']};
+    font-size: 0.98rem;
+    line-height: 1.45;
+    word-break: break-word;
+    min-height: 3rem;
+    display: flex;
+    align-items: center;
+}}
+.pp-busca-item-desc.is-idle {{
+    color: {PALETA['text_secondary']};
+    font-style: italic;
+    border-left-color: {PALETA['border_strong']};
+}}
+.pp-busca-stats {{
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid {PALETA['border']};
+}}
+.pp-busca-stat {{
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}}
+.pp-busca-stat-nome {{
+    font-weight: 600;
+    color: {PALETA['text']};
+    font-size: 0.85rem;
+}}
+
+/* Sumário pré-busca: cards informativos lado a lado */
+.pp-resumo-pre {{
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 0.75rem;
+    margin: 0.5rem 0 1rem 0;
+}}
+.pp-resumo-item {{
+    background: {PALETA['surface']};
+    border: 1px solid {PALETA['border']};
+    border-radius: 10px;
+    padding: 0.85rem 1rem;
+}}
+.pp-resumo-item-label {{
+    color: {PALETA['text_secondary']};
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 600;
+    margin-bottom: 0.2rem;
+}}
+.pp-resumo-item-valor {{
+    color: {PALETA['text']};
+    font-size: 1.1rem;
+    font-weight: 600;
+}}
 </style>
 """
 
@@ -394,3 +530,111 @@ def sidebar_status(itens: list[tuple[str, str, TipoBadge]]) -> None:
         for rotulo, valor, tipo in itens
     )
     st.markdown(f'<div class="pp-side-status">{rows}</div>', unsafe_allow_html=True)
+
+
+def resumo_pre_busca(itens: list[tuple[str, str]]) -> None:
+    """
+    Bloco de cards informativos lado a lado, usado antes da busca começar.
+
+    ``itens`` = lista de tuplas (rótulo, valor). Ex: [("Itens", "27"),
+    ("Fornecedores", "Almeida + Dantas"), ("Cache", "2 dias")].
+    """
+    cards = "".join(
+        f'<div class="pp-resumo-item">'
+        f'<div class="pp-resumo-item-label">{rotulo}</div>'
+        f'<div class="pp-resumo-item-valor">{valor}</div>'
+        f'</div>'
+        for rotulo, valor in itens
+    )
+    st.markdown(f'<div class="pp-resumo-pre">{cards}</div>', unsafe_allow_html=True)
+
+
+def painel_progresso_busca(
+    *,
+    frac: float,
+    titulo: str,
+    sub: str,
+    tempo: str,
+    item_atual: int,
+    item_total: int,
+    item_descricao: str,
+    stats: list[tuple[str, int, int, int]] | None = None,
+    encerrado: bool = False,
+) -> None:
+    """
+    Painel grande de progresso ocupando full-width — substitui o ``st.progress``
+    cru espremido em coluna estreita.
+
+    Renderiza:
+    - Título + subtítulo (ex.: "Buscando preços" / "Almeida (1 de 2)").
+    - Tempo decorrido em pílula.
+    - Barra de progresso fina + percentual destacado.
+    - Card com descrição completa do item atual (não truncada).
+    - Resumo dos fornecedores já concluídos (chips por status).
+
+    Args:
+        frac: progresso global [0, 1].
+        titulo: ex.: "Buscando preços".
+        sub: ex.: "Almeida (fornecedor 1 de 2)".
+        tempo: ex.: "01:42".
+        item_atual: índice 1-based do item em processamento.
+        item_total: total de itens.
+        item_descricao: descrição completa do item atual (ou texto-stub
+            quando entre fornecedores).
+        stats: lista de tuplas ``(fornecedor, n_ok, n_variacao, n_vazio)``
+            para fornecedores já concluídos. Renderiza como chips no rodapé.
+        encerrado: se True, esconde a linha de "item atual" (busca acabou).
+    """
+    pct = max(0, min(100, int(round(frac * 100))))
+
+    stats_html = ""
+    if stats:
+        partes = []
+        for nome, n_ok, n_var, n_vazio in stats:
+            chips = badge(f"{n_ok} encontrados", "success")
+            if n_var:
+                chips += " " + badge(f"{n_var} por variação", "warning")
+            if n_vazio:
+                chips += " " + badge(f"{n_vazio} sem resultado", "danger")
+            partes.append(
+                f'<div class="pp-busca-stat">'
+                f'<span class="pp-busca-stat-nome">{nome.capitalize()}</span>'
+                f'<span>{chips}</span>'
+                f'</div>'
+            )
+        stats_html = f'<div class="pp-busca-stats">{"".join(partes)}</div>'
+
+    if encerrado:
+        item_block = ""
+    else:
+        idle = item_atual <= 0
+        cls_idle = " is-idle" if idle else ""
+        rotulo = (
+            "Aguardando início" if idle
+            else f"Item {item_atual} de {item_total}"
+        )
+        item_block = (
+            f'<div class="pp-busca-counter">'
+            f'  <span class="pp-busca-item-label">{rotulo}</span>'
+            f'  <span class="pp-busca-pct">{pct}%</span>'
+            f'</div>'
+            f'<div class="pp-busca-item-desc{cls_idle}">{item_descricao or "—"}</div>'
+        )
+
+    st.markdown(
+        f'<div class="pp-busca-painel">'
+        f'  <div class="pp-busca-cab">'
+        f'    <div>'
+        f'      <div class="pp-busca-titulo">{titulo}</div>'
+        f'      <div class="pp-busca-sub">{sub}</div>'
+        f'    </div>'
+        f'    <div class="pp-busca-tempo">{tempo}</div>'
+        f'  </div>'
+        f'  <div class="pp-busca-barra">'
+        f'    <div class="pp-busca-barra-fill" style="width:{pct}%"></div>'
+        f'  </div>'
+        f'  {item_block}'
+        f'  {stats_html}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )

@@ -640,7 +640,7 @@ def tela_configuracoes():
 def tela_busca_precos():
     style.header_pagina(
         "Busca de preços nos fornecedores",
-        "Consulta cada item nos fornecedores configurados (Almeida e/ou Dantas) e mostra as marcas "
+        "Consulta cada item nos fornecedores configurados e lista as marcas "
         "disponíveis. Você escolhe qual marca entra na planilha.",
     )
 
@@ -665,33 +665,107 @@ def tela_busca_precos():
         )
         return
 
-    # Estimativa de tempo varia muito (rate limit do site, latência de
-    # rede, tamanho do edital) e dava números ruins na prática. Trocada
-    # por mensagem genérica + nota sobre cache.
-    fornec_str = " + ".join(f.capitalize() for f in fornecedores_disponiveis)
-    st.caption(
-        f"{len(itens)} itens serão buscados em {fornec_str}. "
-        "Pode demorar alguns minutos. Revisões posteriores ficam "
-        "mais rápidas graças ao cache."
-    )
-
-    # Se ainda não buscou, oferecer botão para começar
-    if "resultados_busca" not in st.session_state:
-        col_a, col_b = st.columns([1, 5])
-        with col_a:
-            if st.button("Iniciar busca", type="primary"):
-                _executar_busca(itens, fornecedores_disponiveis)
-                st.rerun()
-        with col_b:
-            if st.button("Voltar para revisão"):
-                ir_para("revisao")
+    # Já buscou: pula direto para a tela de seleção.
+    if "resultados_busca" in st.session_state:
+        diag_path = st.session_state.get("diag_path")
+        if diag_path:
+            from pathlib import Path as _Path
+            p = _Path(diag_path)
+            if p.exists():
+                with open(p, "rb") as f:
+                    st.download_button(
+                        "Baixar relatório de diagnóstico (XLSX)",
+                        data=f.read(),
+                        file_name=p.name,
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
+                st.caption(
+                    f"Arquivo salvo em `data/diagnostico/{p.name}`. "
+                    "Abra no Excel/LibreOffice, anote `correto`/`errado`/`aceitavel` "
+                    "na coluna **Avaliação** da aba **Resumo** e devolva para calibrar."
+                )
+        _mostrar_selecao(itens, st.session_state.resultados_busca)
         return
 
-    # Já buscou: mostrar resultados + seleção
-    _mostrar_selecao(itens, st.session_state.resultados_busca)
+    # === Pré-busca: cards de resumo + CTA ===
+    # Não usamos mais "estimativa de tempo" (variava muito com latência),
+    # mas mostramos o que o operador precisa saber antes de começar.
+    fornec_str = " + ".join(f.capitalize() for f in fornecedores_disponiveis)
+    style.resumo_pre_busca([
+        ("Itens a buscar", str(len(itens))),
+        ("Fornecedores", fornec_str),
+        ("Cache de preço", f"{config.CACHE_PRECO_DIAS} dias"),
+    ])
+
+    style.bloco_aviso(
+        "Cada item é consultado em até 3 camadas: descrição completa, "
+        "depois keywords (top-3) e por fim keywords reduzidas. Para na "
+        "primeira camada que devolver resultado relevante. Itens consultados "
+        "recentemente vêm do cache local sem novo acesso ao site.",
+        tipo="info",
+    )
+
+    col_chk1, col_chk2, col_chk3 = st.columns(3)
+    with col_chk1:
+        salvar_diag = st.checkbox(
+            "Salvar relatório de diagnóstico (XLSX)",
+            value=False,
+            help=(
+                "Gera planilha com o 'raio-x' da busca por item: queries "
+                "tentadas, candidatos retornados, relevância de cada um. "
+                "Útil para calibrar. Não altera o algoritmo."
+            ),
+        )
+    with col_chk2:
+        limpar_cache_antes = st.checkbox(
+            "Limpar cache antes de buscar",
+            value=False,
+            help=(
+                "Apaga buscas anteriores armazenadas (TTL 2 dias). Útil "
+                "quando o algoritmo mudou e os resultados em cache podem "
+                "estar viciados pela versão antiga. Próxima busca vai "
+                "consultar todos os fornecedores do zero (mais lenta)."
+            ),
+        )
+    with col_chk3:
+        usar_judge = st.checkbox(
+            "Usar IA para reordenar candidatos (Gemini)",
+            value=False,
+            help=(
+                "Quando ativo, itens em 'top 3 variação' vão para o "
+                "Gemini julgar quais correspondem. **Atenção:** consome "
+                "a mesma cota gratuita usada pela extração de PDF — se "
+                "exceder o limite diário, a extração de PDF também "
+                "falha. Mantenha desligado até calibrar via diagnóstico."
+            ),
+        )
+
+    col_a, col_b, _spacer = st.columns([2, 2, 6])
+    with col_a:
+        iniciar = st.button("Iniciar busca", type="primary", use_container_width=True)
+    with col_b:
+        if st.button("Voltar para revisão", use_container_width=True):
+            ir_para("revisao")
+            return
+    if iniciar:
+        if limpar_cache_antes:
+            from pregoes import db as _db
+            with get_conn() as _conn:
+                n = _db.cache_limpar(_conn)
+            style.bloco_aviso(
+                f"Cache limpo: {n} entradas removidas.", tipo="info",
+            )
+        # IMPORTANTE: chamar fora de `with col_a:` evita que o painel
+        # de progresso herde a largura estreita da coluna do botão.
+        _executar_busca(itens, fornecedores_disponiveis,
+                        salvar_diagnostico=salvar_diag,
+                        usar_llm_judge=usar_judge)
+        st.rerun()
 
 
-def _executar_busca(itens: list, fornecedores_nomes: list[str]) -> None:
+def _executar_busca(itens: list, fornecedores_nomes: list[str],
+                     *, salvar_diagnostico: bool = False,
+                     usar_llm_judge: bool = False) -> None:
     """Roda a busca em cada fornecedor SEQUENCIALMENTE, abrindo e fechando
     o Playwright entre eles.
 
@@ -704,26 +778,86 @@ def _executar_busca(itens: list, fornecedores_nomes: list[str]) -> None:
     Os resultados de cada fornecedor são concatenados — cada item do
     edital pode acabar com opções de Almeida E de Dantas, e a UI mostra
     todas para o operador escolher (default: mais barato).
+
+    UI: usa ``style.painel_progresso_busca`` em um placeholder
+    full-width — não dentro de ``st.columns`` — para o nome do item
+    aparecer inteiro, com tempo decorrido e sumário por fornecedor.
     """
+    import time
+
     from pregoes.scraper import (
         AlmeidaDistribuidor,
         DantasDistribuidora,
         ResultadoLote,
         buscar_precos_para_itens,
     )
+    from pregoes.diagnostico import LogDiagnostico
 
     classes = {"almeida": AlmeidaDistribuidor, "dantas": DantasDistribuidora}
+    n_forn = len(fornecedores_nomes)
+    t_inicio = time.monotonic()
 
-    progress = st.progress(0.0, text="Iniciando…")
-    status_box = st.empty()
+    # Log compartilhado entre todos os fornecedores (concatena por item)
+    log_diag = None
+    if salvar_diagnostico:
+        log_diag = LogDiagnostico(
+            arquivo_edital=st.session_state.get("pdf_path"),
+            fornecedores=list(fornecedores_nomes),
+        )
 
-    # Acumula resultados de cada fornecedor
+    # Placeholder único, full-width: o painel inteiro é redesenhado a cada
+    # callback, mantendo header, barra, item atual e stats coerentes.
+    painel = st.empty()
+    status_final = st.empty()
+
+    def _tempo() -> str:
+        secs = int(time.monotonic() - t_inicio)
+        m, s = divmod(secs, 60)
+        if m >= 60:
+            h, m = divmod(m, 60)
+            return f"{h:d}h {m:02d}min"
+        return f"{m:02d}:{s:02d}"
+
+    def _render(
+        frac: float, fornecedor: str, forn_idx: int,
+        item_atual: int, item_total: int, item_desc: str,
+        stats_concluidos: list, encerrado: bool = False,
+    ) -> None:
+        with painel.container():
+            style.painel_progresso_busca(
+                frac=frac,
+                titulo="Buscando preços" if not encerrado else "Busca concluída",
+                sub=(
+                    f"{fornecedor.capitalize()} · fornecedor "
+                    f"{forn_idx + 1} de {n_forn}"
+                    if fornecedor else
+                    "Todos os fornecedores"
+                ),
+                tempo=_tempo(),
+                item_atual=item_atual,
+                item_total=item_total,
+                item_descricao=item_desc,
+                stats=stats_concluidos or None,
+                encerrado=encerrado,
+            )
+
+    # Acumuladores ===
     resultados_agregados: dict[int, list] = {idx: [] for idx in range(len(itens))}
     erros_agregados: list = []
     cache_hits_total = 0
     cache_misses_total = 0
+    stats_concluidos: list[tuple[str, int, int, int]] = []
+    total_itens = len(itens)
 
-    n_forn = len(fornecedores_nomes)
+    # Estado inicial visível antes do primeiro callback do scraper
+    _render(
+        frac=0.0,
+        fornecedor=fornecedores_nomes[0] if fornecedores_nomes else "",
+        forn_idx=0,
+        item_atual=0, item_total=total_itens,
+        item_desc="Preparando ambiente…",
+        stats_concluidos=stats_concluidos,
+    )
 
     for forn_idx, nome in enumerate(fornecedores_nomes):
         cred = credenciais.carregar(nome)
@@ -731,26 +865,31 @@ def _executar_busca(itens: list, fornecedores_nomes: list[str]) -> None:
             continue
         cls = classes[nome]
 
-        progress.progress(
-            forn_idx / max(n_forn, 1),
-            text=f"Fazendo login em {nome.capitalize()} "
-                 f"({forn_idx + 1}/{n_forn})…"
+        _render(
+            frac=forn_idx / max(n_forn, 1),
+            fornecedor=nome, forn_idx=forn_idx,
+            item_atual=0, item_total=total_itens,
+            item_desc=f"Fazendo login em {nome.capitalize()}…",
+            stats_concluidos=stats_concluidos,
         )
 
-        # callback de progresso DENTRO desse fornecedor — composto:
-        # avança proporcional ao total de fornecedores
         def cb(atual, total, msg, _forn_idx=forn_idx, _nome=nome):
             frac_dentro = atual / max(total, 1)
             frac_total = (_forn_idx + frac_dentro) / max(n_forn, 1)
-            progress.progress(
-                frac_total,
-                text=f"{_nome.capitalize()} {atual}/{total} — {msg}"
+            _render(
+                frac=frac_total,
+                fornecedor=_nome, forn_idx=_forn_idx,
+                item_atual=atual, item_total=total,
+                item_desc=msg,
+                stats_concluidos=stats_concluidos,
             )
 
         try:
             with cls(cred["email"], cred["senha"]) as forn:
                 lote = buscar_precos_para_itens(
                     itens, [forn], progresso_callback=cb,
+                    diagnostico=log_diag,
+                    usar_llm_judge=usar_llm_judge,
                 )
         except Exception as exc:
             # Falha grave (login, layout mudou) — registra como erro
@@ -762,7 +901,18 @@ def _executar_busca(itens: list, fornecedores_nomes: list[str]) -> None:
                 descricao_resumo="(login/inicialização)",
                 mensagem=f"{type(exc).__name__}: {exc}",
             ))
+            stats_concluidos.append((nome, 0, 0, total_itens))
             continue
+
+        # Sumário deste fornecedor (alimenta a faixa de chips no painel)
+        n_ok = sum(1 for bag in lote.resultados.values() if bag)
+        n_var = sum(
+            1 for bag in lote.resultados.values()
+            if bag and any(r.confianca == "variacao" for r in bag)
+        )
+        n_vazio = total_itens - n_ok
+        # "ok" exclui os por variação para refletir o badge da seleção
+        stats_concluidos.append((nome, n_ok - n_var, n_var, n_vazio))
 
         # Mescla resultados do fornecedor no agregado
         for idx, bag in lote.resultados.items():
@@ -779,46 +929,80 @@ def _executar_busca(itens: list, fornecedores_nomes: list[str]) -> None:
         cache_misses=cache_misses_total,
     )
 
-    progress.progress(1.0, text="Busca concluída.")
+    # Painel final — barra cheia, sem item atual, com sumário consolidado.
+    _render(
+        frac=1.0, fornecedor="", forn_idx=n_forn - 1,
+        item_atual=total_itens, item_total=total_itens, item_desc="",
+        stats_concluidos=stats_concluidos, encerrado=True,
+    )
 
-    # Compatível com UI anterior (dict de resultados) + dados extras
     st.session_state.resultados_busca = lote.resultados
     st.session_state.erros_busca = lote.erros
     st.session_state.cache_stats = (lote.cache_hits, lote.cache_misses)
-    with status_box.container():
+    with status_final.container():
         hits, misses = lote.cache_hits, lote.cache_misses
         extras = []
         if hits or misses:
             extras.append(f"{hits} do cache, {misses} buscas reais")
         if lote.erros:
-            extras.append(f"⚠️ {len(lote.erros)} erro(s) — ver painel abaixo")
+            extras.append(f"{len(lote.erros)} erro(s) técnico(s)")
         sub = f" ({' · '.join(extras)})" if extras else ""
         style.bloco_aviso(
             f"Busca concluída — {len(lote.resultados)} itens processados{sub}.",
             tipo="success",
         )
 
+    # Exporta diagnóstico, se foi solicitado.
+    if log_diag is not None and log_diag.itens:
+        from pregoes.diagnostico import exportar_xlsx as _exp
+        from datetime import datetime
+        diag_dir = config.DATA_DIR / "diagnostico"
+        diag_dir.mkdir(parents=True, exist_ok=True)
+        nome = f"diagnostico_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        destino = diag_dir / nome
+        try:
+            _exp(log_diag, destino)
+            st.session_state.diag_path = str(destino)
+        except Exception as exc:
+            style.bloco_aviso(
+                f"Diagnóstico falhou ao exportar: {type(exc).__name__}: {exc}",
+                tipo="warning",
+            )
+
 
 def _mostrar_selecao(itens: list, resultados: dict) -> None:
     """Tabela paginada com selectbox por linha. Operador escolhe a marca.
 
-    Default de seleção = MENOR preço entre todas as opções de todos os
-    fornecedores. Atende o caso comum ("quero o mais barato") sem violar
-    o princípio do briefing (CLAUDE.md §7) — o sistema apresenta todas
-    as opções e o operador pode trocar quando precisar marca específica.
+    Default de seleção = candidato com MAIOR RELEVÂNCIA contra a descrição
+    do edital, com PREÇO como tiebreaker. Mudou de "mais barato" para
+    "melhor match" em 2026-05-27 após operador reportar que itens com
+    múltiplas categorias semelhantes (ex.: chave de fenda comum vs chave-
+    teste) escolhiam por preço o produto mais simples — geralmente o
+    errado.
+
+    Mantém o princípio do briefing (CLAUDE.md §7): o sistema só sugere,
+    o operador escolhe.
     """
     from pregoes.exportador import SelecaoFornecedor
+    from pregoes.normalizador import relevancia as _relev
 
-    # Inicializa estado de seleções com a opção de MENOR preço por item
+    def _melhor(item_desc: str, opcoes: list):
+        """Maior relevância, preço como desempate."""
+        return min(
+            opcoes,
+            key=lambda o: (-_relev(item_desc, o.descricao_encontrada), o.preco),
+        )
+
+    # Inicializa estado de seleções com a opção de MAIOR RELEVÂNCIA por item
     if "selecoes" not in st.session_state:
         st.session_state.selecoes = {}
         for idx, opcoes in resultados.items():
             if opcoes:
-                mais_barato = min(opcoes, key=lambda o: o.preco)
+                melhor = _melhor(itens[idx].descricao, opcoes)
                 st.session_state.selecoes[idx] = SelecaoFornecedor(
-                    preco=mais_barato.preco,
-                    codigo_fornecedor=mais_barato.codigo_fornecedor,
-                    marca=mais_barato.marca,
+                    preco=melhor.preco,
+                    codigo_fornecedor=melhor.codigo_fornecedor,
+                    marca=melhor.marca,
                 )
 
     # Resumo
@@ -905,17 +1089,29 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
                 )
                 continue
 
-            # Ordena opções por preço ascendente — operador vê o mais barato
-            # no topo e o sistema marca explicitamente qual é o melhor preço.
-            opcoes_ordenadas = sorted(opcoes, key=lambda o: o.preco)
-            preco_min = opcoes_ordenadas[0].preco
+            # Ordena por RELEVÂNCIA desc, preço asc — o "melhor match" fica
+            # no topo. Antes ordenava só por preço, o que levava a defaults
+            # ruins quando havia muitas categorias semelhantes.
+            item_desc_local = item.descricao
+            opcoes_ordenadas = sorted(
+                opcoes,
+                key=lambda o: (-_relev(item_desc_local, o.descricao_encontrada),
+                                o.preco),
+            )
+            preco_min = min(o.preco for o in opcoes_ordenadas)
 
             def _label(o):
-                tag_min = " 💰 mais barato" if o.preco == preco_min else ""
+                tags = []
+                rel = _relev(item_desc_local, o.descricao_encontrada)
+                if o is opcoes_ordenadas[0]:
+                    tags.append("⭐ melhor match")
+                if o.preco == preco_min and o is not opcoes_ordenadas[0]:
+                    tags.append("💰 mais barato")
+                suf = (" — " + " · ".join(tags)) if tags else ""
                 return (
                     f"{o.marca} — R$ {o.preco:.2f} ({o.fornecedor})"
-                    f"{tag_min} — código {o.codigo_fornecedor} — "
-                    f"{o.descricao_encontrada[:50]}"
+                    f"{suf} — código {o.codigo_fornecedor} — "
+                    f"rel={rel:.2f} — {o.descricao_encontrada[:50]}"
                 )
 
             labels = ["(não usar)"] + [_label(o) for o in opcoes_ordenadas]
@@ -929,7 +1125,7 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
                         break
 
             escolha = st.selectbox(
-                "Marca / preço (default = mais barato)",
+                "Marca / preço (default = melhor match; preço como desempate)",
                 options=range(len(labels)),
                 format_func=lambda i: labels[i],
                 index=default_idx,
