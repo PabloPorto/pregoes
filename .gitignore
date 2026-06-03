@@ -14,6 +14,16 @@ venv/
 data/pregoes.db
 data/exports/*.xlsx
 
+# Relatórios de diagnóstico da busca (gerados em runtime, podem conter
+# descrições de editais reais do cliente — não versionar)
+data/diagnostico/
+
+# Controle de versão do algoritmo de busca (runtime — invalida cache)
+data/.busca_versao
+
+# Catálogo histórico importado (planilhas do cliente — dados privados)
+data/historico/
+
 # Editais reais do cliente — nunca versionar (dados privados, podem ser grandes).
 # Exceção: o PDF sintético usado em tests/test_mvp.py fica versionado.
 data/editais/*.pdf

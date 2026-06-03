@@ -35,8 +35,9 @@ docling>=2.0.0
 # Decisão Q11 em QUESTOES_PENDENTES.md.
 google-genai>=1.0.0
 
-# === Reservado para fase 3 ===
-# rapidfuzz>=3.0.0   # fuzzy matching de descrições (matcher)
+# Fuzzy matching de descrições — matcher do catálogo (Camada 0)
+# e componente da relevância híbrida (Camada 2). Decisão Q12.
+rapidfuzz>=3.0.0
 
 # === Reservado para fase 4 (NF-e + dashboard) ===
 # lxml>=5.0.0      # parsing de XMLs de NF-e

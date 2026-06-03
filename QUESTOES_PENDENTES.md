@@ -6,7 +6,38 @@
 
 ### Q12. Busca robusta de produtos: pipeline em 5 camadas (95%+ qualidade)
 
-**Contexto.** Em 2026-05-27 o operador relatou que o mesmo produto
+**Status (2026-05-27).** ✅ **Infraestrutura implementada.** Todas as 5
+camadas existem no código:
+- Camada 0: `pregoes/matcher.py` + `pregoes/importador.py` +
+  `AlmeidaDistribuidor.buscar_por_codigo` + `DantasDistribuidora.buscar_por_codigo`
+  — integrados em `buscar_precos_para_itens`.
+- Camada 1+2: scraper textual (já existia) + `normalizador.relevancia`
+  agora HÍBRIDA (substring/prefix combinada com rapidfuzz `token_sort_ratio`
+  via `max(kw, fuzz*0.9)`).
+- Camada 3: `extrator_llm.julgar_candidatos` com cache SHA256 TTL infinito
+  em `cache_llm_judge`. Dispara apenas quando o item caiu no fallback
+  "top 3 variação" do scraper.
+- Camada 4: tabela `mapeamentos_aprendidos` + gravação automática quando
+  operador finaliza a planilha + consulta no orquestrador antes da
+  Camada 0.
+
+**Trigger restante para ativar Camada 0 plenamente.** Cliente entregar
+1+ planilha histórica em `data/historico/` e o operador rodar:
+```bash
+python -m pregoes.importador --fornecedor=almeida data/historico/*.xlsx
+python -m pregoes.importador --fornecedor=dantas  data/historico/*.xlsx
+```
+
+**Pendente (não bloqueia funcionamento).**
+- Tela UI para acionar o importador (hoje é CLI).
+- Dashboard de variação de preço por marca/fornecedor (item extra do plano).
+- Mostrar `codigo_hits` e `llm_judge_hits` no painel "Busca concluída"
+  da UI para o operador entender o que foi resolvido por cada camada
+  (campos já existem em `ResultadoLote`).
+
+---
+
+**Contexto original.** Em 2026-05-27 o operador relatou que o mesmo produto
 físico aparece em diferentes editais com nomes DIFERENTES, e o scraper
 atual erra muitos casos. Causa: matching textual é cego a variações
 naturais:

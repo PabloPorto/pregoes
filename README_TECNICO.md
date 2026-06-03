@@ -80,11 +80,12 @@ pregoes_app/
 │   ├── validador.py           # ✅ score_linha / score_tabela (Q6)
 │   ├── mapeamento_manual.py   # ✅ mapa por assinatura → mapeamentos_pdf (Q6)
 │   ├── exportador.py          # ItemExtraido + SelecaoFornecedor → Excel matriz
-│   ├── normalizador.py        # ✅ normalizar_descricao + keywords + relevancia
+│   ├── normalizador.py        # ✅ normalizar_descricao + keywords + relevancia híbrida
 │   ├── credenciais.py         # ✅ CRUD de data/credenciais.json (Q8)
-│   ├── scraper.py             # 🟡 Almeida pronto; Dantas esqueleto
-│   ├── matcher.py             # ⏳ TODO fase 3
-│   ├── importador.py          # ⏳ TODO fase 3 — bootstrap histórico
+│   ├── scraper.py             # ✅ Almeida + Dantas + busca por código (Camada 0)
+│   ├── matcher.py             # ✅ rapidfuzz contra catálogo (Camada 0)
+│   ├── importador.py          # ✅ CLI: importa planilhas históricas (Camada 0)
+│   ├── extrator_llm.py        # ✅ Camada 2 extração + Camada 3 judge (Q11/Q12)
 │   └── ui/
 │       ├── __init__.py
 │       └── app.py             # Streamlit — 6 telas (home, upload, revisão,
@@ -104,20 +105,26 @@ pregoes_app/
     ├── gerar_pdf_teste.py
     ├── test_mvp.py            # Fase 1 + extrator novo + validador +
     │                          # mapeamento manual + pipeline
-    └── test_fase2_inicial.py  # Fase 2 (scraper, normalizador, credenciais,
-                                # orquestrador)
+    ├── test_fase2_inicial.py  # Fase 2 (scraper, normalizador, credenciais,
+    │                          # orquestrador)
+    ├── test_extrator_llm.py   # Camada 2 (Gemini)
+    ├── test_reconstrutor.py   # Reconstrução Docling multi-página
+    └── test_fase3.py          # Fase 3 — matcher, importador, Camadas 0-4
 ```
 
-Total atual: **79 testes verdes** (`pytest -v`).
+Total atual: **159 testes verdes** (`pytest -v`).
 
 ## Schema SQLite
 
 ```
-produtos              — catálogo canônico (cresce com uso)
-precos_historico      — toda consulta com timestamp (alimenta cache TTL=2d)
-editais               — cada PDF processado
-edital_itens          — linhas dos editais; FK para produtos quando casa
-mapeamentos_pdf       — heurísticas aprendidas para schemas não-padrão
+produtos                  — catálogo canônico (cresce com uso + importador histórico)
+precos_historico          — toda consulta com timestamp (alimenta cache TTL=2d)
+precos_cache_descricao    — cache de buscas do scraper por descrição normalizada
+editais                   — cada PDF processado
+edital_itens              — linhas dos editais; FK para produtos quando casa
+mapeamentos_pdf           — heurísticas aprendidas para schemas não-padrão
+cache_llm_judge           — Camada 3: cache TTL infinito por SHA256(desc + códigos)
+mapeamentos_aprendidos    — Camada 4: descrição_norm → código escolhido pelo operador
 ```
 
 ## Próximas fases (em ordem)
@@ -131,11 +138,25 @@ mapeamentos_pdf       — heurísticas aprendidas para schemas não-padrão
 - UI: tela de busca de preços com seleção manual de marca por item — ✅ pronta
 - Polimento e paralelismo do scraper — pendente
 
-### Fase 3 — Bootstrap, fuzzy matching, dashboard (2-3 dias)
-- `importador.py` lê N planilhas históricas e popula catálogo
-- `rapidfuzz` para casamento de descrições
-- Página de dashboard: variação de preço por marca/fornecedor
-- Trigger: cliente entrega 10-20 planilhas históricas
+### Fase 3 — Busca robusta em 5 camadas — ✅ infraestrutura entregue
+Implementado em 2026-05-27 (commit pendente):
+- ✅ `importador.py` — CLI lê planilhas MATRIZ históricas e popula `produtos`
+- ✅ `matcher.py` — `rapidfuzz.token_sort_ratio` contra catálogo (threshold 90)
+- ✅ Camada 0 — `buscar_por_codigo` em Almeida e Dantas (`/busca?s={codigo}`)
+- ✅ Camada 2 — relevância híbrida (substring/prefix + rapidfuzz)
+- ✅ Camada 3 — `julgar_candidatos` via Gemini com cache SHA256 TTL infinito
+- ✅ Camada 4 — `mapeamentos_aprendidos` (descrição_norm → código), gravado
+  pela UI quando o operador escolhe uma marca
+
+**Pré-requisito de operação:** cliente entregar 1+ planilha histórica
+(Q2) para popular o catálogo. Sem isso, todas as camadas funcionam
+mas a Camada 0 não dispara — pipeline cai direto na busca textual
+(Camadas 1+2 + Camada 3).
+
+**Pendente (fora do escopo desta entrega):**
+- Página de dashboard de variação de preço por marca/fornecedor
+- Telemetria visível ao operador (codigo_hits / llm_judge_hits) — campos
+  já existem no `ResultadoLote`, falta exibir na UI
 
 ### Fase 4 — Inteligência tributária (TBD)
 - Parser XML NF-e
