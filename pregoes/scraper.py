@@ -7,13 +7,22 @@ Decisões registradas (CLAUDE.md Seção 7, QUESTOES_PENDENTES.md Bloco 2):
 - Variação de nome → confianca='variacao' (UI marca amarelo, não bloqueia).
 - Sistema NUNCA decide marca: a UI lista os resultados e o operador escolhe.
 
-Estratégia de busca em 3 camadas por fornecedor:
-1. **exata**       — descrição como veio do edital
-2. **variacao**    — descrição normalizada (acentos, frações, prefixo `NN)`)
-3. **variacao**    — keywords (2-3 tokens distintivos)
+Pipeline de busca em 5 camadas (Fase 3 / Q12), aplicado no orquestrador
+`buscar_precos_para_itens`:
 
-A camada 4 (código histórico) prevista no roadmap fica para a Fase 3, quando
-`produtos.codigo_almeida` estiver populado pelo `importador.py`.
+    0. Cache de descrição (TTL 2d)
+    1. Camada 4 — aprendizado: descrição já vista → código direto
+    2. Camada 0 — matcher fuzzy contra catálogo histórico → busca por código
+    3. Camadas 1+2 — busca textual em N camadas (`buscar(descricao)`):
+         a. descrição normalizada
+         b. top-3 keywords
+         c. top-2 keywords
+         d. fallback "top 3 variação" se nada passar o threshold
+    4. Camada 3 — Gemini judge sobre o fallback "top 3 variação"
+
+A `buscar()` interna ainda faz as buscas textuais; já a busca por código
+(Camada 0/4) usa `buscar_por_codigo(codigo)` que faz `/busca?s={codigo}`
+e devolve produto exato sem disputa de relevância.
 
 **Modelo de execução SERIAL.** A tentativa anterior de paralelismo via
 ThreadPoolExecutor (commit 0d0d005) quebrou em produção com
@@ -27,6 +36,8 @@ Uso típico:
     cred = credenciais.carregar("almeida")
     with AlmeidaDistribuidor(cred["email"], cred["senha"]) as alm:
         resultados = alm.buscar("ABRAÇADEIRA DE NYLON 100 X 2.5 PCT")
+        # ou, se vier do matcher com código conhecido:
+        resultados = alm.buscar_por_codigo("11656")
 """
 from __future__ import annotations
 
@@ -37,8 +48,20 @@ from typing import Callable, Optional, Protocol
 from urllib.parse import quote_plus
 
 from . import config, db
+from .diagnostico import (
+    LogCandidatoFinal,
+    LogDiagnostico,
+    LogItemFornecedor,
+    LogQueryInterna,
+)
 from .extrator import ItemExtraido
-from .normalizador import keywords, normalizar_descricao, relevancia
+from .matcher import ProdutoCatalogo, carregar_catalogo, melhor_match
+from .normalizador import (
+    keywords,
+    keywords_distintivas,
+    normalizar_descricao,
+    relevancia,
+)
 
 
 @dataclass(frozen=True)
@@ -59,7 +82,12 @@ class ResultadoBusca:
 
 
 class Fornecedor(Protocol):
-    """Contrato dos scrapers de fornecedor."""
+    """Contrato dos scrapers de fornecedor.
+
+    `buscar_por_codigo` é opcional (Camada 0 da Fase 3) — quem chama deve
+    detectar a presença via `hasattr` antes de invocar. Mantemos opcional
+    para não forçar mocks de teste antigos a implementar a Camada 0.
+    """
 
     nome: str
 
@@ -73,15 +101,82 @@ _BASE_URL_ALMEIDA = "https://www.almeidadistribuidor.com.br"
 _MAX_RESULTADOS_POR_QUERY = 30
 
 # Threshold mínimo de relevância para aceitar um resultado.
-# 0.6 = pelo menos 60% das palavras-chave da descrição original aparece
-# no nome do produto retornado. Calibrado empiricamente:
-# - 0.5 deixava passar lixo (ex: "CIMENTO COM 50KG" → "CIMENTO QUEIMADO ...",
-#   onde só "cimento" coincide entre 2 kws = 0.5).
-# - 0.6 corta esses casos genéricos mas mantém matches verdadeiros como
-#   abraçadeira de nylon (score ~0.67).
-# Caso passe a faltar resultado em itens válidos, considere afrouxar para
-# 0.5 e adicionar filtro adicional por categoria.
-_RELEVANCIA_MINIMA = 0.6
+# Recalibrado em 2026-05-27 após diagnóstico em 30 candidatos reais do
+# TRE-PE: a função `relevancia()` foi reescrita (variante F — base por
+# `min(orig, cand)` + veto/boost de categoria). Naquela base, 0.35
+# atingiu 8/9 verdadeiros e 0/21 falsos.
+#
+# Histórico do antigo 0.6: era calibrado para `casadas / len(original)`,
+# que penaliza editais detalhados (descrições com 30+ tokens contratuais
+# diluem o score do match real). A função nova já normaliza esse efeito.
+# Não voltar para 0.6 sem revisar a função.
+_RELEVANCIA_MINIMA = 0.35
+
+# Versão do algoritmo de busca. Bumpar quando MUDA semântica do filtro
+# (relevância, threshold, top-N por fornecedor). O orquestrador limpa o
+# cache (`precos_cache_descricao`) quando o número aqui difere do salvo
+# em `data/.busca_versao`. Evita que resultados de versões antigas do
+# algoritmo "vazem" para o operador via cache TTL 2d.
+BUSCA_VERSAO = "2026-06-03.5-query-distintiva-dimensao-discriminador"
+
+
+def _montar_camadas(descricao: str) -> list[tuple[str, str]]:
+    """Monta as queries de busca em ordem de prioridade.
+
+    Mudança de 2026-06 (Tier 1): a query PRIMÁRIA passou a ser as keywords
+    distintivas (curtas), não a descrição completa. Editais têm descrições
+    enormes com texto contratual; mandá-las inteiras faz os sites devolverem
+    produtos sem relação. Uma query curta ("filtro linha tomadas eletricas")
+    devolve resultados muito melhores. A descrição completa vira último
+    fallback.
+
+    Retorna lista de `(confianca, query)` na ordem em que devem ser tentadas.
+    """
+    camadas: list[tuple[str, str]] = []
+    vistas: set[str] = set()
+
+    def _add(confianca: str, query: str) -> None:
+        q = query.strip()
+        if q and q not in vistas:
+            vistas.add(q)
+            camadas.append((confianca, q))
+
+    distintivas = keywords_distintivas(descricao, 4)
+    # 1. Query distintiva (3-4 keywords) — a melhor para o site
+    if distintivas:
+        _add("exato", " ".join(distintivas))
+    # 2. Núcleo curto (categoria — 2 primeiras distintivas)
+    if len(distintivas) >= 2:
+        _add("variacao", " ".join(distintivas[:2]))
+    # 3. Último recurso: descrição normalizada completa
+    _add("variacao", normalizar_descricao(descricao))
+
+    return camadas
+
+
+def _top_n_por_relevancia(
+    descricao_original: str,
+    candidatos: list["ResultadoBusca"],
+    n: int,
+) -> list["ResultadoBusca"]:
+    """Ordena candidatos por relevância (desc) e preço (asc), mantém top-N.
+
+    Os candidatos já passaram pelo filtro de threshold, mas em itens
+    populares no catálogo do fornecedor podem ser dezenas. Acima do
+    top-N a probabilidade do operador realmente escolher cai drasticamente
+    — viram ruído visual.
+
+    Mesmo quando `len(candidatos) <= n`, ordenamos: a UI mostra o melhor
+    match primeiro independente do limite (o `n` só corta o cauda).
+    """
+    if not candidatos:
+        return []
+    pontuados = [
+        (relevancia(descricao_original, c.descricao_encontrada), c.preco, c)
+        for c in candidatos
+    ]
+    pontuados.sort(key=lambda x: (-x[0], x[1]))
+    return [c for _, _, c in pontuados[:n]]
 
 
 def _parse_card_attributes(attrs: dict, confianca: str) -> Optional[ResultadoBusca]:
@@ -225,75 +320,81 @@ class AlmeidaDistribuidor:
                 "estabelecidos. Verifique email/senha em data/credenciais.json."
             )
 
-    def buscar(self, descricao: str) -> list[ResultadoBusca]:
+    def buscar(self, descricao: str,
+               _log: Optional["LogItemFornecedor"] = None) -> list[ResultadoBusca]:
         """Tenta as camadas de busca em ordem. Para na primeira que
         produzir resultados relevantes. Aplica rate limit antes de cada
         busca real para respeitar o site parceiro.
+
+        `_log` é opcional — quando fornecido, anexa um `LogQueryInterna`
+        por camada tentada. Usado pelo modo diagnóstico (ortogonal ao
+        algoritmo: nada do que o método faz depende do log).
         """
         if not descricao or not descricao.strip():
             return []
 
-        # Camadas: começa pela descrição NORMALIZADA (não a crua) — o site
-        # se confunde com vírgulas e prefixo "NN)" do edital.
-        normalizada = normalizar_descricao(descricao)
-        camadas: list[tuple[str, str]] = []
-        if normalizada:
-            camadas.append(("exato", normalizada))
-
-        kws = keywords(descricao)[:3]
-        if kws:
-            kws_query = " ".join(kws)
-            if kws_query != normalizada:
-                camadas.append(("variacao", kws_query))
-
-        # Fallback final: 1-2 keywords mais distintivas (caso top-3 não ache)
-        if len(kws) >= 2:
-            kws_curto = " ".join(kws[:2])
-            if kws_curto not in (normalizada, " ".join(kws[:3])):
-                camadas.append(("variacao", kws_curto))
-
-        # Acumula o melhor `bruto` visto em qualquer camada — usado como
-        # fallback quando filtro estrito não deixa passar nenhum.
-        melhor_pool: list[tuple[float, ResultadoBusca]] = []
+        # Camadas: query distintiva curta primeiro, descrição completa por
+        # último (ver `_montar_camadas`). Antes mandávamos a descrição
+        # inteira primeiro, o que poluía os resultados com produtos sem relação.
+        camadas = _montar_camadas(descricao)
 
         for confianca, query in camadas:
             self._rate_limiter.acquire()
             brutos = self._buscar_query(self._page, query, confianca)
             relevantes = []
+            melhor_rel = 0.0
             for r in brutos:
                 rel = relevancia(descricao, r.descricao_encontrada)
+                if rel > melhor_rel:
+                    melhor_rel = rel
                 if rel >= _RELEVANCIA_MINIMA:
                     relevantes.append(r)
-                else:
-                    melhor_pool.append((rel, r))
+            if _log is not None:
+                _log.queries_textuais.append(LogQueryInterna(
+                    nivel=confianca, query=query,
+                    n_brutos=len(brutos),
+                    n_passaram=len(relevantes),
+                    melhor_relevancia=melhor_rel,
+                    parou_aqui=bool(relevantes),
+                ))
             if relevantes:
-                return relevantes
+                return _top_n_por_relevancia(
+                    descricao, relevantes,
+                    config.SCRAPER_MAX_CANDIDATOS_POR_FORNECEDOR,
+                )
 
-        # Fallback: nenhum resultado passou no filtro estrito. Em vez de
-        # entregar lista vazia (UI mostra "Não encontrado"), devolve os
-        # top 3 candidatos vistos marcados como 'variacao' (amarelo), pra
-        # operador decidir manualmente. Cenário típico: produto certo
-        # existe mas tem nome só parcialmente parecido com o do edital.
-        melhor_pool.sort(key=lambda x: x[0], reverse=True)
-        top = []
-        ja_vistos: set[tuple[str, float]] = set()
-        for rel, r in melhor_pool:
-            chave = (r.codigo_fornecedor, r.preco)
-            if chave in ja_vistos:
-                continue
-            ja_vistos.add(chave)
-            # Reforça que estes resultados são aproximados
-            top.append(ResultadoBusca(
-                descricao_encontrada=r.descricao_encontrada,
-                marca=r.marca,
-                preco=r.preco,
-                codigo_fornecedor=r.codigo_fornecedor,
-                confianca="variacao",
-                fornecedor=r.fornecedor,
-            ))
-            if len(top) >= 3:
-                break
-        return top
+        # Sem candidatos acima do threshold: retorna lista vazia.
+        # Decisão de 2026-05-27 após diagnóstico real mostrar que o
+        # "top 3 variação" antigo trazia produtos irrelevantes — pior do
+        # que nada na perspectiva do operador ("se não acha o certo,
+        # melhor mostrar nada e eu busco à mão").
+        if _log is not None:
+            _log.caiu_fallback = True
+        return []
+
+    def buscar_por_codigo(self, codigo: str) -> list[ResultadoBusca]:
+        """Busca DETERMINÍSTICA por código de produto — Camada 0 da Fase 3.
+
+        Quando o operador importou planilhas históricas (matcher.py), cada
+        produto do edital pode resolver para um `codigo_almeida` conhecido.
+        Buscar por código em `/busca?s={codigo}` retorna o produto exato,
+        sem disputa de relevância textual.
+
+        Retorna lista com 0 ou 1 resultado:
+        - 0 se o código foi descontinuado / não existe mais
+        - 1 com `confianca='exato'` quando o site devolve o produto
+        - Se o site devolver múltiplos (improvável para código), aceitamos
+          o primeiro card. O operador pode trocar na UI se precisar.
+        """
+        if not codigo or not str(codigo).strip():
+            return []
+        self._rate_limiter.acquire()
+        # Reusa _buscar_query — a infraestrutura é a mesma; só a query muda.
+        # `confianca='exato'` porque casamos por código, não por texto.
+        resultados = self._buscar_query(self._page, str(codigo).strip(), "exato")
+        # Limita ao 1º card: busca por código deveria ser determinística.
+        # Se houver mais (caso raro de código compartilhado), o 1º é o relevante.
+        return resultados[:1]
 
     def _buscar_query(self, page, query: str, confianca: str) -> list[ResultadoBusca]:
         """Faz uma busca crua usando a página recebida e retorna até N
@@ -441,62 +542,57 @@ class DantasDistribuidora:
                 "estabelecidos. Verifique email/senha em data/credenciais.json."
             )
 
-    def buscar(self, descricao: str) -> list[ResultadoBusca]:
+    def buscar(self, descricao: str,
+               _log: Optional["LogItemFornecedor"] = None) -> list[ResultadoBusca]:
         if not descricao or not descricao.strip():
             return []
 
-        normalizada = normalizar_descricao(descricao)
-        camadas: list[tuple[str, str]] = []
-        if normalizada:
-            camadas.append(("exato", normalizada))
-
-        kws = keywords(descricao)[:3]
-        if kws:
-            kws_query = " ".join(kws)
-            if kws_query != normalizada:
-                camadas.append(("variacao", kws_query))
-
-        if len(kws) >= 2:
-            kws_curto = " ".join(kws[:2])
-            if kws_curto not in (normalizada, " ".join(kws[:3])):
-                camadas.append(("variacao", kws_curto))
-
-        # Mesma estratégia do Almeida (ver comentário lá): acumula
-        # candidatos não-passados e devolve top 3 como fallback.
-        melhor_pool: list[tuple[float, ResultadoBusca]] = []
+        # Mesma estratégia do Almeida: query distintiva primeiro (ver
+        # `_montar_camadas`).
+        camadas = _montar_camadas(descricao)
 
         for confianca, query in camadas:
             self._rate_limiter.acquire()
             brutos = self._buscar_query(self._page, query, confianca)
             relevantes = []
+            melhor_rel = 0.0
             for r in brutos:
                 rel = relevancia(descricao, r.descricao_encontrada)
+                if rel > melhor_rel:
+                    melhor_rel = rel
                 if rel >= _RELEVANCIA_MINIMA:
                     relevantes.append(r)
-                else:
-                    melhor_pool.append((rel, r))
+            if _log is not None:
+                _log.queries_textuais.append(LogQueryInterna(
+                    nivel=confianca, query=query,
+                    n_brutos=len(brutos),
+                    n_passaram=len(relevantes),
+                    melhor_relevancia=melhor_rel,
+                    parou_aqui=bool(relevantes),
+                ))
             if relevantes:
-                return relevantes
+                return _top_n_por_relevancia(
+                    descricao, relevantes,
+                    config.SCRAPER_MAX_CANDIDATOS_POR_FORNECEDOR,
+                )
 
-        melhor_pool.sort(key=lambda x: x[0], reverse=True)
-        top = []
-        ja_vistos: set[tuple[str, float]] = set()
-        for rel, r in melhor_pool:
-            chave = (r.codigo_fornecedor, r.preco)
-            if chave in ja_vistos:
-                continue
-            ja_vistos.add(chave)
-            top.append(ResultadoBusca(
-                descricao_encontrada=r.descricao_encontrada,
-                marca=r.marca,
-                preco=r.preco,
-                codigo_fornecedor=r.codigo_fornecedor,
-                confianca="variacao",
-                fornecedor=r.fornecedor,
-            ))
-            if len(top) >= 3:
-                break
-        return top
+        # Mesma decisão do Almeida: sem candidatos acima do threshold,
+        # retorna vazio (ver explicação lá).
+        if _log is not None:
+            _log.caiu_fallback = True
+        return []
+
+    def buscar_por_codigo(self, codigo: str) -> list[ResultadoBusca]:
+        """Mesma idea do Almeida — Camada 0 da Fase 3. Ver docstring lá.
+
+        Mantemos como classe separada porque os sites são distintos: se um
+        mudar de layout, o outro continua funcionando sem trocar nada.
+        """
+        if not codigo or not str(codigo).strip():
+            return []
+        self._rate_limiter.acquire()
+        resultados = self._buscar_query(self._page, str(codigo).strip(), "exato")
+        return resultados[:1]
 
     def _buscar_query(self, page, query: str, confianca: str) -> list[ResultadoBusca]:
         url = f"{_BASE_URL_DANTAS}/busca?s={quote_plus(query)}"
@@ -549,11 +645,15 @@ class ResultadoLote:
     - `erros` para o painel "ver erros (N)" quando o batch teve falhas
     - `cache_hits`/`cache_misses` para o operador entender quanto a memória
        do sistema economizou (transparência sobre cache)
+    - `codigo_hits` para quanto a Camada 0 (catálogo histórico) resolveu
+       sem precisar de busca textual — mostra valor do importador.
     """
     resultados: dict[int, list[ResultadoBusca]]
     erros: list[ErroBusca] = field(default_factory=list)
     cache_hits: int = 0
     cache_misses: int = 0
+    codigo_hits: int = 0       # Camada 0: itens resolvidos por busca por código
+    llm_judge_hits: int = 0    # Camada 3: itens reordenados/filtrados pelo Gemini
 
 
 def _payload_to_resultados(
@@ -586,21 +686,25 @@ def buscar_precos_para_itens(
     *,
     progresso_callback: Optional[ProgressoCallback] = None,
     usar_cache: bool = True,
+    usar_catalogo: bool = True,
+    usar_llm_judge: bool = False,
+    diagnostico: Optional[LogDiagnostico] = None,
     max_workers: Optional[int] = None,  # aceito mas ignorado (compat. legacy)
 ) -> ResultadoLote:
-    """Busca em batch SERIAL com cache TTL=2d e coleta de erros.
+    """Busca em batch SERIAL com cache TTL=2d, Camada 0 (catálogo) e
+    coleta de erros.
+
+    Pipeline por item × fornecedor (Q12):
+    1. Cache TTL=2d em precos_cache_descricao → hit reaproveita
+    2. Camada 0: matcher fuzzy contra catálogo histórico → busca por código
+    3. Caminho atual: busca textual em N camadas (descrição/keywords)
+    4. Aprendizado (Camada 4) — não aqui; consultado no orquestrador da UI
 
     Por que serial: Playwright sync API atrela o browser à thread que
     chamou `sync_playwright().start()`. Tentar paralelizar com
     ThreadPoolExecutor gera `greenlet.error: Cannot switch to a different
     thread` (visto em produção em 2026-05-27). Para retomar paralelismo,
     refatorar para `playwright.async_api`.
-
-    Cache:
-    - Consulta `precos_cache_descricao` antes de chamar scraper. Hit
-      reaproveita; miss busca e grava. Cache persistente entre execuções.
-    - Cliente típico processa o mesmo edital várias vezes (revisões) —
-      a 2ª execução fica praticamente instantânea.
 
     Erros isolados (timeout, layout mudou) **não** quebram batch — vão
     para `ResultadoLote.erros` que a UI mostra num painel.
@@ -610,6 +714,20 @@ def buscar_precos_para_itens(
         fornecedores: instâncias já abertas (login feito) de Almeida/Dantas.
         progresso_callback: callback `(atual, total, msg)` a cada item.
         usar_cache: False em testes que querem chamar scraper real.
+        usar_catalogo: False desabilita Camada 0 (raro — útil em testes que
+            isolam só o caminho textual).
+        usar_llm_judge: True ativa Camada 3 (judge do Gemini sob demanda).
+            **Default False** desde 2026-05-27 — em testes reais o judge
+            estava aprovando candidatos absurdos e consumindo quota do
+            Gemini que também é usada pela extração de PDF. Vamos
+            calibrar via diagnóstico antes de reativar por padrão.
+            Compartilha a mesma API key com extrator_llm.extrair_via_gemini —
+            se a quota daily acabar pelo judge, a extração de PDF também
+            falha.
+        diagnostico: opcional. Se fornecido, o orquestrador preenche o log
+            com o que cada camada fez por item × fornecedor. Use com
+            `pregoes.diagnostico.exportar_xlsx` para gerar a planilha de
+            análise. Não altera o algoritmo — só observação.
         max_workers: ignorado (mantido na assinatura para compat. com
             chamadores antigos que ainda passam o argumento).
     """
@@ -617,6 +735,8 @@ def buscar_precos_para_itens(
     erros: list[ErroBusca] = []
     cache_hits = 0
     cache_misses = 0
+    codigo_hits = 0
+    llm_judge_hits = 0
     total = len(itens)
 
     if total == 0:
@@ -624,48 +744,195 @@ def buscar_precos_para_itens(
 
     # Conexão SQLite na thread do orquestrador. Sem lock — serial.
     conn = None
-    if usar_cache:
+    if usar_cache or usar_catalogo:
         import sqlite3
         from . import config as _config
         conn = sqlite3.connect(_config.DB_PATH)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON;")
 
+    # Invalida cache se o algoritmo de busca mudou. Evita o operador
+    # ver resultados de versões antigas (e.g. fallback top-3 que retornava
+    # lixo). O custo de re-buscar é alto na primeira vez, zero depois.
+    if conn is not None and usar_cache:
+        _invalidar_cache_se_versao_mudou(conn)
+
+    # Camada 0: carrega catálogo histórico uma vez (em memória) para reuso.
+    # Lista vazia (catálogo não populado ainda) é OK — matcher vai retornar
+    # None para todos os itens e o pipeline cai no caminho textual.
+    catalogo: list[ProdutoCatalogo] = []
+    if conn is not None and usar_catalogo:
+        try:
+            catalogo = carregar_catalogo(conn)
+        except Exception:
+            # Banco sem schema, corrompido etc — não impede o caminho atual.
+            catalogo = []
+
+    # Detecta uma vez se cada fornecedor aceita o argumento opcional `_log`
+    # (mocks de teste antigos não aceitam). Evita try/except por chamada.
+    import inspect
+    suporta_log = {
+        f.nome: "_log" in inspect.signature(f.buscar).parameters
+        for f in fornecedores
+    }
+
     try:
         for idx, item in enumerate(itens):
             bag: list[ResultadoBusca] = []
             desc_norm = normalizar_descricao(item.descricao)
 
+            # Log do item (diagnóstico)
+            log_item = None
+            if diagnostico is not None:
+                log_item = diagnostico.get_item(
+                    idx=idx,
+                    descricao=item.descricao or "",
+                    desc_norm=desc_norm,
+                    keywords=keywords(item.descricao or ""),
+                )
+
+            # Camada 0: descobre o produto canônico UMA vez por item (não
+            # por fornecedor). Pode falhar em catálogo vazio ou item sem
+            # correspondência — segue normal.
+            match = None
+            if catalogo:
+                try:
+                    match = melhor_match(item.descricao, catalogo)
+                except Exception:
+                    match = None
+
             for forn in fornecedores:
-                # 1. Tenta cache
-                if conn is not None and desc_norm:
+                # Log por (item, fornecedor) — preenchido ao longo do loop
+                log_forn = None
+                if log_item is not None:
+                    log_forn = LogItemFornecedor(fornecedor=forn.nome)
+                    log_item.por_fornecedor.append(log_forn)
+
+                # 1. Tenta cache de descrição (camada mais barata).
+                if conn is not None and usar_cache and desc_norm:
                     payload = db.cache_buscar(conn, desc_norm, forn.nome)
                     if payload is not None:
                         cache_hits += 1
-                        bag.extend(_payload_to_resultados(payload, forn.nome))
+                        if log_forn is not None:
+                            log_forn.cache_hit = True
+                        encontrados_cache = _payload_to_resultados(payload, forn.nome)
+                        bag.extend(encontrados_cache)
+                        if log_forn is not None:
+                            _registrar_candidatos_finais(
+                                log_forn, encontrados_cache, item.descricao,
+                                veio_por_codigo=False, aprovado_judge=False,
+                            )
                         continue
                     cache_misses += 1
 
-                # 2. Busca real
-                try:
-                    encontrados = forn.buscar(item.descricao)
-                except Exception as exc:
-                    erros.append(ErroBusca(
-                        indice_item=idx,
-                        fornecedor=forn.nome,
-                        descricao_resumo=(item.descricao or "")[:60],
-                        mensagem=f"{type(exc).__name__}: {exc}",
-                    ))
-                    continue
+                # 2. Camada 4: aprendizado por feedback. Se o operador
+                # já confirmou para esta descrição+fornecedor no passado,
+                # vamos direto na busca por código. Mais barato que o
+                # matcher fuzzy (Camada 0) porque casa por descrição exata
+                # normalizada — sem ambiguidade.
+                codigo_aprendido = None
+                if conn is not None and desc_norm:
+                    try:
+                        aprendido = db.aprendido_buscar(conn, desc_norm, forn.nome)
+                        if aprendido is not None:
+                            codigo_aprendido = aprendido["codigo_fornecedor"]
+                    except Exception:
+                        codigo_aprendido = None
+                if log_forn is not None and codigo_aprendido:
+                    log_forn.aprendido_codigo = codigo_aprendido
+
+                # Camada 0: matcher contra catálogo
+                if log_forn is not None and match is not None:
+                    log_forn.catalogo_produto_id = match.produto.produto_id
+                    log_forn.catalogo_score = float(match.score)
+                    log_forn.catalogo_codigo = match.codigo_para(forn.nome)
+
+                # 3. Camada 0: busca por código (determinística). Só dispara
+                # se temos match no catálogo COM código para este fornecedor
+                # E o scraper suporta `buscar_por_codigo` (mocks antigos não).
+                codigo = codigo_aprendido or (
+                    match.codigo_para(forn.nome) if match else None
+                )
+                buscar_codigo = getattr(forn, "buscar_por_codigo", None)
+                encontrados: list[ResultadoBusca] = []
+                veio_por_codigo = False
+                if codigo and callable(buscar_codigo):
+                    try:
+                        encontrados = buscar_codigo(codigo) or []
+                    except Exception as exc:
+                        # Falha na busca por código não bloqueia — registra
+                        # e cai pra busca textual abaixo.
+                        erros.append(ErroBusca(
+                            indice_item=idx,
+                            fornecedor=forn.nome,
+                            descricao_resumo=(item.descricao or "")[:60],
+                            mensagem=f"buscar_por_codigo({codigo}): "
+                                     f"{type(exc).__name__}: {exc}",
+                        ))
+                        encontrados = []
+                    if encontrados:
+                        veio_por_codigo = True
+                        codigo_hits += 1
+                        if log_forn is not None:
+                            log_forn.veio_por_codigo = True
+
+                # 3. Fallback: busca textual (caminho atual / Camadas 1+2+3
+                # internas do scraper).
+                if not encontrados:
+                    try:
+                        if suporta_log.get(forn.nome) and log_forn is not None:
+                            encontrados = forn.buscar(item.descricao, _log=log_forn)
+                        else:
+                            encontrados = forn.buscar(item.descricao)
+                    except Exception as exc:
+                        erros.append(ErroBusca(
+                            indice_item=idx,
+                            fornecedor=forn.nome,
+                            descricao_resumo=(item.descricao or "")[:60],
+                            mensagem=f"{type(exc).__name__}: {exc}",
+                        ))
+                        continue
 
                 bag.extend(encontrados)
+                if log_forn is not None:
+                    _registrar_candidatos_finais(
+                        log_forn, encontrados, item.descricao,
+                        veio_por_codigo=veio_por_codigo, aprovado_judge=False,
+                    )
 
-                # 3. Grava no cache
-                if conn is not None and desc_norm:
+                # 4. Grava no cache — exceto quando veio por código.
+                # Cache por descrição não casa bem com resultado por código
+                # (vários itens do edital com descrições diferentes podem
+                # apontar pro mesmo produto). Cache de descrição só guarda
+                # quem nasceu de busca textual.
+                if (conn is not None and usar_cache and desc_norm
+                        and not veio_por_codigo):
                     payload = json.dumps(
                         [asdict(r) for r in encontrados], ensure_ascii=False
                     )
                     db.cache_gravar(conn, desc_norm, forn.nome, payload)
+
+            # Camada 3: LLM judge sob demanda.
+            # Dispara só quando o item caiu no fallback "top 3 variação"
+            # (sinal de falha das Camadas 1+2 textuais). Não dispara se
+            # já há resultado 'exato' — sinal de match confiável.
+            todos_variacao = bool(bag) and all(
+                r.confianca == "variacao" for r in bag
+            )
+            if usar_llm_judge and todos_variacao:
+                judge_n_entrada = len(bag)
+                bag_judged = _aplicar_llm_judge(item.descricao, bag, conn)
+                if log_item is not None:
+                    # Marca em todos os logs por_fornecedor que houve julgamento
+                    for lf in log_item.por_fornecedor:
+                        lf.judge_chamado = True
+                        lf.judge_n_candidatos_entrada = judge_n_entrada
+                if bag_judged is not None:
+                    bag = bag_judged
+                    llm_judge_hits += 1
+                    if log_item is not None:
+                        # Reescreve candidatos_finais marcando aprovados
+                        _marcar_aprovados_judge(log_item, bag_judged, item.descricao)
 
             resultados[idx] = bag
             if progresso_callback is not None:
@@ -682,4 +949,112 @@ def buscar_precos_para_itens(
         erros=erros,
         cache_hits=cache_hits,
         cache_misses=cache_misses,
+        codigo_hits=codigo_hits,
+        llm_judge_hits=llm_judge_hits,
     )
+
+
+def _registrar_candidatos_finais(
+    log_forn: "LogItemFornecedor",
+    candidatos: list[ResultadoBusca],
+    descricao_original: str,
+    *,
+    veio_por_codigo: bool,
+    aprovado_judge: bool,
+) -> None:
+    """Anexa cada `ResultadoBusca` ao log do fornecedor, calculando a
+    relevância contra a descrição original. Usado pelo diagnóstico."""
+    for r in candidatos:
+        rel = relevancia(descricao_original, r.descricao_encontrada)
+        log_forn.candidatos_finais.append(LogCandidatoFinal(
+            descricao_encontrada=r.descricao_encontrada,
+            marca=r.marca,
+            preco=r.preco,
+            codigo_fornecedor=r.codigo_fornecedor,
+            fornecedor=r.fornecedor,
+            confianca=r.confianca,
+            relevancia_vs_original=rel,
+            veio_por_codigo=veio_por_codigo,
+            aprovado_judge=aprovado_judge,
+        ))
+
+
+def _marcar_aprovados_judge(
+    log_item, bag_judged: list[ResultadoBusca], descricao_original: str,
+) -> None:
+    """Após o Gemini judge, reescreve os candidatos_finais de cada
+    fornecedor mantendo só os aprovados. Usado pelo diagnóstico."""
+    # Index: (fornecedor, codigo, preco) → aprovado?
+    aprovados = {
+        (r.fornecedor, r.codigo_fornecedor, r.preco) for r in bag_judged
+    }
+    for lf in log_item.por_fornecedor:
+        lf.judge_n_aprovados = sum(
+            1 for c in lf.candidatos_finais
+            if (c.fornecedor, c.codigo_fornecedor, c.preco) in aprovados
+        )
+        # Reescreve candidatos_finais marcando aprovados (descarta os rejeitados)
+        nova_lista = []
+        for c in lf.candidatos_finais:
+            if (c.fornecedor, c.codigo_fornecedor, c.preco) in aprovados:
+                # cria cópia com aprovado_judge=True
+                nova_lista.append(LogCandidatoFinal(
+                    descricao_encontrada=c.descricao_encontrada,
+                    marca=c.marca, preco=c.preco,
+                    codigo_fornecedor=c.codigo_fornecedor,
+                    fornecedor=c.fornecedor,
+                    confianca=c.confianca,
+                    relevancia_vs_original=c.relevancia_vs_original,
+                    veio_por_codigo=c.veio_por_codigo,
+                    aprovado_judge=True,
+                ))
+        lf.candidatos_finais = nova_lista
+
+
+def _invalidar_cache_se_versao_mudou(conn) -> None:
+    """Compara a versão hardcoded (`BUSCA_VERSAO`) com a salva em
+    `data/.busca_versao`. Se diferentes, apaga `precos_cache_descricao`
+    para evitar servir resultados de algoritmo antigo.
+
+    Falha silenciosa — cache não é essencial; pior caso, sobreviveu cache
+    velho até o próximo run."""
+    try:
+        arq = config.DATA_DIR / ".busca_versao"
+        atual = arq.read_text().strip() if arq.exists() else ""
+        if atual != BUSCA_VERSAO:
+            n = db.cache_limpar(conn)
+            arq.write_text(BUSCA_VERSAO)
+            if n:
+                print(f"[scraper] Cache invalidado: {n} entradas "
+                      f"removidas (versão de busca mudou).")
+    except Exception:
+        pass
+
+
+def _aplicar_llm_judge(
+    descricao: str,
+    bag: list[ResultadoBusca],
+    conn,
+) -> Optional[list[ResultadoBusca]]:
+    """Reordena/filtra os candidatos via Gemini judge. Retorna a nova lista
+    ou None se o judge não opinou (sem chave, sem rede, etc).
+
+    Política conservadora:
+    - Se LLM retorna índices: mantém apenas esses, em ordem do LLM.
+    - Se LLM retorna []: mantém a lista original (não rejeita silenciosamente
+      — o operador ainda pode escolher).
+
+    Import tardio do judge: evita carregar `google.genai` quando o
+    pipeline não vai usar.
+    """
+    if not bag:
+        return None
+    try:
+        from .extrator_llm import julgar_candidatos
+    except ImportError:
+        return None
+    indices = julgar_candidatos(descricao, bag, conn=conn)
+    if not indices:
+        return None
+    # Reordena conforme o LLM e marca como 'variacao' (operador confere)
+    return [bag[i] for i in indices if 0 <= i < len(bag)]

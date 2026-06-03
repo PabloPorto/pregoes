@@ -9,11 +9,18 @@ do PDF (acentos, frações unicode, travessões, prefixo numérico do edital,
 quebras de linha residuais). NÃO tentamos canonizar unidades nem grafias
 diferentes no primeiro lote — isso vai ser calibrado quando o scraper
 começar a falhar em casos reais.
+
+A `relevancia` é HÍBRIDA (Q12, Camada 2): combina a lógica de keywords
+com `rapidfuzz.token_sort_ratio` para tolerar erros de digitação e
+ordem trocada de palavras.
 """
 from __future__ import annotations
 
 import re
 import unicodedata
+from typing import Optional
+
+from rapidfuzz import fuzz
 
 
 # Frações unicode comuns em editais (vergalhão ½ X, etc.)
@@ -43,10 +50,62 @@ _VIRGULA_DECIMAL = re.compile(r"(\d),(\d)")
 # Hífen, barra e parênteses são preservados (fazem parte de códigos: ca-50, c/100).
 _PONTUACAO_RUIDO = re.compile(r"[,;:]")
 
+# Grafias divergentes de alta frequência no domínio: a mesma característica
+# escrita de formas diferentes no edital vs no catálogo do fornecedor. Mapeia
+# para uma forma canônica (Tier 2.5 / 2026-06). Conservador — só pares reais
+# observados, com word boundary para não substituir dentro de outra palavra.
+_GRAFIAS_EQUIVALENTES = [
+    (re.compile(r"\bphillips\b"), "philips"),
+    (re.compile(r"\bphilipis\b"), "philips"),
+    (re.compile(r"\bfillips\b"), "philips"),
+]
+
 # Stopwords pt-BR genéricas que poluem busca em catálogo de fornecedor
 _STOPWORDS = frozenset({
     "de", "da", "do", "das", "dos", "para", "com", "sem", "em",
-    "por", "ou", "se", "que",
+    "por", "ou", "se", "que", "nao", "sao", "seu", "sua",
+})
+
+# Termos CONTRATUAIS de edital — aparecem na descrição do item mas NUNCA no
+# nome do produto no catálogo do fornecedor. Usados por `keywords_distintivas`
+# para montar uma QUERY curta e distintiva (não para o cálculo de relevância,
+# que continua vendo todas as keywords). Calibrado a partir dos editais reais
+# (TRE-PE etc). Conservador de propósito: termos ambíguos que PODEM ser
+# categoria de produto (ex: "material", "cor") ficam de fora para não perder
+# sinal.
+_STOPWORDS_DOMINIO = frozenset({
+    "garantia", "garantias", "minima", "minimo", "maxima", "maximo",
+    "conforme", "acordo", "norma", "normas", "abnt", "nbr", "inmetro",
+    "similar", "similares", "embalagem", "embalagens", "original",
+    "fabricante", "fabricacao", "modelo", "referencia", "marca",
+    "qualidade", "qualidades", "especificacao", "especificacoes",
+    "especificado", "produto", "produtos", "caracteristicas",
+    "caracteristica", "aplicacao", "medida", "medidas", "tipo", "tipos",
+    "utilizacao", "acabamento", "composicao", "contendo", "contem",
+    "aproximada", "aproximado", "aproximadamente", "preferencia",
+    "preferencialmente", "devera", "deverao", "devem", "deve", "possa",
+    "possam", "possamos", "forma", "meses", "anos", "validade",
+    "procedencia", "nacional", "importado", "primeira", "conter",
+    "impresso", "impressa", "corpo", "nome",
+    # Termos de MEDIDA — descrevem a peça mas não distinguem subproduto;
+    # nunca devem virar "discriminador". (2026-06)
+    "espessura", "espessuras", "largura", "larguras", "comprimento",
+    "comprimentos", "altura", "alturas", "diametro", "diametros",
+    "micra", "micras", "gramatura", "capacidade", "profundidade",
+    "peso", "polegada", "polegadas", "metro", "metros", "centimetro",
+    "centimetros", "milimetro", "milimetros", "litro", "litros",
+    "espessura", "dimensao", "dimensoes",
+})
+
+# Numerais por extenso — descartados na QUERY (não ajudam a busca textual no
+# site). O número em si vira "dimensão" via `extrair_dimensoes` para o filtro
+# de relevância (ex: "5 tomadas").
+_NUMERAIS_EXTENSO = frozenset({
+    "um", "uma", "dois", "duas", "tres", "quatro", "cinco", "seis",
+    "sete", "oito", "nove", "dez", "onze", "doze", "treze", "quatorze",
+    "catorze", "quinze", "dezesseis", "dezessete", "dezoito", "dezenove",
+    "vinte", "trinta", "quarenta", "cinquenta", "sessenta", "cem",
+    "cento", "mil",
 })
 
 
@@ -90,6 +149,10 @@ def normalizar_descricao(descricao: str | None) -> str:
     s = unicodedata.normalize("NFD", s)
     s = "".join(c for c in s if unicodedata.category(c) != "Mn")
     s = s.lower()
+    # Grafias equivalentes (philips/phillips) — depois do lower, antes do
+    # colapso de espaços. Barato e estável.
+    for padrao, canonico in _GRAFIAS_EQUIVALENTES:
+        s = padrao.sub(canonico, s)
     s = _WHITESPACE.sub(" ", s).strip()
     return s
 
@@ -106,9 +169,9 @@ def keywords(descricao: str | None) -> list[str]:
       ranqueiam mal. Mantém quando coladas ao número (ex: "12mm", "30cm").
 
     >>> keywords("1) ABRAÇADEIRA DE NYLON 100 X 2.5 PCT C/100UND")
-    ['abracadeira', 'nylon', 'pct', 'c/100und']
+    ['abracadeira', 'nylon', 'c/100und']
     >>> keywords("10) ACO CA-50, 12,5 MM, VERGALHAO C/ 12M SUPERFÍCIE NERVURADA")
-    ['aco', 'ca-50', 'vergalhao', 'superficie', 'nervurada']
+    ['aco', 'ca-50', 'vergalhao', '12m', 'superficie', 'nervurada']
     """
     normalizada = normalizar_descricao(descricao)
     if not normalizada:
@@ -132,45 +195,100 @@ def keywords(descricao: str | None) -> list[str]:
     return out
 
 
-def relevancia(original: str | None, candidato: str | None) -> float:
+def keywords_distintivas(descricao: str | None, n: int = 4) -> list[str]:
+    """As `n` keywords mais distintivas para montar uma QUERY de busca curta.
+
+    Diferença para `keywords()`: além dos filtros daquela, remove termos
+    contratuais de edital (`_STOPWORDS_DOMINIO`) e numerais por extenso, e
+    limpa pontuação de borda dos tokens. Preserva a ORDEM do texto — a
+    categoria do produto aparece nas primeiras palavras do edital, então os
+    primeiros tokens distintivos são justamente o "núcleo" do produto.
+
+    Motivação (Q12 / diagnóstico real 2026-06): enviar a descrição COMPLETA
+    do edital como query (~30 tokens contratuais) faz os sites devolverem
+    produtos sem relação. Uma query curta e distintiva ("filtro de linha
+    tomadas", "chave fenda ponta philips") devolve resultados muito melhores.
+
+    >>> keywords_distintivas(
+    ...     "Filtro de linha com 5 (CINCO) tomadas elétricas de 10 Amperes, "
+    ...     "espaçadas... conforme ABNT NBR 14136, garantia mínima 03 meses")
+    ['filtro', 'linha', 'tomadas', 'eletricas']
+    >>> keywords_distintivas('Chave de fenda com ponta Philips (3/16" x 3")')
+    ['chave', 'fenda', 'ponta', 'philips']
+    >>> # Editais repetem termos — deduplica preservando ordem
+    >>> keywords_distintivas("Removedor de etiquetas e colas; removedor base solvente")
+    ['removedor', 'etiquetas', 'colas', 'base']
     """
-    Score 0..1 de quão bem `candidato` casa com `original`.
+    out: list[str] = []
+    vistos: set[str] = set()
+    for k in keywords(descricao):
+        k_limpo = k.strip('()[]{}.,"\'')
+        if len(k_limpo) < 3:
+            continue
+        if k_limpo in _STOPWORDS_DOMINIO:
+            continue
+        if k_limpo in _NUMERAIS_EXTENSO:
+            continue
+        if k_limpo in vistos:   # dedup — editais repetem a categoria
+            continue
+        vistos.add(k_limpo)
+        out.append(k_limpo)
+        if len(out) >= n:
+            break
+    return out
 
-    Conta, para cada keyword da descrição original, se ela tem
-    correspondência no candidato. Considera match em três casos:
-    - Match exato: `kw_orig == kw_cand`
-    - Prefixo/sufixo: `'sold'` casa com `'soldavel'` (abreviações de
-      edital, ex: "ADAPTADOR PVC SOLD." → o produto vem "SOLDÁVEL")
-    - Substring: `'1.1/2'` casa com `'50x1.1/2'` (dimensões que vêm
-      coladas a outro número no produto, ex: "50X1.1/2")
 
-    Antes era só `intersect / N`, o que ficava cego a abreviações
-    típicas de edital. Bug visto em produção (2026-05-27): busca por
-    "ADAPTADOR PVC SOLD. CURTO DE 50 X 1.1/2\\"" retornava 0.40 contra
-    "ADAPTADOR SOLDÁVEL CURTO AMANCO 50X1.1/2" porque "sold." e
-    "soldavel" não casavam, nem "1.1/2\\"" e "50x1.1/2".
+def _primeiras_kw_categoria(desc: str, n: int = 2) -> list[str]:
+    """Primeiras N keywords-categoria da descrição.
 
-    >>> relevancia("VERGALHAO ACO CA-50 12,5MM",
-    ...            "CORRENTE SOLDADA SAO RAPHAEL 6.5MM SACO C/12,5KG")
-    0.0
-    >>> relevancia("ABRAÇADEIRA DE NYLON 100 X 2.5",
-    ...            "ABRAÇADEIRA DE NYLON FOXLUX BRANCA 2.5X10CM C/100")
-    1.0
-    >>> # Abreviação 'sold.' encontra 'soldavel':
-    >>> relevancia('ADAPTADOR PVC SOLD. CURTO DE 50 X 1.1/2"',
-    ...            'ADAPTADOR SOLDÁVEL CURTO AMANCO 50X1.1/2') >= 0.7
-    True
+    Heurística: a "categoria" do produto fica nas 2 primeiras palavras
+    distintivas do edital — REMOVEDOR de etiquetas, FILTRO de linha,
+    LONA plástica, BATERIA automotiva, CHAVE com PONTA philips.
+
+    Filtros aplicados (além dos do `keywords()`):
+    - tokens com <4 chars (descarta "pvc", "mm", siglas curtas)
+    - tokens puramente numéricos (mesmo escritos com `/` ou `.`)
     """
-    if not original or not candidato:
-        return 0.0
-    kws_orig = keywords(original)
-    kws_cand = keywords(candidato)
-    if not kws_orig:
-        return 0.0
+    out: list[str] = []
+    for k in keywords(desc):
+        k_limpo = k.rstrip('".,').lstrip('(').rstrip(')')
+        if len(k_limpo) < 4:
+            continue
+        sem_pont = k_limpo.replace(".", "").replace(",", "").replace("/", "")
+        if sem_pont.isdigit():
+            continue
+        out.append(k_limpo)
+        if len(out) >= n:
+            break
+    return out
 
+
+def _casa_como_borda(curta: str, longa: str) -> bool:
+    """True se `curta` é prefixo OU sufixo de `longa` (não conta meio).
+
+    Evita falsos positivos do tipo 'PILHA' casando em 'EMPILHADEIRA'
+    (bug visto em produção 2026-05-27 com bateria automotiva).
+    Mantém casos legítimos:
+    - prefixo: 'sold' em 'soldavel' (abreviação edital)
+    - sufixo: '1.1/2' em '50x1.1/2' (dimensão colada)
+    - sufixo: 'c/100' em 'c/100und'
+    """
+    if not curta or len(curta) < 3:
+        return False
+    return longa.startswith(curta) or longa.endswith(curta)
+
+
+def _contar_keywords_casadas(kws_orig: list[str], kws_cand: list[str]) -> int:
+    """Conta keywords do original que têm correspondência (exata, prefixo
+    ou sufixo) entre as keywords do candidato.
+
+    Substring "no meio" da palavra **não conta** (vide `_casa_como_borda`).
+    Histórico: a lógica antiga deixava 'pilha' bater em 'empilhadeira',
+    'rato' bater em 'borracha', etc — falsos positivos em editais com
+    descrições longas.
+    """
     n_match = 0
     for ko in kws_orig:
-        # Limpa caracteres de fim que atrapalham (aspas, ponto, vírgula)
         ko_limpo = ko.rstrip('".,')
         if not ko_limpo:
             continue
@@ -181,12 +299,266 @@ def relevancia(original: str | None, candidato: str | None) -> float:
             if ko_limpo == kc_limpo:
                 n_match += 1
                 break
-            # Match parcial só com pelo menos 3 chars de cada lado:
-            # evita "x" casar com "xxxx" trivialmente.
-            if len(ko_limpo) >= 3 and ko_limpo in kc_limpo:
+            # Substring só conta se aparece como prefixo ou sufixo do
+            # outro token — evita "PILHA" casando em "EMPILHADEIRA".
+            if _casa_como_borda(ko_limpo, kc_limpo):
                 n_match += 1
                 break
-            if len(kc_limpo) >= 3 and kc_limpo in ko_limpo:
+            if _casa_como_borda(kc_limpo, ko_limpo):
                 n_match += 1
                 break
-    return n_match / len(kws_orig)
+    return n_match
+
+
+# Threshold do `token_sort_ratio` (0..100) para considerar "typo óbvio
+# ou ordem trocada" entre as descrições completas. Calibrado em
+# 2026-05-27: 'PARAFUSO 10MM' vs 'PARAFUZO 10MM' = 92, 'PVC ADAPTADOR'
+# vs 'ADAPTADOR PVC' = 100. Casos legítimos com ordem trocada e typos
+# leves entram nesse intervalo. Editais detalhados vs candidatos curtos
+# raramente passam de 70 — não dispara em falsos positivos.
+_TYPO_TOKEN_SORT_MIN = 90
+_TYPO_SCORE_PISO = 0.85
+
+
+# === Tier 2: match de dimensão (Q12 / 2026-06) ===
+# Só eixos com semântica ÚNICA e confiável no domínio. Deliberadamente NÃO
+# captura "NxM" (8x6) nem "mm" soltos: são ambíguos (quantidade? espessura?
+# diâmetro? comprimento?) e gerariam falso negativo em matches bons, onde o
+# formato da dimensão difere entre edital e catálogo.
+_NUMERAL_MAP = {
+    "um": "1", "uma": "1", "dois": "2", "duas": "2", "tres": "3",
+    "quatro": "4", "cinco": "5", "seis": "6", "sete": "7", "oito": "8",
+    "nove": "9", "dez": "10", "onze": "11", "doze": "12",
+}
+_RE_POLEGADA = re.compile(r"(\d+(?:\.\d+)?/\d+)")          # 3/16, 1.1/2, 5/16
+_RE_TOMADAS = re.compile(r"\b(\d+)\s*tomadas?\b")
+_RE_AMPERE = re.compile(r"\b(\d+)(?:a\b|\s*amperes?\b)")
+_RE_VOLT = re.compile(r"\b(\d+)\s*v(?:olts?)?\b")
+_RE_WATT = re.compile(r"\b(\d+)\s*w(?:atts?)?\b")
+_RE_CA = re.compile(r"\bca[\s-]?(\d+)\b")
+
+
+def _converter_numerais_extenso(texto: str) -> str:
+    """'cinco tomadas' → '5 tomadas'. Só para extração de dimensão."""
+    return " ".join(_NUMERAL_MAP.get(p, p) for p in texto.split())
+
+
+def extrair_dimensoes(texto: str | None) -> set[tuple[str, str]]:
+    """Extrai dimensões/medidas-chave como pares `(eixo, valor)`.
+
+    Cada eixo tem semântica única no domínio, então comparar permite
+    distinguir subprodutos ("chave 3/16" vs "chave 1/8", "filtro 5 tomadas"
+    vs "filtro 3 tomadas") sem ambiguidade.
+
+    >>> sorted(extrair_dimensoes('Chave de fenda Philips 3/16" x 3"'))
+    [('pol', '3/16')]
+    >>> sorted(extrair_dimensoes("Filtro de linha 5 (CINCO) tomadas 10 Amperes"))
+    [('amp', '10'), ('tom', '5')]
+    >>> sorted(extrair_dimensoes("Bateria 12V"))
+    [('v', '12')]
+    """
+    if not texto:
+        return set()
+    # Remove parênteses (separam o número do substantivo: "5 (cinco) tomadas")
+    t = normalizar_descricao(texto).replace("(", " ").replace(")", " ")
+    t = _converter_numerais_extenso(t)
+    dims: set[tuple[str, str]] = set()
+    for v in _RE_POLEGADA.findall(t):
+        dims.add(("pol", v))
+    for v in _RE_TOMADAS.findall(t):
+        dims.add(("tom", v))
+    for v in _RE_AMPERE.findall(t):
+        dims.add(("amp", v))
+    for v in _RE_VOLT.findall(t):
+        dims.add(("v", v))
+    for v in _RE_WATT.findall(t):
+        dims.add(("w", v))
+    for v in _RE_CA.findall(t):
+        dims.add(("ca", v))
+    return dims
+
+
+# === Tier 3: keyword discriminadora (Q12 / 2026-06) ===
+# Atributos genéricos que aparecem em muitos produtos da MESMA categoria —
+# não distinguem subproduto. A "discriminadora" é a keyword que sobra depois
+# de remover categoria + atributos genéricos + dimensões: tipicamente uma
+# marca/tipo específico ("philips", "multicraft", "lonax", "neon").
+_ATRIBUTOS_GENERICOS = frozenset({
+    "ponta", "cabo", "isolante", "base", "tipo", "tipos", "cor", "cores",
+    "preto", "preta", "branco", "branca", "azul", "verde", "vermelho",
+    "amarelo", "cinza", "reforcado", "reforcada", "flexivel", "rigido",
+    "rigida", "macho", "femea", "simples", "dupla", "duplo", "redondo",
+    "redonda", "quadrado", "quadrada", "chato", "chata", "liso", "lisa",
+    "comum", "profissional", "manual", "automatico", "automatica",
+    "eletrico", "eletrica", "eletricas", "metalico", "metalica", "metalicos",
+    "metalicas", "plastico", "plastica", "aco", "carbono", "temperado",
+    "cromado", "galvanizado", "inox", "longo", "longa", "curto", "curta",
+    "grande", "pequeno", "medio", "media", "novo", "nova",
+    # Características construtivas que aparecem na descrição do edital mas
+    # raramente no NOME do produto no catálogo — penalizar por elas geraria
+    # falso negativo (o produto pode ter a característica sem citá-la).
+    "cantos", "ilhoses", "ilhos", "reforcado", "reforcada", "reforcados",
+    "reforcadas", "reforco", "borda", "bordas", "furos", "furado",
+    "furada", "soldado", "soldada", "rosca", "rosqueado",
+})
+
+
+def _keyword_discriminadora(desc: str | None) -> Optional[str]:
+    """A keyword mais específica do edital, fora da categoria e dos atributos
+    genéricos. Tipicamente marca/tipo ("philips") que define o subproduto.
+
+    Retorna None quando não há candidato claro (degrada gracioso — sem
+    penalidade no `relevancia`).
+
+    >>> _keyword_discriminadora('Chave de fenda com ponta Philips 3/16')
+    'philips'
+    >>> # Sem marca/tipo — só medidas e características → None (sem penalidade)
+    >>> _keyword_discriminadora(
+    ...     'LONA PLÁSTICA ESPESSURA 200 MICRA LARGURA 8M COR PRETA '
+    ...     'COM CANTOS REFORÇADOS E ILHOSES') is None
+    True
+    """
+    if not desc:
+        return None
+    cats = set(_primeiras_kw_categoria(desc, 2))
+    # Fonte: keywords DISTINTIVAS (top do texto, já sem ruído de domínio e
+    # numerais). Isso garante que o discriminador é um termo PRINCIPAL —
+    # marca/tipo no começo da descrição — e não uma característica
+    # construtiva de cauda ("ilhoses", "cantos") que o produto pode ter
+    # sem citar no nome.
+    for kl in keywords_distintivas(desc, 6):
+        if kl in cats or kl in _ATRIBUTOS_GENERICOS:
+            continue
+        if any(ch.isdigit() for ch in kl):   # dimensão/spec → Tier 2 cuida
+            continue
+        return kl
+    return None
+
+
+def relevancia(original: str | None, candidato: str | None) -> float:
+    """
+    Score 0..1 de quão bem `candidato` casa com `original`.
+
+    Algoritmo (calibrado em 2026-05-27 com diagnóstico real do TRE-PE):
+
+    1. **Base** = `keywords_casadas / min(len(orig), len(cand))`.
+       O `min` resolve dois problemas simétricos:
+       - Editais com descrição longa (50+ tokens) viviam com score baixo
+         se dividíamos pelo `len(orig)` — diluição.
+       - Candidatos detalhados ("abraçadeira foxlux 2.5x10cm c/100") viviam
+         com score baixo se dividíamos pelo `len(cand)` — mesma diluição.
+       Pegar o `min` casa o cálculo pela parte mais sucinta da comparação.
+
+    2. **Veto/boost de categoria**: pega as 2 primeiras keywords ≥4 chars
+       não-numéricas do edital (a "categoria" do produto: "filtro+linha",
+       "lona+plastica", "bateria+automotiva"). Conta quantas dessas
+       categorias batem nas keywords do candidato:
+       - 0 de N → score × 0.3 (veto pesado — produto de categoria errada)
+       - N de N → score × 1.2 (boost — produto certo na categoria certa)
+       - Parcial → neutro
+
+    3. **Boost de typo/ordem**: se `token_sort_ratio` entre as descrições
+       inteiras é ≥ 90 (typo óbvio ou ordem trocada) E pelo menos uma
+       keyword casa, devolve no mínimo `0.85`. Resolve `PARAFUZO`/`PARAFUSO`
+       e `PVC ADAPTADOR`/`ADAPTADOR PVC` sem afrouxar o filtro para o resto.
+
+    Threshold recomendado no scraper: **0.35** (calibrado em 30 candidatos
+    reais — 8/9 verdadeiros passam, 0/21 falsos passam).
+
+    >>> # Vergalhão vs Corrente — categorias diferentes
+    >>> relevancia("VERGALHAO ACO CA-50 12,5MM",
+    ...            "CORRENTE SOLDADA SAO RAPHAEL 6.5MM SACO C/12,5KG") < 0.35
+    True
+    >>> # Abraçadeira — match limpo
+    >>> relevancia("ABRAÇADEIRA DE NYLON 100 X 2.5",
+    ...            "ABRAÇADEIRA DE NYLON FOXLUX BRANCA 2.5X10CM C/100") >= 0.7
+    True
+    >>> # Abreviação 'sold.' encontra 'soldavel'
+    >>> relevancia('ADAPTADOR PVC SOLD. CURTO DE 50 X 1.1/2"',
+    ...            'ADAPTADOR SOLDÁVEL CURTO AMANCO 50X1.1/2') >= 0.7
+    True
+    >>> # Typo no edital — boost via token_sort_ratio
+    >>> relevancia('PARAFUSO 10MM', 'PARAFUZO 10MM') >= 0.7
+    True
+    >>> # Ordem trocada
+    >>> relevancia('PVC ADAPTADOR', 'ADAPTADOR PVC') >= 0.7
+    True
+    >>> # Filtro de linha do TRE-PE — categoria certa, edital longo
+    >>> # vs candidato curto. Diagnóstico mostrou 0.40 na variante F.
+    >>> relevancia(
+    ...     "Filtro de linha com 5 (CINCO) tomadas elétricas de 10 Amperes",
+    ...     "FILTRO DE LINHA MULTICRAFT 2P+T PRETO 10A 05 TOMADAS",
+    ... ) >= 0.35
+    True
+    >>> # Filtro de linha vs Luminária LED — categoria errada (veto)
+    >>> relevancia(
+    ...     "Filtro de linha com 5 (CINCO) tomadas elétricas de 10 Amperes",
+    ...     "LUMINARIA AVANT LED LINHA POP PLASTICO ABS 30W",
+    ... ) < 0.35
+    True
+    """
+    if not original or not candidato:
+        return 0.0
+
+    ko = keywords(original)
+    kc = keywords(candidato)
+    if not ko or not kc:
+        return 0.0
+
+    casadas = _contar_keywords_casadas(ko, kc)
+    base = casadas / min(len(ko), len(kc))
+
+    # Veto/boost de categoria
+    cats = _primeiras_kw_categoria(original, n=2)
+    if cats:
+        kc_limpos = [k.rstrip('".,') for k in kc]
+        cat_casadas = 0
+        for cat in cats:
+            for k in kc_limpos:
+                if (cat == k
+                        or (len(cat) >= 4 and cat in k)
+                        or (len(k) >= 4 and k in cat)):
+                    cat_casadas += 1
+                    break
+        if cat_casadas == 0:
+            base *= 0.3
+        elif cat_casadas == len(cats):
+            base = min(1.0, base * 1.2)
+
+    # Boost de typo / ordem trocada — só dispara se já há alguma
+    # afinidade textual (`casadas > 0`) pra evitar que descrições
+    # detalhadas coincidentemente próximas em distância de edição
+    # passem indevidamente. Aplicado como PISO antes dos ajustes de
+    # dimensão/discriminador (que ainda podem rebaixar).
+    if casadas > 0:
+        norm_o = normalizar_descricao(original)
+        norm_c = normalizar_descricao(candidato)
+        if (norm_o and norm_c and
+                fuzz.token_sort_ratio(norm_o, norm_c) >= _TYPO_TOKEN_SORT_MIN):
+            base = max(base, _TYPO_SCORE_PISO)
+
+    # Tier 2 — match de dimensão. Eixos confiáveis (polegada, tomadas,
+    # ampere, volt, watt, ca): mesmo eixo+valor → boost; mesmo eixo com
+    # valor divergente (3/16 vs 1/8) → penalidade. Distingue subprodutos.
+    dims_o = extrair_dimensoes(original)
+    dims_c = extrair_dimensoes(candidato)
+    if dims_o and dims_c:
+        if dims_o & dims_c:                      # alguma dimensão idêntica
+            base *= 1.15
+        elif {e for e, _ in dims_o} & {e for e, _ in dims_c}:
+            base *= 0.6                          # mesmo eixo, valor diferente
+
+    # Tier 3 — keyword discriminadora. Se o edital tem um termo específico
+    # (marca/tipo: "philips") e o candidato NÃO o contém, rebaixa (mostra
+    # rebaixado, não esconde — decisão do operador 2026-06).
+    disc = _keyword_discriminadora(original)
+    if disc:
+        kc_limpos = [k.rstrip('".,') for k in kc]
+        achou = any(
+            disc == k or _casa_como_borda(disc, k) or _casa_como_borda(k, disc)
+            for k in kc_limpos
+        )
+        if not achou:
+            base *= 0.7
+
+    return min(1.0, base)

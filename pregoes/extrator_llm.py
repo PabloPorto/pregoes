@@ -2,6 +2,11 @@
 Camada de extração via LLM (Gemini 2.0 Flash) — Camada 2 automática
 do pipeline quando pdfplumber retorna confiança < 95%.
 
+Também fornece **Camada 3 da busca de produtos** (Q12) via
+`julgar_candidatos`: quando o casamento textual + fuzzy não dá relevância
+suficiente, mandamos os top-N candidatos pro Gemini decidir qual (se
+algum) corresponde ao item do edital.
+
 Por que LLM e não Docling (atual Camada 2 opcional):
 - Acurácia em tabelas BR estado-da-arte (~98-99% em testes similares)
 - Resolve encoding na origem (lê texto extraído pelo pdfplumber, mas
@@ -29,15 +34,17 @@ a função levanta — quem chama (pipeline) deve cair para o fallback
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
+import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 import pdfplumber
 
-from . import credenciais
+from . import credenciais, db
 from .extrator import (
     ItemExtraido,
     ResultadoExtracao,
@@ -47,6 +54,9 @@ from .extrator import (
     _THRESHOLD_LINHA_EXTRAIDA,
 )
 from .validador import score_linha
+
+if TYPE_CHECKING:
+    from .scraper import ResultadoBusca
 
 
 # Modelo padrão: `gemini-2.5-flash-lite` tem 1M de contexto e free tier
@@ -333,3 +343,178 @@ def _dict_para_item(d: dict, *, pagina: int) -> Optional[ItemExtraido]:
         pagina=pagina,
         # confianca será setada pelo caller após score_linha
     )
+
+
+# === Camada 3: LLM judge para candidatos de busca (Q12) ===
+
+PROMPT_JUDGE = """Você é um juiz especializado em produtos de construção,
+hidráulica e elétrica vendidos no Brasil.
+
+Recebe a descrição de um ITEM DE EDITAL e uma lista de CANDIDATOS retornados
+por buscas em catálogos de distribuidores. Sua tarefa: decidir quais
+candidatos correspondem AO MESMO produto físico do item do edital, e
+ordená-los do melhor pro pior.
+
+Considere:
+- Sinônimos e termos equivalentes em português ("CANO" = "TUBO" = "TUBULAÇÃO";
+  "PARAFUSO" = "PARAFUZO" se for typo)
+- Abreviações ("SOLD." = "SOLDÁVEL", "PCT" = "PACOTE", "UND" = "UNIDADE")
+- Variação de ordem de palavras ("PVC ADAPTADOR" = "ADAPTADOR PVC")
+- Dimensões devem coincidir (50mm ≠ 100mm, 1/2" ≠ 3/4")
+- Marca não importa pra match — o operador escolhe marca depois
+
+REJEITE candidatos cujo NCM/categoria seja claramente diferente:
+- "PARAFUSO" e "PORCA" são produtos distintos (mesmo NCM próximo)
+- "TUBO PVC" e "REGISTRO PVC" são distintos
+- "VERGALHÃO" e "CORRENTE" são distintos
+
+DESCRIÇÃO DO ITEM DO EDITAL:
+{descricao}
+
+CANDIDATOS (índice 0-based):
+{candidatos}
+
+Retorne SOMENTE um array JSON de inteiros — os índices dos candidatos que
+correspondem, EM ORDEM do melhor para o pior. Se nenhum corresponder,
+retorne [].
+
+Exemplo de resposta válida: [2, 0]   (candidato 2 é o melhor, depois o 0)
+Exemplo de resposta válida: []        (nenhum corresponde)
+
+JSON:"""
+
+
+def _chave_judge(descricao: str, candidatos: list["ResultadoBusca"]) -> str:
+    """Hash determinístico da entrada do judge.
+
+    Inclui descrição normalizada + códigos dos candidatos (ordenados, pra
+    ser estável contra reordenação do scraper). Não inclui preço (varia)
+    nem marca (irrelevante pra match).
+    """
+    from .normalizador import normalizar_descricao
+    desc_n = normalizar_descricao(descricao)
+    chaves = sorted(
+        f"{c.fornecedor}:{c.codigo_fornecedor}" for c in candidatos
+    )
+    base = desc_n + "|" + "|".join(chaves)
+    return hashlib.sha256(base.encode("utf-8")).hexdigest()
+
+
+def julgar_candidatos(
+    descricao: str,
+    candidatos: list["ResultadoBusca"],
+    *,
+    conn: Optional[sqlite3.Connection] = None,
+    api_key: Optional[str] = None,
+    modelo: str = MODELO_DEFAULT,
+    max_candidatos: int = 10,
+) -> list[int]:
+    """Camada 3 (LLM judge) — decide quais candidatos correspondem ao item.
+
+    Devolve `list[int]` com os ÍNDICES (na lista `candidatos`) que o LLM
+    considerou correspondência válida, em ordem do melhor para o pior.
+    Lista vazia = nenhum candidato corresponde.
+
+    Caching:
+    - Se `conn` for fornecida, consulta `cache_llm_judge` antes (TTL infinito).
+    - Hit: retorna lista cacheada, sem chamar API.
+    - Miss: chama Gemini, grava no cache.
+
+    Falhas (rede, JSON inválido, sem API key) NÃO levantam — retornam `[]`
+    e quem chamou cai pro próximo passo do pipeline (fallback "top 3
+    variação" do scraper). Custo de erro: operador escolhe manualmente.
+
+    Args:
+        descricao: descrição do item do edital
+        candidatos: lista de ResultadoBusca já trazidos pelo scraper
+        conn: conexão SQLite para cache (opcional)
+        api_key: se None, carrega de credenciais.carregar_chave_api
+        modelo: nome do modelo Gemini
+        max_candidatos: limita quantos candidatos vão pro prompt (custo)
+    """
+    if not descricao or not candidatos:
+        return []
+
+    # Trunca: muitos candidatos não acrescentam (top-N já cobre)
+    candidatos = candidatos[:max_candidatos]
+
+    chave = _chave_judge(descricao, candidatos)
+
+    # Cache hit?
+    if conn is not None:
+        cached = db.llm_judge_buscar(conn, chave)
+        if cached is not None:
+            try:
+                lista = json.loads(cached)
+                if isinstance(lista, list):
+                    return [int(i) for i in lista
+                            if isinstance(i, int) and 0 <= i < len(candidatos)]
+            except (ValueError, TypeError):
+                pass  # cache corrompido — recalcula
+
+    # Sem API key → não chama, devolve vazio (caller cai pro fallback do scraper)
+    if api_key is None:
+        api_key = credenciais.carregar_chave_api("gemini")
+    if not api_key:
+        return []
+
+    # Chama Gemini
+    try:
+        from google import genai
+        client = genai.Client(api_key=api_key)
+        candidatos_str = "\n".join(
+            f"  [{i}] {c.descricao_encontrada} "
+            f"(código {c.codigo_fornecedor}, {c.fornecedor})"
+            for i, c in enumerate(candidatos)
+        )
+        prompt = PROMPT_JUDGE.format(
+            descricao=descricao,
+            candidatos=candidatos_str,
+        )
+        resposta = client.models.generate_content(model=modelo, contents=prompt)
+        texto = (resposta.text or "").strip()
+    except Exception:
+        # Sem internet, rate limit, ou modelo indisponível — silencioso.
+        # Operador vê os candidatos "top 3 variação" do scraper na UI e
+        # decide manualmente (fallback comportamental antigo).
+        return []
+
+    indices = _parse_indices_judge(texto, total_candidatos=len(candidatos))
+
+    # Grava no cache mesmo se vazio — é resposta válida do modelo
+    if conn is not None:
+        try:
+            db.llm_judge_gravar(conn, chave, descricao[:120],
+                                 json.dumps(indices))
+        except Exception:
+            pass  # cache não-essencial; falha silenciosa
+
+    return indices
+
+
+def _parse_indices_judge(texto: str, *, total_candidatos: int) -> list[int]:
+    """Extrai array JSON de inteiros da resposta do judge. Resiliente a
+    cercas markdown, prosa antes/depois, e índices fora do range."""
+    if not texto:
+        return []
+    s = texto.strip()
+    s = re.sub(r"^```(?:json)?\s*", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\s*```\s*$", "", s)
+
+    inicio = s.find("[")
+    fim = s.rfind("]")
+    if inicio < 0 or fim < 0 or fim <= inicio:
+        return []
+
+    fatia = s[inicio:fim + 1]
+    try:
+        lista = json.loads(fatia)
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(lista, list):
+        return []
+    out: list[int] = []
+    for v in lista:
+        if isinstance(v, int) and 0 <= v < total_candidatos:
+            out.append(v)
+    return out

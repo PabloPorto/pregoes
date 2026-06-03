@@ -32,6 +32,11 @@ CACHE_PRECO_DIAS = 2                # TTL conforme decisão (resp 9)
 
 # === Scraping ===
 SCRAPER_TIMEOUT_SEGUNDOS = 30
+# Máximo de candidatos retornados por (item, fornecedor). Calibrado em
+# 2026-05-27 após operador reportar que 47-60 candidatos por item poluía
+# a UI. Top-N por relevância (depois por preço) é suficiente — o restante
+# é ruído de "produto da mesma categoria mas dimensão muito diferente".
+SCRAPER_MAX_CANDIDATOS_POR_FORNECEDOR = 5
 SCRAPER_RETRY = 2
 # Pool de páginas Playwright por fornecedor — paraleliza as buscas
 # em um lote. 4 é equilíbrio: ganho linear até ~5 antes do site começar

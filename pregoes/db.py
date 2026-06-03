@@ -101,6 +101,34 @@ CREATE TABLE IF NOT EXISTS precos_cache_descricao (
 
 CREATE INDEX IF NOT EXISTS idx_cache_desc_data
     ON precos_cache_descricao(descricao_normalizada, fornecedor, consultado_em DESC);
+
+-- Cache do LLM judge (Camada 3 da Fase 3 / Q12).
+-- Chave = SHA256(descricao_normalizada + códigos_dos_candidatos_ordenados).
+-- TTL infinito: a semântica "esta descrição casa com este produto" não muda
+-- com o tempo. Custo: ~$0.001 por miss; depois zero pra sempre.
+CREATE TABLE IF NOT EXISTS cache_llm_judge (
+    chave_hash     TEXT PRIMARY KEY,
+    descricao      TEXT NOT NULL,            -- só pra debug/auditoria
+    payload        TEXT NOT NULL,            -- JSON list[int] de índices
+    criado_em      TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Aprendizado por feedback do operador (Camada 4 da Fase 3 / Q12).
+-- Quando o operador escolhe uma marca diferente da default na UI, gravamos
+-- aqui para que próximas buscas de descrição similar (fuzzy >= 95) reusem.
+CREATE TABLE IF NOT EXISTS mapeamentos_aprendidos (
+    id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+    descricao_normalizada    TEXT NOT NULL,
+    fornecedor               TEXT NOT NULL,
+    codigo_fornecedor        TEXT NOT NULL,
+    marca                    TEXT,
+    preco                    REAL,            -- preço observado no momento (referência)
+    criado_em                TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(descricao_normalizada, fornecedor)
+);
+
+CREATE INDEX IF NOT EXISTS idx_aprendidos_desc
+    ON mapeamentos_aprendidos(descricao_normalizada);
 """
 
 
@@ -224,6 +252,28 @@ def cache_buscar(
     return row["payload"] if row else None
 
 
+def cache_limpar(
+    conn: sqlite3.Connection,
+    fornecedor: str | None = None,
+) -> int:
+    """Apaga entradas do cache de descrição. Útil quando o algoritmo de
+    busca muda — resultados antigos podem refletir o comportamento velho.
+
+    Args:
+        fornecedor: se especificado, limpa só esse. None = todos.
+
+    Retorna o número de linhas removidas.
+    """
+    if fornecedor is None:
+        cursor = conn.execute("DELETE FROM precos_cache_descricao")
+    else:
+        cursor = conn.execute(
+            "DELETE FROM precos_cache_descricao WHERE fornecedor = ?",
+            (fornecedor,),
+        )
+    return cursor.rowcount
+
+
 def cache_gravar(
     conn: sqlite3.Connection,
     descricao_normalizada: str,
@@ -247,4 +297,98 @@ def cache_gravar(
             consultado_em = CURRENT_TIMESTAMP
         """,
         (descricao_normalizada, fornecedor, payload),
+    )
+
+
+# === Cache do LLM judge (Camada 3) ===
+# TTL infinito — a "verdade" sobre se o produto X corresponde ao item Y
+# do edital não decai com o tempo. Cache por chave hash de (descrição,
+# códigos dos candidatos) — esse conjunto é estável o suficiente.
+
+
+def llm_judge_buscar(
+    conn: sqlite3.Connection, chave_hash: str
+) -> Optional[str]:
+    """Devolve o payload JSON cacheado, ou None."""
+    if not chave_hash:
+        return None
+    row = conn.execute(
+        "SELECT payload FROM cache_llm_judge WHERE chave_hash = ?",
+        (chave_hash,),
+    ).fetchone()
+    return row["payload"] if row else None
+
+
+def llm_judge_gravar(
+    conn: sqlite3.Connection,
+    chave_hash: str,
+    descricao: str,
+    payload: str,
+) -> None:
+    """Insere ou substitui — TTL é infinito mas tolerante a substituição
+    caso re-rodemos com prompt atualizado."""
+    if not chave_hash:
+        return
+    conn.execute(
+        """
+        INSERT INTO cache_llm_judge (chave_hash, descricao, payload, criado_em)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(chave_hash) DO UPDATE SET
+            payload = excluded.payload,
+            criado_em = CURRENT_TIMESTAMP
+        """,
+        (chave_hash, descricao, payload),
+    )
+
+
+# === Aprendizado por feedback do operador (Camada 4) ===
+
+
+def aprendido_buscar(
+    conn: sqlite3.Connection,
+    descricao_normalizada: str,
+    fornecedor: str,
+) -> Optional[sqlite3.Row]:
+    """Procura mapeamento previamente aprendido para esta descrição+fornecedor.
+
+    Match exato — quem chama pode adicionalmente fazer busca fuzzy >= 95
+    via matcher para reuso em descrições próximas (TODO Camada 4 plena).
+    """
+    if not descricao_normalizada or not fornecedor:
+        return None
+    row = conn.execute(
+        """
+        SELECT codigo_fornecedor, marca, preco, criado_em
+        FROM mapeamentos_aprendidos
+        WHERE descricao_normalizada = ? AND fornecedor = ?
+        """,
+        (descricao_normalizada, fornecedor),
+    ).fetchone()
+    return row
+
+
+def aprendido_gravar(
+    conn: sqlite3.Connection,
+    descricao_normalizada: str,
+    fornecedor: str,
+    codigo_fornecedor: str,
+    marca: Optional[str] = None,
+    preco: Optional[float] = None,
+) -> None:
+    """Persiste o mapeamento. UPSERT por (descricao, fornecedor)."""
+    if not descricao_normalizada or not fornecedor or not codigo_fornecedor:
+        return
+    conn.execute(
+        """
+        INSERT INTO mapeamentos_aprendidos
+            (descricao_normalizada, fornecedor, codigo_fornecedor,
+             marca, preco, criado_em)
+        VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(descricao_normalizada, fornecedor) DO UPDATE SET
+            codigo_fornecedor = excluded.codigo_fornecedor,
+            marca = excluded.marca,
+            preco = excluded.preco,
+            criado_em = CURRENT_TIMESTAMP
+        """,
+        (descricao_normalizada, fornecedor, codigo_fornecedor, marca, preco),
     )
