@@ -128,7 +128,7 @@ _RELEVANCIA_SALVAGUARDA_CODIGO = 0.30
 # cache (`precos_cache_descricao`) quando o número aqui difere do salvo
 # em `data/.busca_versao`. Evita que resultados de versões antigas do
 # algoritmo "vazem" para o operador via cache TTL 2d.
-BUSCA_VERSAO = "2026-06-03.7-canonico-llm"
+BUSCA_VERSAO = "2026-06-03.8-dimensao-mm"
 
 
 def _montar_camadas(descricao: str) -> list[tuple[str, str]]:
@@ -699,7 +699,7 @@ def buscar_precos_para_itens(
     usar_cache: bool = True,
     usar_catalogo: bool = True,
     usar_canonico: bool = True,
-    usar_llm_judge: bool = False,
+    usar_llm_judge: bool = True,
     diagnostico: Optional[LogDiagnostico] = None,
     max_workers: Optional[int] = None,  # aceito mas ignorado (compat. legacy)
 ) -> ResultadoLote:
@@ -757,11 +757,7 @@ def buscar_precos_para_itens(
     # Conexão SQLite na thread do orquestrador. Sem lock — serial.
     conn = None
     if usar_cache or usar_catalogo:
-        import sqlite3
-        from . import config as _config
-        conn = sqlite3.connect(_config.DB_PATH)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON;")
+        conn = db.conectar()   # WAL + busy timeout (evita 'database is locked')
 
     # Invalida cache se o algoritmo de busca mudou. Evita o operador
     # ver resultados de versões antigas (e.g. fallback top-3 que retornava

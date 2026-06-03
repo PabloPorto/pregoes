@@ -87,10 +87,8 @@ def normalizar_canonico(
 
     deve_fechar = False
     if conn is None:
-        import sqlite3
         db.init_db()
-        conn = sqlite3.connect(config.DB_PATH)
-        conn.row_factory = sqlite3.Row
+        conn = db.conectar()
         deve_fechar = True
 
     try:
@@ -147,10 +145,8 @@ def normalizar_catalogo(
     """
     deve_fechar = False
     if conn is None:
-        import sqlite3
         db.init_db()
-        conn = sqlite3.connect(config.DB_PATH)
-        conn.row_factory = sqlite3.Row
+        conn = db.conectar()
         deve_fechar = True
 
     try:

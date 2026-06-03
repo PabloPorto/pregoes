@@ -218,9 +218,7 @@ def importar(
     deve_fechar = False
     if conn is None:
         db.init_db()
-        conn = sqlite3.connect(config.DB_PATH)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON;")
+        conn = db.conectar()
         deve_fechar = True
 
     try:

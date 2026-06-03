@@ -12,6 +12,8 @@ venv/
 
 # Banco e artefatos gerados
 data/pregoes.db
+data/pregoes.db-shm
+data/pregoes.db-wal
 data/exports/*.xlsx
 
 # Relatórios de diagnóstico da busca (gerados em runtime, podem conter

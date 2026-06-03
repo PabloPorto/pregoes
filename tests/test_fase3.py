@@ -210,6 +210,18 @@ class TestMatcherCanonico:
         assert m is not None
         assert m.produto.codigo_almeida == "T100"
 
+    def test_dimensao_mm_distingue_bitola_hidraulica(self):
+        """Regressão de edital real: joelho 60mm NÃO pode casar joelho 20mm.
+        mm é o diâmetro nominal — a dimensão crítica em conexões PVC."""
+        from pregoes.normalizador import extrair_dimensoes
+        assert ("mm", "60") in extrair_dimensoes("joelho pvc soldavel 60mm")
+        assert ("mm", "20") in extrair_dimensoes("joelho pvc soldavel 20mm")
+        catalogo = [self._cat("joelho pvc soldavel 20mm", id=1,
+                              desc="joelho pvc soldavel 20mm")]
+        # 60mm (edital) não casa 20mm (catálogo) — dimensão diverge
+        assert melhor_match("JOELHO PVC SOLDAVEL 60MM", catalogo,
+                            canonico_edital="joelho pvc soldavel 60mm") is None
+
     def test_canonico_valida_dimensao_divergente(self):
         """Mesmo com vocabulário igual, dimensão diferente (5/16 vs 3/8) não
         casa — é subproduto distinto."""

@@ -12,6 +12,7 @@ Este arquivo cuida apenas de **roteamento, estado e composição** das telas —
 não escreve HTML cru nem repete cores hex.
 """
 from pathlib import Path
+import os
 import tempfile
 
 import streamlit as st
@@ -22,6 +23,10 @@ from pregoes.extrator import extrair_com_pipeline
 from pregoes.exportador import exportar
 from pregoes.db import init_db, get_conn
 from pregoes.ui import style
+
+# Modo de desenvolvimento: expõe controles técnicos (diagnóstico, limpar
+# cache) que o operador final NÃO deve ver. Ative com PREGOES_DEBUG=1.
+_DEBUG = bool(os.environ.get("PREGOES_DEBUG"))
 
 
 # === Configuração da página ===
@@ -668,7 +673,7 @@ def tela_busca_precos():
     # Já buscou: pula direto para a tela de seleção.
     if "resultados_busca" in st.session_state:
         diag_path = st.session_state.get("diag_path")
-        if diag_path:
+        if _DEBUG and diag_path:
             from pathlib import Path as _Path
             p = _Path(diag_path)
             if p.exists():
@@ -705,40 +710,17 @@ def tela_busca_precos():
         tipo="info",
     )
 
-    col_chk1, col_chk2, col_chk3 = st.columns(3)
-    with col_chk1:
-        salvar_diag = st.checkbox(
-            "Salvar relatório de diagnóstico (XLSX)",
-            value=False,
-            help=(
-                "Gera planilha com o 'raio-x' da busca por item: queries "
-                "tentadas, candidatos retornados, relevância de cada um. "
-                "Útil para calibrar. Não altera o algoritmo."
-            ),
-        )
-    with col_chk2:
-        limpar_cache_antes = st.checkbox(
-            "Limpar cache antes de buscar",
-            value=False,
-            help=(
-                "Apaga buscas anteriores armazenadas (TTL 2 dias). Útil "
-                "quando o algoritmo mudou e os resultados em cache podem "
-                "estar viciados pela versão antiga. Próxima busca vai "
-                "consultar todos os fornecedores do zero (mais lenta)."
-            ),
-        )
-    with col_chk3:
-        usar_judge = st.checkbox(
-            "Usar IA para reordenar candidatos (Gemini)",
-            value=False,
-            help=(
-                "Quando ativo, itens em 'top 3 variação' vão para o "
-                "Gemini julgar quais correspondem. **Atenção:** consome "
-                "a mesma cota gratuita usada pela extração de PDF — se "
-                "exceder o limite diário, a extração de PDF também "
-                "falha. Mantenha desligado até calibrar via diagnóstico."
-            ),
-        )
+    # Controles TÉCNICOS (diagnóstico, limpar cache) só aparecem em modo de
+    # desenvolvimento (env PREGOES_DEBUG). Para o operador, a UI é limpa: a
+    # IA e o cache são automáticos, sem opção de ligar/desligar.
+    salvar_diag = False
+    limpar_cache_antes = False
+    if _DEBUG:
+        cda, cdb = st.columns(2)
+        with cda:
+            salvar_diag = st.checkbox("[dev] Salvar diagnóstico (XLSX)", value=False)
+        with cdb:
+            limpar_cache_antes = st.checkbox("[dev] Limpar cache antes", value=False)
 
     col_a, col_b, _spacer = st.columns([2, 2, 6])
     with col_a:
@@ -751,21 +733,16 @@ def tela_busca_precos():
         if limpar_cache_antes:
             from pregoes import db as _db
             with get_conn() as _conn:
-                n = _db.cache_limpar(_conn)
-            style.bloco_aviso(
-                f"Cache limpo: {n} entradas removidas.", tipo="info",
-            )
+                _db.cache_limpar(_conn)
         # IMPORTANTE: chamar fora de `with col_a:` evita que o painel
         # de progresso herde a largura estreita da coluna do botão.
         _executar_busca(itens, fornecedores_disponiveis,
-                        salvar_diagnostico=salvar_diag,
-                        usar_llm_judge=usar_judge)
+                        salvar_diagnostico=salvar_diag)
         st.rerun()
 
 
 def _executar_busca(itens: list, fornecedores_nomes: list[str],
-                     *, salvar_diagnostico: bool = False,
-                     usar_llm_judge: bool = False) -> None:
+                     *, salvar_diagnostico: bool = False) -> None:
     """Roda a busca em cada fornecedor SEQUENCIALMENTE, abrindo e fechando
     o Playwright entre eles.
 
@@ -886,10 +863,11 @@ def _executar_busca(itens: list, fornecedores_nomes: list[str],
 
         try:
             with cls(cred["email"], cred["senha"]) as forn:
+                # judge/canônico ligados por padrão no orquestrador — sem
+                # controle de UI (operador não precisa saber).
                 lote = buscar_precos_para_itens(
                     itens, [forn], progresso_callback=cb,
                     diagnostico=log_diag,
-                    usar_llm_judge=usar_llm_judge,
                 )
         except Exception as exc:
             # Falha grave (login, layout mudou) — registra como erro
@@ -1432,55 +1410,21 @@ def _aba_catalogo():
     c3.metric("Com código Dantas", com_dantas)
     c4.metric("Nomes padronizados (IA)", n_canon)
 
-    # === Padronização de nomes (Fase B) ===
-    faltam = total - n_canon
-    if total > 0 and faltam > 0:
-        from pregoes import credenciais as _cred
-        tem_chave = bool(_cred.carregar_chave_api("gemini"))
-        style.bloco_aviso(
-            f"<b>{faltam}</b> produto(s) ainda sem nome padronizado. A "
-            "padronização usa a IA para alinhar o vocabulário do catálogo com "
-            "o dos editais (ex.: <code>sxt</code>→<code>sextavado</code>, "
-            "<code>cano</code>↔<code>tubo</code>), o que faz a busca por "
-            "código casar muito mais itens. Roda uma vez e fica salvo.",
-            tipo="info" if tem_chave else "warning",
-        )
-        if not tem_chave:
-            style.bloco_aviso(
-                "Configure a chave do Gemini na aba <b>IA</b> para padronizar.",
-                tipo="warning",
-            )
-        elif st.button("Padronizar nomes do catálogo (IA)", type="primary"):
+    # A padronização de nomes (IA) roda AUTOMÁTICA ao importar — invisível ao
+    # operador. Em modo dev, um botão permite re-rodar/forçar.
+    if _DEBUG and total > 0 and (total - n_canon) > 0:
+        if st.button(f"[dev] Padronizar {total - n_canon} nomes (IA)"):
             from pregoes import alinhador
-            barra = st.progress(0.0, text="Padronizando…")
-            def _cb(feitos, tot):
-                barra.progress(min(feitos / max(tot, 1), 1.0),
-                               text=f"Padronizando… {feitos}/{tot}")
-            with st.spinner("Padronizando nomes (pode levar 1-2 minutos)…"):
-                try:
-                    stats = alinhador.normalizar_catalogo(callback=_cb)
-                except Exception as exc:
-                    style.bloco_aviso(
-                        f"Falha ao padronizar: {type(exc).__name__}: {exc}",
-                        tipo="danger")
-                    return
-            barra.progress(1.0, text="Concluído.")
-            style.bloco_aviso(
-                f"Padronização concluída: {stats['normalizados']} produto(s) "
-                f"processado(s).", tipo="success")
+            with st.spinner("Padronizando…"):
+                alinhador.normalizar_catalogo()
             st.rerun()
-    elif total > 0:
-        style.bloco_aviso(
-            "Todos os produtos têm nome padronizado — a busca por código "
-            "está no máximo de cobertura.", tipo="success")
 
     st.divider()
     st.markdown(
-        "**Para importar:** envie 1 ou mais planilhas no mesmo formato da "
-        "MATRIZ (com colunas C/D/E/F preenchidas e idealmente L/T/U). "
-        "Indique de qual fornecedor é o código da coluna T (`almeida` ou "
-        "`dantas`). Cada planilha só é contabilizada uma vez — re-enviar "
-        "não duplica preços."
+        "**Importe suas planilhas de pregões anteriores** (formato MATRIZ). "
+        "O sistema lê descrição, código, marca e preço, e usa esse histórico "
+        "para encontrar os produtos mais rápido nos próximos editais. "
+        "Re-enviar a mesma planilha não duplica nada."
     )
 
     uploads = st.file_uploader(
@@ -1490,15 +1434,14 @@ def _aba_catalogo():
         key="catalogo_uploads",
     )
     fornecedor = st.radio(
-        "Fornecedor associado ao código (coluna T) das planilhas:",
-        options=["almeida", "dantas", "nenhum (só descrição/marca)"],
+        "Fornecedor principal destas planilhas:",
+        options=["almeida", "dantas"],
         index=0,
         horizontal=True,
         help=(
-            "Se você consultou Almeida e cadastrou códigos da Almeida na "
-            "coluna T, escolha 'almeida'. Para planilhas sem códigos "
-            "específicos, escolha 'nenhum' — descrições e marcas ainda "
-            "entram no catálogo."
+            "Os códigos sem a letra no fim são deste fornecedor. Códigos "
+            "que terminam em D vão para a Dantas e A para a Almeida "
+            "automaticamente."
         ),
     )
 
@@ -1532,6 +1475,22 @@ def _aba_catalogo():
             with st.expander(f"⚠️ Avisos ({len(stats.avisos)})"):
                 for av in stats.avisos:
                     st.markdown(f"- {av}")
+
+        # Padroniza os nomes automaticamente (Fase B) — prepara o catálogo
+        # para a busca por código. Invisível ao operador; se falhar (sem
+        # chave/quota), a busca apenas cai no modo textual.
+        if credenciais.carregar_chave_api("gemini"):
+            from pregoes import alinhador
+            barra = st.progress(0.0, text="Preparando o catálogo para a busca…")
+            try:
+                alinhador.normalizar_catalogo(
+                    callback=lambda f, t: barra.progress(
+                        min(f / max(t, 1), 1.0),
+                        text=f"Preparando o catálogo… {f}/{t}"))
+                barra.progress(1.0, text="Catálogo pronto.")
+            except Exception:
+                barra.empty()  # degrada em silêncio — busca usa modo textual
+        st.rerun()
 
 
 # === Roteador ===

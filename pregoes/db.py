@@ -152,11 +152,30 @@ CREATE TABLE IF NOT EXISTS produtos_canonico (
 """
 
 
+# Espera (s) por um lock antes de desistir. A UI (Streamlit) pode ter uma
+# conexão de leitura enquanto a busca grava cache/canônico — sem isso,
+# `database is locked` aparecia (visto em 2026-06).
+_BUSY_TIMEOUT_S = 30
+
+
+def conectar(path: Path | None = None) -> sqlite3.Connection:
+    """Abre uma conexão SQLite blindada: WAL (leitura concorrente com escrita)
+    + busy timeout. Usar em todo lugar que abre conexão direta."""
+    path = Path(path) if path else config.DB_PATH
+    conn = sqlite3.connect(path, timeout=_BUSY_TIMEOUT_S)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON;")
+    conn.execute("PRAGMA journal_mode = WAL;")
+    conn.execute("PRAGMA busy_timeout = %d;" % (_BUSY_TIMEOUT_S * 1000))
+    return conn
+
+
 def init_db(path: Path | None = None) -> Path:
     """Cria o banco e as tabelas se não existirem. Idempotente."""
     path = Path(path) if path else config.DB_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(path) as conn:
+    with sqlite3.connect(path, timeout=_BUSY_TIMEOUT_S) as conn:
+        conn.execute("PRAGMA journal_mode = WAL;")   # persistente no arquivo
         conn.executescript(SCHEMA)
     return path
 
@@ -165,8 +184,9 @@ def init_db(path: Path | None = None) -> Path:
 def get_conn(path: Path | None = None):
     """Conexão como context manager — fecha sozinha, faz commit/rollback."""
     path = Path(path) if path else config.DB_PATH
-    conn = sqlite3.connect(path)
+    conn = sqlite3.connect(path, timeout=_BUSY_TIMEOUT_S)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = %d;" % (_BUSY_TIMEOUT_S * 1000))
     conn.execute("PRAGMA foreign_keys = ON;")
     try:
         yield conn
