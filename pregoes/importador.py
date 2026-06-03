@@ -38,27 +38,116 @@ from typing import Iterable, Optional
 
 from openpyxl import load_workbook
 
+import unicodedata
+
 from . import config, db
 from .normalizador import normalizar_descricao
 
 
-# Linha onde os dados começam (igual ao template). Linhas 1-3 são cabeçalho
-# de identificação (órgão, pregão), linha 4 é cabeçalho das colunas.
-LINHA_INICIO = config.LINHA_DADOS_INICIO       # 5
-# Limite superior: o template padrão vai até 504. Planilhas expandidas podem
-# ter mais — varremos até a max_row real do worksheet, mas não confiamos em
-# linhas sem descrição (paramos lá).
-LINHA_FIM_PADRAO = 504
+# Quantas linhas no topo procurar pelo cabeçalho (órgão/pregão ocupam 1-3).
+_MAX_LINHAS_CABECALHO = 12
 
-# Letras das colunas conforme `config.COLUNAS`
-COL_ITEM = "B"
-COL_DESCRICAO = "C"
-COL_UNIDADE = "D"
-COL_QUANTIDADE = "E"
-COL_VALOR_REF = "F"
-COL_PRECO_BASE = "L"
-COL_CODIGO_FORN = "T"
-COL_MARCA = "U"
+
+def _norm_cab(valor) -> str:
+    """Normaliza um rótulo de cabeçalho para comparação (sem acento, minúsculo)."""
+    if valor is None:
+        return ""
+    s = unicodedata.normalize("NFD", str(valor))
+    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
+    return s.strip().lower()
+
+
+def _classificar_coluna(nome: str) -> Optional[str]:
+    """Classifica um rótulo de cabeçalho em um campo do catálogo, ou None.
+
+    Ordem importa: regras mais específicas primeiro. Casos exatos
+    (`== "preco"`, `== "item"`) evitam confundir "PREÇO VENDA" (fórmula) com
+    "PREÇO" (custo base) e "LUCRO ITEM" com "ITEM".
+    """
+    if not nome:
+        return None
+    if "descri" in nome or "discrimina" in nome or "especificacao" in nome:
+        return "descricao"
+    if "codigo" in nome or nome == "cod":
+        return "codigo"
+    if nome == "marca":
+        return "marca"
+    if "unid" in nome:
+        return "unidade"
+    if "referencia" in nome:           # "valor/preço de referência"
+        return "valor_ref"
+    if "venda" in nome:                # "preço venda" — fórmula, ignorar
+        return None
+    if "preco" in nome:                # "preço", "preço base", "preço custo"
+        return "preco"
+    if nome.startswith("quant") or nome == "qtd":
+        return "quantidade"
+    if nome == "item":                 # exato — não "lucro item"
+        return "item"
+    return None
+
+
+def detectar_colunas(ws) -> tuple[Optional[int], dict[str, int]]:
+    """Localiza a linha de cabeçalho e mapeia campo→índice de coluna (0-based).
+
+    Resolve os layouts variáveis das planilhas reais do cliente (descrição
+    pode estar em B ou C, código em S ou T, etc). A linha de cabeçalho é a
+    primeira (entre as primeiras `_MAX_LINHAS_CABECALHO`) que contém uma
+    coluna de descrição. A primeira coluna que classifica para um campo
+    vence (evita que fórmulas à direita sobrescrevam).
+
+    Retorna `(linha_cabecalho_0based, mapa)` ou `(None, {})` se não achar.
+    """
+    for i, row in enumerate(ws.iter_rows(values_only=True, max_row=_MAX_LINHAS_CABECALHO)):
+        nomes = [_norm_cab(c) for c in row]
+        if not any(("descri" in n or "discrimina" in n) for n in nomes):
+            continue
+        mapa: dict[str, int] = {}
+        for j, n in enumerate(nomes):
+            campo = _classificar_coluna(n)
+            if campo and campo not in mapa:   # primeira ocorrência vence
+                mapa[campo] = j
+        if "descricao" in mapa:
+            return i, mapa
+    return None, {}
+
+
+def _parse_codigo(codigo, default_forn: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """Extrai `(codigo_busca, fornecedor)` de um código possivelmente sufixado.
+
+    Convenção do cliente: a inicial do fornecedor pode vir colada ao FIM do
+    código — `A` = Almeida, `D` = Dantas. O sufixo NÃO entra na busca
+    (`/busca?s={codigo_busca}`). Só é tratado como sufixo se o resto for
+    numérico — assim "43026D" vira ("43026","dantas") mas um código alfanumérico
+    genuíno não é mutilado.
+
+    Sem sufixo → usa `default_forn` (o fornecedor que o operador indicou para
+    aquela planilha).
+
+    >>> _parse_codigo("43026D", "almeida")
+    ('43026', 'dantas')
+    >>> _parse_codigo("12345A", "dantas")
+    ('12345', 'almeida')
+    >>> _parse_codigo("52763", "almeida")
+    ('52763', 'almeida')
+    >>> _parse_codigo("52763.0", "dantas")
+    ('52763', 'dantas')
+    >>> _parse_codigo(None, "almeida")
+    (None, 'almeida')
+    """
+    if codigo is None:
+        return None, default_forn
+    c = str(codigo).strip()
+    # Código veio como float do Excel ("43026.0")
+    if c.endswith(".0") and c[:-2].isdigit():
+        c = c[:-2]
+    if not c:
+        return None, default_forn
+    ult = c[-1].upper()
+    resto = c[:-1]
+    if ult in ("A", "D") and resto.isdigit():
+        return resto, ("almeida" if ult == "A" else "dantas")
+    return c, default_forn
 
 
 @dataclass
@@ -164,28 +253,48 @@ def _importar_arquivo(
     conn: sqlite3.Connection,
     stats: StatsImport,
 ) -> None:
-    """Processa uma planilha. `data_only=True` para ler valores calculados
-    das fórmulas (o cliente preenche L manualmente, mas células como E5
-    podem ter sido digitadas como fórmula em editais antigos)."""
-    wb = load_workbook(path, data_only=True, read_only=True)
+    """Processa uma planilha. `data_only=True` lê valores calculados (não
+    fórmulas). Sem `read_only` porque detectamos colunas e depois iteramos —
+    duas passadas; planilhas têm centenas de linhas, memória é irrelevante.
+
+    O layout é detectado por cabeçalho (`detectar_colunas`), resolvendo as
+    variações reais do cliente. O fornecedor de cada linha vem do sufixo do
+    código (A/D) quando presente; senão, do `fornecedor` default da planilha.
+    """
+    wb = load_workbook(path, data_only=True)
     ws = wb.active
 
-    fonte = f"import:{path.name}"
-    max_row = min(ws.max_row or LINHA_FIM_PADRAO, max(LINHA_FIM_PADRAO, ws.max_row or 0))
+    lcab, mapa = detectar_colunas(ws)
+    if lcab is None or "descricao" not in mapa:
+        stats.avisos.append(
+            f"{path.name}: cabeçalho (coluna DESCRIÇÃO) não reconhecido — planilha pulada."
+        )
+        wb.close()
+        return
+    if "codigo" not in mapa:
+        stats.avisos.append(
+            f"{path.name}: sem coluna de CÓDIGO — produtos importados sem código "
+            f"(servem só para busca textual)."
+        )
 
-    for linha_num in range(LINHA_INICIO, max_row + 1):
-        linha = _ler_linha(ws, linha_num)
+    fonte = f"import:{path.name}"
+    for row in ws.iter_rows(min_row=lcab + 2, values_only=True):
+        linha = _ler_linha_row(row, mapa)
         if linha is None:
             continue
         stats.linhas_lidas += 1
+
+        # O sufixo do código (A/D) define o fornecedor da linha; sem sufixo
+        # cai no default da planilha.
+        codigo_busca, forn = _parse_codigo(linha.codigo, fornecedor)
 
         produto_id, criado = _upsert_produto(
             conn,
             descricao=linha.descricao,
             marca=linha.marca,
             unidade=linha.unidade,
-            codigo=linha.codigo,
-            fornecedor=fornecedor,
+            codigo=codigo_busca,
+            fornecedor=forn,
         )
         if criado:
             stats.produtos_criados += 1
@@ -193,12 +302,11 @@ def _importar_arquivo(
             stats.produtos_atualizados += 1
 
         # Grava preço histórico se houver valor + fornecedor identificado.
-        # Sem fornecedor, não há onde alocar o preço (nem inferir).
-        if linha.preco is not None and fornecedor is not None:
+        if linha.preco is not None and forn is not None:
             gravou = _gravar_preco_idempotente(
                 conn,
                 produto_id=produto_id,
-                fornecedor=fornecedor,
+                fornecedor=forn,
                 preco=linha.preco,
                 unidade=linha.unidade,
                 fonte=fonte,
@@ -211,31 +319,31 @@ def _importar_arquivo(
     wb.close()
 
 
-def _ler_linha(ws, linha_num: int) -> Optional[LinhaImportada]:
-    """Extrai uma linha da planilha em formato MATRIZ. None se for inválida
-    (descrição vazia, lixo, etc.) — caller pula sem registrar."""
-    descricao_raw = _cell_str(ws[f"{COL_DESCRICAO}{linha_num}"].value)
+def _ler_linha_row(row: tuple, mapa: dict[str, int]) -> Optional[LinhaImportada]:
+    """Extrai uma linha (tupla de valores) usando o mapa de colunas detectado.
+    None se inválida (descrição vazia / linha de continuação ou totalizador)."""
+    def get(campo: str):
+        idx = mapa.get(campo)
+        if idx is None or idx >= len(row):
+            return None
+        return row[idx]
+
+    descricao_raw = _cell_str(get("descricao"))
     if not descricao_raw or len(descricao_raw) < 3:
         return None
 
     # Linha sem item E sem quantidade quase certamente é continuação ou
-    # totalizador. Descartamos pra não poluir o catálogo.
-    item_val = ws[f"{COL_ITEM}{linha_num}"].value
-    quant_val = ws[f"{COL_QUANTIDADE}{linha_num}"].value
-    if item_val is None and quant_val is None:
-        return None
-
-    unidade = _cell_str(ws[f"{COL_UNIDADE}{linha_num}"].value)
-    marca = _cell_str(ws[f"{COL_MARCA}{linha_num}"].value)
-    codigo = _cell_str(ws[f"{COL_CODIGO_FORN}{linha_num}"].value)
-    preco = _cell_num(ws[f"{COL_PRECO_BASE}{linha_num}"].value)
+    # totalizador. Só aplica o filtro se ambas as colunas existem no layout.
+    if "item" in mapa and "quantidade" in mapa:
+        if get("item") is None and get("quantidade") is None:
+            return None
 
     return LinhaImportada(
         descricao=descricao_raw,
-        unidade=unidade or None,
-        marca=marca or None,
-        codigo=codigo or None,
-        preco=preco,
+        unidade=_cell_str(get("unidade")) or None,
+        marca=_cell_str(get("marca")) or None,
+        codigo=_cell_str(get("codigo")) or None,
+        preco=_cell_num(get("preco")),
     )
 
 
