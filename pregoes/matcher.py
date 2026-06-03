@@ -39,22 +39,34 @@ from rapidfuzz import fuzz, process
 from .normalizador import keywords, normalizar_descricao
 
 
-# Threshold mínimo do `token_sort_ratio` para aceitar um match.
-# Plano Q12 propôs 90. Operacional: quem chama pode afrouxar passando
-# `threshold` menor (ex: 75 para Camada 4 com "descrições parecidas mas
-# não idênticas" reusando aprendizado).
+# Threshold mínimo do `token_sort_ratio` para aceitar um match no modo CRU
+# (descrições normalizadas localmente). Plano Q12 propôs 90.
 THRESHOLD_MATCH_DEFAULT = 90
+
+# Threshold do modo CANÔNICO (Fase B): usa `token_set_ratio` (tolerante a
+# palavras extras de um lado só — a normalização LLM é levemente
+# inconsistente: "arame farpado galvanizado 1.65mm" vs "arame farpado
+# 1.65mm x 250m"). Mais baixo que o cru porque o set_ratio é mais
+# conservador em score, e a validação de dimensão + filtro de keyword
+# protegem contra falso positivo.
+THRESHOLD_CANONICO = 85
 
 
 @dataclass(frozen=True)
 class ProdutoCatalogo:
-    """Registro do catálogo (tabela `produtos`) com o que o matcher precisa."""
+    """Registro do catálogo (tabela `produtos`) com o que o matcher precisa.
+
+    `canonico` é a forma canônica alinhada por LLM (Fase B / `produtos_canonico`),
+    quando disponível — vocabulário padronizado que casa com o canônico do
+    edital. None quando o catálogo ainda não foi normalizado.
+    """
     produto_id: int
     descricao_canonica: str
     codigo_almeida: Optional[str]
     codigo_dantas: Optional[str]
     marca: Optional[str]
     unidade_padrao: Optional[str]
+    canonico: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -81,11 +93,12 @@ def carregar_catalogo(conn: sqlite3.Connection) -> list[ProdutoCatalogo]:
     """
     rows = conn.execute(
         """
-        SELECT id, descricao_canonica, codigo_almeida, codigo_dantas,
-               marca, unidade_padrao
-        FROM produtos
-        WHERE descricao_canonica IS NOT NULL
-          AND TRIM(descricao_canonica) != ''
+        SELECT p.id, p.descricao_canonica, p.codigo_almeida, p.codigo_dantas,
+               p.marca, p.unidade_padrao, pc.canonico
+        FROM produtos p
+        LEFT JOIN produtos_canonico pc ON pc.produto_id = p.id
+        WHERE p.descricao_canonica IS NOT NULL
+          AND TRIM(p.descricao_canonica) != ''
         """
     ).fetchall()
     return [
@@ -96,6 +109,7 @@ def carregar_catalogo(conn: sqlite3.Connection) -> list[ProdutoCatalogo]:
             codigo_dantas=row["codigo_dantas"] if hasattr(row, "keys") else row[3],
             marca=row["marca"] if hasattr(row, "keys") else row[4],
             unidade_padrao=row["unidade_padrao"] if hasattr(row, "keys") else row[5],
+            canonico=row["canonico"] if hasattr(row, "keys") else row[6],
         )
         for row in rows
     ]
@@ -106,70 +120,98 @@ def melhor_match(
     catalogo: list[ProdutoCatalogo],
     *,
     threshold: int = THRESHOLD_MATCH_DEFAULT,
+    canonico_edital: Optional[str] = None,
 ) -> Optional[MatchProduto]:
     """Encontra o melhor produto do catálogo para a descrição do edital.
 
     Função PURA — não toca em SQLite. Recebe lista e devolve melhor match.
 
-    Algoritmo:
-    1. Normaliza a descrição do edital (acentos, frações, prefixo "NN)")
-    2. Cria índice {produto_id: descricao_normalizada} do catálogo
-    3. `rapidfuzz.process.extractOne` com `token_sort_ratio`
-    4. Filtro extra de proteção: pelo menos UM token-chave (>=3 chars,
-       não-stopword, não-unidade) precisa coincidir entre original e
-       canônica. Bloqueia "falsos amigos" — produtos com tokens curtos
-       ou stopwords que casam acidentalmente com score alto.
+    Dois modos:
+    - **Canônico (Fase B)**: se `canonico_edital` é dado E o catálogo tem
+      formas canônicas (`produto.canonico`), casa as FORMAS CANÔNICAS — ambos
+      reduzidos pelo LLM ao mesmo vocabulário ("tubo pvc 100mm"). Resolve
+      sinônimo/abreviação que o fuzzy cru não pega (cano≠tubo, sxt≠sextavado).
+    - **Cru (degradação)**: senão, casa as descrições normalizadas localmente
+      (comportamento anterior). Usado quando o catálogo não foi normalizado
+      ou não há quota.
 
-    Retorna `None` se:
-    - descrição vazia
-    - catálogo vazio
-    - nenhum produto >= threshold
-    - melhor match não compartilha keywords (filtro de proteção)
+    Em ambos os modos:
+    - filtro de proteção por keyword (≥1 token distintivo em comum);
+    - validação de DIMENSÃO (Tier 2): se ambos têm dimensão no mesmo eixo
+      mas valores divergentes (5/16 vs 3/8), rejeita — é subproduto diferente.
+
+    Retorna `None` se nada casa com segurança.
     """
     if not descricao or not catalogo:
         return None
 
-    desc_norm = normalizar_descricao(descricao)
-    if not desc_norm:
-        return None
-
-    # Índice id → descricao normalizada (para o rapidfuzz reconciliar)
-    # Não usamos a descrição canônica crua porque ela tem acentos e
-    # variações de caixa; normalizando, comparamos "maçãs com maçãs".
-    indice: dict[int, str] = {
-        p.produto_id: normalizar_descricao(p.descricao_canonica)
-        for p in catalogo
-    }
-    # Remove entradas com descrição normalizada vazia (caso raro de catálogo sujo)
+    usar_canonico = (
+        bool(canonico_edital) and any(p.canonico for p in catalogo)
+    )
+    if usar_canonico:
+        consulta = canonico_edital
+        indice = {p.produto_id: p.canonico for p in catalogo if p.canonico}
+        # token_set_ratio: tolera palavras que aparecem só de um lado (a
+        # normalização LLM é levemente inconsistente). Threshold próprio.
+        scorer = fuzz.token_set_ratio
+        cutoff = THRESHOLD_CANONICO if threshold == THRESHOLD_MATCH_DEFAULT else threshold
+    else:
+        consulta = normalizar_descricao(descricao)
+        indice = {
+            p.produto_id: normalizar_descricao(p.descricao_canonica)
+            for p in catalogo
+        }
+        scorer = fuzz.token_sort_ratio
+        cutoff = threshold
+    consulta = (consulta or "").strip()
     indice = {k: v for k, v in indice.items() if v}
-    if not indice:
+    if not consulta or not indice:
         return None
 
     res = process.extractOne(
-        desc_norm,
-        indice,
-        scorer=fuzz.token_sort_ratio,
-        score_cutoff=threshold,
+        consulta, indice, scorer=scorer, score_cutoff=cutoff,
     )
     if res is None:
         return None
-
-    # Em rapidfuzz 3.x com dict: retorna (value, score, key)
     _, score, produto_id = res
-
-    # Filtro de proteção: ao menos uma keyword distintiva precisa coincidir.
-    # Sem isso, "TUBO PVC 50MM" e "CANO PVC 100MM" podem casar com score alto
-    # (token_sort_ratio compensa muito).
-    kws_orig = set(keywords(descricao))
-    kws_cand = set(keywords(_canonica_de(catalogo, produto_id)))
-    if kws_orig and not (kws_orig & kws_cand):
-        return None
 
     produto = _por_id(catalogo, produto_id)
     if produto is None:
         return None
 
+    # Texto do lado do edital e do produto para os filtros abaixo —
+    # usa o canônico quando esse foi o modo de casamento.
+    texto_edital = consulta if usar_canonico else descricao
+    texto_produto = (produto.canonico if usar_canonico else
+                     produto.descricao_canonica) or ""
+
+    # Filtro de proteção: ao menos uma keyword distintiva em comum.
+    kws_e = set(keywords(texto_edital))
+    kws_p = set(keywords(texto_produto))
+    if kws_e and not (kws_e & kws_p):
+        return None
+
+    # Validação de dimensão: mesmo eixo com valor divergente → subproduto
+    # diferente (parafuso 5/16 não é parafuso 3/8).
+    if _dimensao_diverge(texto_edital, texto_produto):
+        return None
+
     return MatchProduto(produto=produto, score=float(score))
+
+
+def _dimensao_diverge(texto_a: str, texto_b: str) -> bool:
+    """True se A e B têm dimensão no MESMO eixo mas nenhum valor em comum."""
+    from .normalizador import extrair_dimensoes
+    da, dbb = extrair_dimensoes(texto_a), extrair_dimensoes(texto_b)
+    if not da or not dbb:
+        return False
+    eixos_comuns = {e for e, _ in da} & {e for e, _ in dbb}
+    for eixo in eixos_comuns:
+        va = {v for e, v in da if e == eixo}
+        vb = {v for e, v in dbb if e == eixo}
+        if not (va & vb):
+            return True
+    return False
 
 
 def buscar_produto(

@@ -47,7 +47,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Callable, Optional, Protocol
 from urllib.parse import quote_plus
 
-from . import config, db
+from . import config, credenciais, db
 from .diagnostico import (
     LogCandidatoFinal,
     LogDiagnostico,
@@ -112,12 +112,23 @@ _MAX_RESULTADOS_POR_QUERY = 30
 # Não voltar para 0.6 sem revisar a função.
 _RELEVANCIA_MINIMA = 0.35
 
+# Salvaguarda da busca por código (Q12 / 2026-06): o produto que o site
+# devolve para um código precisa ter afinidade textual mínima com o que o
+# catálogo dizia ser aquele código. Protege contra fornecedor/código errado
+# (ex.: código sem sufixo assumido como Almeida que na verdade era Dantas —
+# o mesmo número aponta produtos diferentes em cada site). Threshold BAIXO
+# de propósito: o produto pode ter nome bem diferente do edital (é o motivo
+# de usar código), mas um código grosseiramente errado traz algo sem
+# nenhuma relação (rel ~0). Comparamos contra a descrição canônica do
+# catálogo, não a do edital — ambas descrevem o mesmo código/fornecedor.
+_RELEVANCIA_SALVAGUARDA_CODIGO = 0.30
+
 # Versão do algoritmo de busca. Bumpar quando MUDA semântica do filtro
 # (relevância, threshold, top-N por fornecedor). O orquestrador limpa o
 # cache (`precos_cache_descricao`) quando o número aqui difere do salvo
 # em `data/.busca_versao`. Evita que resultados de versões antigas do
 # algoritmo "vazem" para o operador via cache TTL 2d.
-BUSCA_VERSAO = "2026-06-03.5-query-distintiva-dimensao-discriminador"
+BUSCA_VERSAO = "2026-06-03.7-canonico-llm"
 
 
 def _montar_camadas(descricao: str) -> list[tuple[str, str]]:
@@ -687,6 +698,7 @@ def buscar_precos_para_itens(
     progresso_callback: Optional[ProgressoCallback] = None,
     usar_cache: bool = True,
     usar_catalogo: bool = True,
+    usar_canonico: bool = True,
     usar_llm_judge: bool = False,
     diagnostico: Optional[LogDiagnostico] = None,
     max_workers: Optional[int] = None,  # aceito mas ignorado (compat. legacy)
@@ -768,6 +780,22 @@ def buscar_precos_para_itens(
             # Banco sem schema, corrompido etc — não impede o caminho atual.
             catalogo = []
 
+    # Fase B: canoniza as descrições do edital em LOTE (1-N chamadas LLM por
+    # edital, cacheadas) para casar com o canônico do catálogo. Só vale a
+    # pena se o catálogo foi normalizado (tem `canonico`) e há chave Gemini.
+    # Sem isso, `canon_itens` fica vazio e o matcher cai no modo cru — limpo,
+    # porque o modo cru compara descricao_canonica (não o canônico).
+    canon_itens: dict[str, str] = {}
+    if (usar_catalogo and usar_canonico and conn is not None
+            and any(p.canonico for p in catalogo)
+            and credenciais.carregar_chave_api("gemini")):
+        try:
+            from .alinhador import normalizar_canonico
+            canon_itens = normalizar_canonico(
+                [it.descricao for it in itens if it.descricao], conn=conn)
+        except Exception:
+            canon_itens = {}
+
     # Detecta uma vez se cada fornecedor aceita o argumento opcional `_log`
     # (mocks de teste antigos não aceitam). Evita try/except por chamada.
     import inspect
@@ -797,7 +825,10 @@ def buscar_precos_para_itens(
             match = None
             if catalogo:
                 try:
-                    match = melhor_match(item.descricao, catalogo)
+                    match = melhor_match(
+                        item.descricao, catalogo,
+                        canonico_edital=canon_itens.get(item.descricao),
+                    )
                 except Exception:
                     match = None
 
@@ -870,6 +901,21 @@ def buscar_precos_para_itens(
                                      f"{type(exc).__name__}: {exc}",
                         ))
                         encontrados = []
+                    # Salvaguarda: o produto trazido pelo código tem que casar
+                    # com o que esperávamos. Referência = descrição canônica
+                    # do catálogo (veio do matcher) ou do edital (veio de
+                    # aprendizado). Se não casa, o código/fornecedor está
+                    # errado — descarta e cai na busca textual.
+                    if encontrados:
+                        desc_ref = (
+                            match.produto.descricao_canonica
+                            if (match and not codigo_aprendido)
+                            else item.descricao
+                        )
+                        rel_cod = relevancia(
+                            desc_ref, encontrados[0].descricao_encontrada)
+                        if rel_cod < _RELEVANCIA_SALVAGUARDA_CODIGO:
+                            encontrados = []   # produto sem relação — descarta
                     if encontrados:
                         veio_por_codigo = True
                         codigo_hits += 1

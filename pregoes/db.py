@@ -129,6 +129,26 @@ CREATE TABLE IF NOT EXISTS mapeamentos_aprendidos (
 
 CREATE INDEX IF NOT EXISTS idx_aprendidos_desc
     ON mapeamentos_aprendidos(descricao_normalizada);
+
+-- Cache da normalização canônica via LLM (Fase B / alinhamento de nomes).
+-- Chave = SHA256 da descrição normalizada. TTL infinito: a forma canônica
+-- de "PARAFUSO SXT 516" → "parafuso sextavado 5/16" não muda com o tempo.
+-- Tabela NOVA (não coluna) de propósito: evita migration de schema em
+-- bancos que já têm produtos importados.
+CREATE TABLE IF NOT EXISTS cache_canonico (
+    chave_hash    TEXT PRIMARY KEY,
+    descricao     TEXT NOT NULL,
+    canonico      TEXT NOT NULL,
+    criado_em     TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Forma canônica de cada produto do catálogo (Fase B). Tabela separada de
+-- `produtos` para não exigir migration. 1:1 com produtos via produto_id.
+CREATE TABLE IF NOT EXISTS produtos_canonico (
+    produto_id     INTEGER PRIMARY KEY REFERENCES produtos(id) ON DELETE CASCADE,
+    canonico       TEXT NOT NULL,
+    atualizado_em  TEXT DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
@@ -338,6 +358,57 @@ def llm_judge_gravar(
             criado_em = CURRENT_TIMESTAMP
         """,
         (chave_hash, descricao, payload),
+    )
+
+
+# === Cache da normalização canônica via LLM (Fase B) ===
+
+
+def canonico_buscar_muitos(
+    conn: sqlite3.Connection, hashes: list[str]
+) -> dict[str, str]:
+    """Devolve {hash: canonico} para os hashes que estão no cache."""
+    if not hashes:
+        return {}
+    marcas = ",".join("?" * len(hashes))
+    rows = conn.execute(
+        f"SELECT chave_hash, canonico FROM cache_canonico WHERE chave_hash IN ({marcas})",
+        hashes,
+    ).fetchall()
+    return {r["chave_hash"]: r["canonico"] for r in rows}
+
+
+def canonico_gravar_muitos(
+    conn: sqlite3.Connection, itens: list[tuple[str, str, str]]
+) -> None:
+    """Grava em lote. `itens` = [(hash, descricao, canonico), ...]."""
+    if not itens:
+        return
+    conn.executemany(
+        """
+        INSERT INTO cache_canonico (chave_hash, descricao, canonico, criado_em)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(chave_hash) DO UPDATE SET
+            canonico = excluded.canonico,
+            criado_em = CURRENT_TIMESTAMP
+        """,
+        itens,
+    )
+
+
+def produto_canonico_gravar(
+    conn: sqlite3.Connection, produto_id: int, canonico: str
+) -> None:
+    """Salva (ou atualiza) a forma canônica de um produto do catálogo."""
+    conn.execute(
+        """
+        INSERT INTO produtos_canonico (produto_id, canonico, atualizado_em)
+        VALUES (?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(produto_id) DO UPDATE SET
+            canonico = excluded.canonico,
+            atualizado_em = CURRENT_TIMESTAMP
+        """,
+        (produto_id, canonico),
     )
 
 
