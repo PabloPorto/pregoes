@@ -186,6 +186,75 @@ def _criar_planilha_matriz(path: Path, linhas: list[dict]) -> None:
     wb.save(path)
 
 
+class TestMatcherCanonico:
+    """Fase B — matching sobre formas canônicas alinhadas pelo LLM."""
+
+    def _cat(self, canonico, **kw):
+        return ProdutoCatalogo(
+            produto_id=kw.get("id", 1),
+            descricao_canonica=kw.get("desc", "x"),
+            codigo_almeida=kw.get("cod_a", "A1"),
+            codigo_dantas=None, marca=kw.get("marca"), unidade_padrao=None,
+            canonico=canonico,
+        )
+
+    def test_canonico_casa_vocabulario_diferente(self):
+        """'cano' (edital) casa com 'tubo' (catálogo) via canônico — o que o
+        fuzzy cru não conseguia."""
+        catalogo = [self._cat("tubo pvc soldavel 100mm", id=1, cod_a="T100")]
+        # modo cru: "CANO PVC SOLDAVEL 100" não casa "tubo pvc..."
+        assert melhor_match("CANO PVC SOLDAVEL 100", catalogo) is None
+        # modo canônico: ambos reduzidos a "tubo pvc soldavel 100mm"
+        m = melhor_match("CANO PVC SOLDAVEL 100", catalogo,
+                         canonico_edital="tubo pvc soldavel 100mm")
+        assert m is not None
+        assert m.produto.codigo_almeida == "T100"
+
+    def test_canonico_valida_dimensao_divergente(self):
+        """Mesmo com vocabulário igual, dimensão diferente (5/16 vs 3/8) não
+        casa — é subproduto distinto."""
+        catalogo = [self._cat("parafuso sextavado 3/8 x 2", id=1)]
+        m = melhor_match("PARAFUSO SEXTAVADO 5/16 X 4", catalogo,
+                         canonico_edital="parafuso sextavado 5/16 x 4")
+        assert m is None  # dimensão diverge
+
+    def test_degradacao_sem_canonico_usa_modo_cru(self):
+        """Sem canônico (catálogo não normalizado / sem quota), cai no modo
+        cru — não quebra."""
+        catalogo = [self._cat(None, id=1, desc="abracadeira nylon 100")]
+        m = melhor_match("ABRACADEIRA NYLON 100", catalogo)
+        assert m is not None  # modo cru ainda funciona
+
+    def test_orquestrador_sem_chave_nao_canoniza(self, tmp_path, monkeypatch):
+        """Degradação: sem chave Gemini, o orquestrador NÃO chama o alinhador
+        (não gasta quota) mesmo com catálogo canonizado — usa modo cru."""
+        from pregoes import credenciais
+        import pregoes.alinhador as alinhador
+
+        db_path = tmp_path / "deg.db"
+        monkeypatch.setattr(config, "DB_PATH", db_path)
+        init_db(db_path)
+        with get_conn(db_path) as conn:
+            cur = conn.execute(
+                "INSERT INTO produtos (descricao_canonica, codigo_almeida) "
+                "VALUES (?, ?)", ("produto especial unico", "C123"))
+            conn.execute(
+                "INSERT INTO produtos_canonico (produto_id, canonico) "
+                "VALUES (?, ?)", (cur.lastrowid, "produto especial unico"))
+            conn.commit()
+
+        monkeypatch.setattr(credenciais, "carregar_chave_api", lambda _: None)
+        monkeypatch.setattr(alinhador, "normalizar_canonico",
+                            lambda *a, **k: pytest.fail("não devia canonizar sem chave"))
+
+        forn = _FornecedorComCodigo(); forn.nome = "almeida"
+        itens = [ItemExtraido(descricao="PRODUTO ESPECIAL UNICO")]
+        # Não levanta (alinhador não é chamado) e ainda casa por código via cru
+        lote = buscar_precos_para_itens(
+            itens, [forn], usar_cache=False, usar_llm_judge=False)
+        assert lote.codigo_hits == 1
+
+
 class TestImportador:
     def test_importa_planilha_cria_produtos(self, tmp_path, monkeypatch):
         from pregoes.importador import importar
@@ -298,6 +367,65 @@ class TestImportador:
         # 1 produto criado, 1 preço gravado (do produto real)
         assert stats.precos_gravados == 1
 
+    def test_detecta_layout_descricao_em_B(self, tmp_path):
+        """Layout alternativo das planilhas reais: descrição em B, código em S
+        (deslocado 1 coluna vs o template). Deve ser detectado por cabeçalho."""
+        from openpyxl import Workbook
+        from pregoes.importador import detectar_colunas
+        from openpyxl.utils import get_column_letter
+
+        wb = Workbook()
+        ws = wb.active
+        ws["A4"] = "ITEM"; ws["B4"] = "DESCRIÇÃO"; ws["C4"] = "UNID"
+        ws["D4"] = "QUANT"; ws["K4"] = "PREÇO"; ws["S4"] = "CODIGO INTERNO"
+        ws["T4"] = "MARCA"
+        ws["G4"] = "PREÇO VENDA"  # fórmula — não pode virar 'preco'
+        lcab, mapa = detectar_colunas(ws)
+        letras = {k: get_column_letter(v + 1) for k, v in mapa.items()}
+        assert letras["descricao"] == "B"
+        assert letras["codigo"] == "S"
+        assert letras["marca"] == "T"
+        assert letras["preco"] == "K"   # PREÇO, não PREÇO VENDA (G)
+
+    def test_parse_codigo_sufixo_fornecedor(self):
+        from pregoes.importador import _parse_codigo
+        assert _parse_codigo("43026D", "almeida") == ("43026", "dantas")
+        assert _parse_codigo("12345A", "dantas") == ("12345", "almeida")
+        assert _parse_codigo("52763", "almeida") == ("52763", "almeida")
+        assert _parse_codigo("52763.0", "dantas") == ("52763", "dantas")
+        assert _parse_codigo("ABC", "dantas") == ("ABC", "dantas")  # não numérico
+        assert _parse_codigo(None, "almeida") == (None, "almeida")
+
+    def test_sufixo_codigo_define_fornecedor_na_importacao(self, tmp_path, monkeypatch):
+        """Planilha importada com default 'almeida', mas código com sufixo D
+        vai para o codigo_dantas (sufixo sobrepõe o default)."""
+        from pregoes.importador import importar
+
+        db_path = tmp_path / "suf.db"
+        monkeypatch.setattr(config, "DB_PATH", db_path)
+        init_db(db_path)
+
+        planilha = tmp_path / "hist.xlsx"
+        _criar_planilha_matriz(planilha, [
+            {"item": 1, "descricao": "ABRAÇADEIRA NYLON 100", "quantidade": 10,
+             "preco": 3.5, "codigo": "43026D", "marca": "WAVES"},  # sufixo D
+            {"item": 2, "descricao": "TUBO PVC 100", "quantidade": 5,
+             "preco": 8.0, "codigo": "52763", "marca": "TIGRE"},   # sem sufixo
+        ])
+
+        importar([planilha], fornecedor="almeida")  # default = almeida
+        with get_conn(db_path) as conn:
+            rows = conn.execute(
+                "SELECT descricao_canonica, codigo_almeida, codigo_dantas "
+                "FROM produtos ORDER BY id"
+            ).fetchall()
+        # Item 1: sufixo D → dantas (não almeida)
+        assert rows[0]["codigo_dantas"] == "43026"
+        assert rows[0]["codigo_almeida"] is None
+        # Item 2: sem sufixo → default almeida
+        assert rows[1]["codigo_almeida"] == "52763"
+        assert rows[1]["codigo_dantas"] is None
+
     def test_marca_normalizada_evita_duplicatas(self, tmp_path, monkeypatch):
         """FOXLUX e Foxlux devem virar o mesmo produto (case-insensitive)."""
         from pregoes.importador import importar
@@ -402,6 +530,48 @@ class TestCamada0Integrada:
         assert forn.chamadas_codigo == []
         assert forn.chamadas_buscar == ["NUNCA VISTO ANTES"]
         assert lote.codigo_hits == 0
+
+    def test_salvaguarda_descarta_codigo_que_traz_produto_sem_relacao(
+        self, tmp_path, monkeypatch
+    ):
+        """Se a busca por código traz um produto sem afinidade com o que o
+        catálogo esperava (código/fornecedor errado), a salvaguarda descarta
+        e cai na busca textual."""
+        db_path = tmp_path / "salv.db"
+        monkeypatch.setattr(config, "DB_PATH", db_path)
+        init_db(db_path)
+        with get_conn(db_path) as conn:
+            conn.execute(
+                "INSERT INTO produtos (descricao_canonica, codigo_almeida) "
+                "VALUES (?, ?)",
+                ("martelo unha cabo madeira", "C999"),
+            )
+            conn.commit()
+
+        class FornCodigoErrado:
+            nome = "almeida"
+            def __init__(self):
+                self.chamou_buscar = []
+            def buscar_por_codigo(self, codigo):
+                # Código traz produto SEM relação (fornecedor trocado)
+                return [ResultadoBusca("LAMPADA LED 9W BULBO", "M", 5.0,
+                                       codigo, "exato", "almeida")]
+            def buscar(self, descricao):
+                self.chamou_buscar.append(descricao)
+                return [_r("MARTELO UNHA TRAMONTINA", "TRAMONTINA", 12.0,
+                           "T1", "exato", "almeida")]
+
+        forn = FornCodigoErrado()
+        itens = [ItemExtraido(descricao="MARTELO UNHA CABO MADEIRA")]
+        lote = buscar_precos_para_itens(
+            itens, [forn], usar_cache=False, usar_llm_judge=False)
+
+        # Salvaguarda descartou o código (lâmpada) → caiu na busca textual
+        assert forn.chamou_buscar == ["MARTELO UNHA CABO MADEIRA"]
+        assert lote.codigo_hits == 0
+        # Resultado final é o do textual (martelo), não a lâmpada
+        marcas = {r.marca for r in lote.resultados[0]}
+        assert "M" not in marcas  # lâmpada não entrou
 
     def test_usar_catalogo_false_desabilita_camada_0(self, tmp_path, monkeypatch):
         db_path = tmp_path / "cam0_d.db"
@@ -712,6 +882,69 @@ class TestDiscriminador:
         # Subtipos errados ficam abaixo do threshold (filtrados)
         assert s_comum < 0.35
         assert s_teste < 0.35
+
+
+class TestAlinhadorLLM:
+    """Fase B — normalização canônica via Gemini. Testes SEM rede (cache,
+    fallback, dedup). O teste com chamada real fica fora da suíte."""
+
+    def test_fallback_local_sem_chave(self, tmp_path, monkeypatch):
+        """Sem chave Gemini, devolve a normalização LOCAL — nunca quebra."""
+        from pregoes import alinhador, credenciais
+        db_path = tmp_path / "al.db"
+        monkeypatch.setattr(config, "DB_PATH", db_path)
+        init_db(db_path)
+        monkeypatch.setattr(credenciais, "carregar_chave_api", lambda _: None)
+
+        res = alinhador.normalizar_canonico(
+            ["PARAFUSO SXT 5/16", "Cano PVC 100"])
+        # Fallback = normalizar_descricao (acentos/caixa), não levanta
+        assert res["PARAFUSO SXT 5/16"] == "parafuso sxt 5/16"
+        assert res["Cano PVC 100"] == "cano pvc 100"
+
+    def test_usa_cache_sem_chamar_llm(self, tmp_path, monkeypatch):
+        """Com a forma canônica já no cache, não chama o LLM."""
+        from pregoes import alinhador, credenciais, db as _db
+        db_path = tmp_path / "al2.db"
+        monkeypatch.setattr(config, "DB_PATH", db_path)
+        init_db(db_path)
+
+        # Pré-grava no cache a forma canônica de "parafuso sxt 5/16"
+        norm = "parafuso sxt 5/16"
+        h = alinhador._hash(norm)
+        with get_conn(db_path) as conn:
+            _db.canonico_gravar_muitos(conn, [(h, norm, "parafuso sextavado 5/16")])
+
+        # Se tentar chamar o LLM, falha o teste (chave presente mas sem rede)
+        chamou = {"llm": False}
+        def _nao_chamar(*a, **k):
+            chamou["llm"] = True
+            return {}
+        monkeypatch.setattr(alinhador, "_chamar_llm_em_lotes", _nao_chamar)
+        monkeypatch.setattr(credenciais, "carregar_chave_api", lambda _: "FAKE")
+
+        res = alinhador.normalizar_canonico(["PARAFUSO SXT 5/16"])
+        assert res["PARAFUSO SXT 5/16"] == "parafuso sextavado 5/16"
+        assert chamou["llm"] is False  # veio do cache
+
+    def test_dedup_normaliza_iguais(self, tmp_path, monkeypatch):
+        """Descrições que normalizam igual compartilham 1 entrada de LLM."""
+        from pregoes import alinhador, credenciais
+        db_path = tmp_path / "al3.db"
+        monkeypatch.setattr(config, "DB_PATH", db_path)
+        init_db(db_path)
+
+        recebidas = {}
+        def _fake_llm(normas, key, modelo):
+            recebidas["n"] = list(normas)
+            return {n: f"CANON({n})" for n in normas}
+        monkeypatch.setattr(alinhador, "_chamar_llm_em_lotes", _fake_llm)
+        monkeypatch.setattr(credenciais, "carregar_chave_api", lambda _: "FAKE")
+
+        # "Cano PVC" e "CANO PVC" normalizam para o mesmo → 1 só no LLM
+        res = alinhador.normalizar_canonico(["Cano PVC", "CANO PVC", "Tubo X"])
+        assert len(recebidas["n"]) == 2   # 'cano pvc' e 'tubo x'
+        assert res["Cano PVC"] == res["CANO PVC"]
 
 
 class TestCacheVersionado:
