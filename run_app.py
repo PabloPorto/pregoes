@@ -43,6 +43,13 @@ def _abrir_navegador() -> None:
 
 
 def main() -> None:
+    # Empacotado pelo PyInstaller, o Streamlit fica em _internal\streamlit\ —
+    # sem "site-packages" no caminho, ele se acha em modo de DESENVOLVIMENTO
+    # (streamlit/config.py:_global_development_mode) e aí bloqueia
+    # --server.port com "server.port does not work when global.developmentMode
+    # is true". Forçamos o modo de produção via env var ANTES de o Streamlit
+    # ler a config — tem precedência sobre a autodetecção. Ver BUILD.md.
+    os.environ["STREAMLIT_GLOBAL_DEVELOPMENT_MODE"] = "false"
     app_path = _resource(os.path.join("pregoes", "ui", "app.py"))
     threading.Thread(target=_abrir_navegador, daemon=True).start()
     sys.argv = [

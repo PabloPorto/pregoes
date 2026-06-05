@@ -58,6 +58,12 @@ aponta o `.exe` para ela. **Confirme no teste 4 acima.** Se não funcionar:
 
 ## Gotchas conhecidos (PyInstaller + Streamlit)
 
+- **`server.port does not work when global.developmentMode is true`** (já
+  RESOLVIDO no `run_app.py`): dentro do `.exe`, o Streamlit fica em
+  `_internal\streamlit\` — sem `site-packages` no caminho, ele se acha em modo
+  de desenvolvimento e proíbe `--server.port`, derrubando o app no boot. O
+  `run_app.py` força `STREAMLIT_GLOBAL_DEVELOPMENT_MODE=false` antes de o
+  Streamlit carregar. Se o erro voltar, confirme que essa linha está lá.
 - **`console=True`** no spec deixa uma janela preta junto do app — útil no
   piloto para ver erros. Para a versão final, trocar para `console=False`
   (mais limpo) **depois** de confirmar que está estável.
