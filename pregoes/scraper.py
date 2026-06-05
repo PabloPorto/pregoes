@@ -294,20 +294,42 @@ class AlmeidaDistribuidor:
         # quem só importa o módulo (ex: testes da função pura).
         from playwright.sync_api import sync_playwright
 
-        self._playwright = sync_playwright().start()
-        self._browser = self._playwright.chromium.launch(headless=self._headless)
-        self._context = self._browser.new_context(viewport={"width": 1280, "height": 900})
-        self._page = self._context.new_page()
-        self._login(self._page)
+        # Se qualquer passo falhar (login com senha trocada, site fora,
+        # timeout), o `__exit__` NÃO roda — o `with` só registra o
+        # contexto se `__enter__` retornar. Sem a limpeza explícita aqui,
+        # o Chromium headless + driver ficariam órfãos a cada login falho,
+        # acumulando processos na máquina Windows do operador. Por isso
+        # fechamos tudo no except antes de re-levantar.
+        try:
+            self._playwright = sync_playwright().start()
+            self._browser = self._playwright.chromium.launch(headless=self._headless)
+            self._context = self._browser.new_context(viewport={"width": 1280, "height": 900})
+            self._page = self._context.new_page()
+            self._login(self._page)
+        except BaseException:
+            self._fechar()
+            raise
         return self
 
     def __exit__(self, *_args) -> None:
+        self._fechar()
+
+    def _fechar(self) -> None:
+        """Fecha browser e para o Playwright, tolerando recursos ausentes.
+
+        Compartilhado entre o caminho de sucesso (`__exit__`) e o de falha
+        no `__enter__`. Idempotente: zera as referências para não fechar
+        duas vezes se chamado de novo."""
         try:
             if self._browser is not None:
                 self._browser.close()
         finally:
+            self._browser = None
+            self._context = None
+            self._page = None
             if self._playwright is not None:
                 self._playwright.stop()
+                self._playwright = None
 
     def _login(self, page) -> None:
         page.goto(f"{_BASE_URL_ALMEIDA}/entrar",
@@ -522,20 +544,38 @@ class DantasDistribuidora:
     def __enter__(self) -> "DantasDistribuidora":
         from playwright.sync_api import sync_playwright
 
-        self._playwright = sync_playwright().start()
-        self._browser = self._playwright.chromium.launch(headless=self._headless)
-        self._context = self._browser.new_context(viewport={"width": 1280, "height": 900})
-        self._page = self._context.new_page()
-        self._login(self._page)
+        # Mesma proteção do Almeida: limpa Chromium/driver se o login
+        # falhar, senão sobram processos órfãos a cada falha (ver comentário
+        # detalhado em AlmeidaDistribuidor.__enter__).
+        try:
+            self._playwright = sync_playwright().start()
+            self._browser = self._playwright.chromium.launch(headless=self._headless)
+            self._context = self._browser.new_context(viewport={"width": 1280, "height": 900})
+            self._page = self._context.new_page()
+            self._login(self._page)
+        except BaseException:
+            self._fechar()
+            raise
         return self
 
     def __exit__(self, *_args) -> None:
+        self._fechar()
+
+    def _fechar(self) -> None:
+        """Fecha browser e para o Playwright, tolerando recursos ausentes.
+
+        Compartilhado entre `__exit__` (sucesso) e o except do `__enter__`
+        (falha). Idempotente — zera as referências após fechar."""
         try:
             if self._browser is not None:
                 self._browser.close()
         finally:
+            self._browser = None
+            self._context = None
+            self._page = None
             if self._playwright is not None:
                 self._playwright.stop()
+                self._playwright = None
 
     def _login(self, page) -> None:
         page.goto(f"{_BASE_URL_DANTAS}/entrar",

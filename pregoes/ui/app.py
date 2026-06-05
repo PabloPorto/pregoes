@@ -64,6 +64,88 @@ if "df_editavel" not in st.session_state:
     st.session_state.df_editavel = None
 
 
+# === Helpers puros (sem Streamlit) ===
+# Colunas de DADOS do data_editor de revisão. A coluna "OK" (marcação) é
+# tratada à parte: marcar/desmarcar todos só mexe nela, preservando o resto.
+_COLUNAS_DADOS_REVISAO = ("Item", "Descrição", "Unidade", "Quantidade", "Valor referência")
+
+
+def _fundir_edicoes(df_base, edited):
+    """Funde as edições de célula do widget de volta no DataFrame base.
+
+    Por que existe: o data_editor é alimentado por ``df_editavel`` (snapshot
+    estática) e, deliberadamente, NÃO regravamos ``df_editavel = edited`` a
+    cada rerun para não criar race em cliques rápidos. Mas "Marcar/Desmarcar
+    todos" precisa mutar a snapshot — e, sem fundir antes, as correções que o
+    operador fez nas células de dados (Descrição/Quantidade/Unidade/Valor)
+    seriam perdidas. Esta fusão é pontual (só no clique do botão), então não
+    reintroduz o race que o comentário do widget evita.
+
+    Retorna uma cópia nova: não muta nenhum dos argumentos. Copia apenas as
+    colunas de DADOS (não a coluna OK), alinhando pelo índice das linhas.
+    """
+    fundido = df_base.copy()
+    if edited is None:
+        return fundido
+    for coluna in _COLUNAS_DADOS_REVISAO:
+        if coluna in edited.columns and coluna in fundido.columns:
+            # Alinha por índice; se o widget devolveu menos/mais linhas,
+            # `reindex` mantém o shape do base e ignora extras com segurança.
+            fundido[coluna] = edited[coluna].reindex(fundido.index)
+    return fundido
+
+
+def _aplicar_delta_editor(df_base, estado_editor):
+    """Reconstrói o DataFrame editado a partir do delta do data_editor.
+
+    O ``st.data_editor`` guarda no ``session_state[key]`` apenas um *delta*
+    (``{"edited_rows": {pos: {coluna: valor}}, ...}``), não o DataFrame
+    inteiro. Quando o operador clica "Marcar/Desmarcar todos", o data_editor
+    ainda não rodou neste rerun — então lemos esse delta para recuperar as
+    edições de célula pendentes e devolvê-las já aplicadas sobre ``df_base``.
+
+    Retorna uma cópia nova; não muta ``df_base``. Ignora ``added_rows`` e
+    ``deleted_rows`` porque o editor de revisão usa ``num_rows="fixed"``.
+    """
+    edited = df_base.copy()
+    if not isinstance(estado_editor, dict):
+        return edited
+    edited_rows = estado_editor.get("edited_rows") or {}
+    for pos, mudancas in edited_rows.items():
+        try:
+            idx = edited.index[int(pos)]
+        except (ValueError, IndexError, KeyError):
+            continue  # posição fora do range: delta obsoleto, ignora
+        for coluna, valor in (mudancas or {}).items():
+            if coluna in edited.columns:
+                edited.at[idx, coluna] = valor
+    return edited
+
+
+def _sanitizar_nome_arquivo(nome: str) -> str:
+    """Devolve um basename seguro e DETERMINÍSTICO para salvar em disco.
+
+    Por que existe (idempotência da re-importação): o importador deriva a
+    chave de dedup do basename (``fonte = "import:<basename>"``). Se cada
+    upload virasse um nome aleatório (tempfile), re-enviar a MESMA planilha
+    criaria uma fonte nova e duplicaria os preços — quebrando a promessa da
+    UI ("re-enviar a mesma planilha não duplica nada"). Sanitizando o nome
+    ORIGINAL, o mesmo arquivo gera sempre o mesmo path.name e a dedup funciona.
+
+    Remove componentes de diretório (anti path-traversal) e troca tudo que
+    não for ``[A-Za-z0-9._-]`` por ``_``. Garante a extensão ``.xlsx``.
+    """
+    import re
+
+    # Só o último componente: derruba "../" e barras de qualquer sistema.
+    base = nome.replace("\\", "/").split("/")[-1].strip()
+    base = re.sub(r"[^A-Za-z0-9._-]", "_", base)
+    base = base.lstrip(".") or "planilha"  # evita nome oculto / vazio
+    if not base.lower().endswith(".xlsx"):
+        base = f"{base}.xlsx"
+    return base
+
+
 # === Helpers de navegação ===
 def ir_para(tela: str):
     st.session_state.tela = tela
@@ -320,17 +402,30 @@ def tela_revisao():
     if "editor_version" not in st.session_state:
         st.session_state.editor_version = 0
 
+    # Antes de marcar/desmarcar todos, FUNDIMOS as edições de célula pendentes
+    # (Descrição/Quantidade/Unidade/Valor) que o operador fez no widget de
+    # volta na snapshot df_editavel. Sem isso, recriar o data_editor (via
+    # editor_version) descartaria essas correções — bug reportado pelo
+    # operador. A fusão é pontual (só no clique), então não reintroduz o race
+    # que evitamos ao não regravar df_editavel a cada rerun.
+    _editor_key = f"editor_{st.session_state.editor_version}"
+
+    def _marcar_todos(valor: bool):
+        delta = st.session_state.get(_editor_key)
+        edited_atual = _aplicar_delta_editor(st.session_state.df_editavel, delta)
+        fundido = _fundir_edicoes(st.session_state.df_editavel, edited_atual)
+        fundido["OK"] = valor
+        st.session_state.df_editavel = fundido
+        st.session_state.editor_version += 1
+        st.rerun()
+
     bcol1, bcol2 = st.columns(2)
     with bcol1:
         if st.button("Marcar todos", use_container_width=True):
-            st.session_state.df_editavel["OK"] = True
-            st.session_state.editor_version += 1
-            st.rerun()
+            _marcar_todos(True)
     with bcol2:
         if st.button("Desmarcar todos", use_container_width=True):
-            st.session_state.df_editavel["OK"] = False
-            st.session_state.editor_version += 1
-            st.rerun()
+            _marcar_todos(False)
 
     # `num_rows="fixed"` (default) em vez de "dynamic": evita que o
     # data_editor crie linhas vazias quando o usuário clica em uma área
@@ -645,7 +740,15 @@ def tela_configuracoes():
                     with st.spinner("Testando chave…"):
                         try:
                             from google import genai
-                            client = genai.Client(api_key=chave_input.strip())
+                            from google.genai import types
+                            # Timeout explícito (60s em ms): sem isto, um
+                            # soluço de rede deixaria o spinner "Testando…"
+                            # eterno, sem cancelar. Mesmo padrão dos demais
+                            # módulos (extrator_llm).
+                            client = genai.Client(
+                                api_key=chave_input.strip(),
+                                http_options=types.HttpOptions(timeout=60_000),
+                            )
                             resp = client.models.generate_content(
                                 model="gemini-2.0-flash",
                                 contents="Responda apenas 'OK'.",
@@ -978,8 +1081,89 @@ def _executar_busca(itens: list, fornecedores_nomes: list[str],
             )
 
 
+def _brl(valor: float) -> str:
+    """Formata em Real brasileiro: 1234.5 -> 'R$ 1.234,50'."""
+    return "R$ " + (
+        f"{valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    )
+
+
+def _titulo_item(descricao: str) -> str:
+    """Apresenta a descrição do edital como um título legível.
+
+    Editais chegam em CAIXA ALTA ('CILINDRO PARA FECHADURA 803/1401'), o que
+    soa agressivo num título. Convertemos cada palavra inteiramente maiúscula
+    e 'comprida' para capitalização normal (CILINDRO -> Cilindro), mas
+    preservamos os tokens técnicos — siglas curtas (PVC, CR), medidas (53MM)
+    e códigos com '/' (803/1401) — que perderiam sentido se mexidos.
+    """
+    texto = (descricao or "").strip().rstrip(" .;,-")
+    palavras = []
+    for p in texto.split():
+        tecnico = any(c.isdigit() for c in p) or "/" in p or len(p) <= 3
+        palavras.append(p.capitalize() if (p.isupper() and not tecnico) else p)
+    titulo = " ".join(palavras)
+    if len(titulo) > 70:
+        titulo = titulo[:70].rstrip() + "…"
+    return (titulo[:1].upper() + titulo[1:]) if titulo else titulo
+
+
+def _card_opcao(idx: int, pos: int, opcao, *, badge_html: str,
+                escolhido: bool, on_escolher) -> None:
+    """Renderiza uma opção de marca/preço como card selecionável.
+
+    Layout decidido com o cliente (2026-06): o que decide a compra fica em
+    destaque — **marca** e **preço**; a descrição encontrada e o fornecedor
+    ficam secundários (cinza, menores) para conferência. O código do
+    fornecedor e a relevância do algoritmo (`rel=`) NÃO aparecem: o primeiro
+    é preenchido sozinho na planilha, o segundo é métrica interna — ambos só
+    poluíam a decisão do operador leigo.
+
+    O card escolhido recebe um `key` `ppoptsel-*` para o CSS destacá-lo
+    (fundo + acento). ``badge_html`` é uma pílula de ``style.pill`` (ou "").
+    """
+    marca = (opcao.marca or "Sem marca").strip()
+    fornecedor = (opcao.fornecedor or "").capitalize()
+    desc = (opcao.descricao_encontrada or "").strip()
+    if len(desc) > 72:
+        desc = desc[:72].rstrip() + "…"
+
+    # Key distinto para o selecionado → CSS o destaca (ver style.py).
+    key_card = (f"ppoptsel-{idx}-{pos}" if escolhido
+                else f"ppopt-{idx}-{pos}")
+    with st.container(border=True, key=key_card):
+        c_info, c_preco, c_acao = st.columns(
+            [5.2, 1.8, 1.6], vertical_alignment="center")
+        with c_info:
+            sufixo = f" {badge_html}" if badge_html else ""
+            sub = desc + (f" · {fornecedor}" if fornecedor else "")
+            st.markdown(
+                f"<span style='font-weight:600;font-size:1.02rem'>{marca}</span>"
+                f"{sufixo}<br>"
+                f"<span style='color:#64748b;font-size:0.85rem'>{sub}</span>",
+                unsafe_allow_html=True,
+            )
+        with c_preco:
+            st.markdown(
+                "<div style='text-align:right;font-weight:600;"
+                f"font-size:1.05rem'>{_brl(opcao.preco)}</div>",
+                unsafe_allow_html=True,
+            )
+        with c_acao:
+            if escolhido:
+                st.markdown(
+                    "<div style='text-align:right;color:#2563eb;"
+                    "font-weight:600;padding-top:0.25rem'>✓ escolhido</div>",
+                    unsafe_allow_html=True,
+                )
+            elif st.button("Escolher", key=f"esc_{idx}_{pos}",
+                           use_container_width=True):
+                on_escolher()
+                st.rerun()
+
+
 def _mostrar_selecao(itens: list, resultados: dict) -> None:
-    """Tabela paginada com selectbox por linha. Operador escolhe a marca.
+    """Lista paginada de itens; cada candidato vira um card. Operador escolhe.
 
     Default de seleção = candidato com MAIOR RELEVÂNCIA contra a descrição
     do edital, com PREÇO como tiebreaker. Mudou de "mais barato" para
@@ -1076,20 +1260,30 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
         opcoes = resultados.get(idx, [])
         sel_atual = st.session_state.selecoes.get(idx)
 
+        n_op = len(opcoes)
         if not opcoes:
             label_status = "Não encontrado"
             tipo_status: style.TipoBadge = "danger"
         elif any(o.confianca == "variacao" for o in opcoes):
-            label_status = f"{len(opcoes)} por variação"
+            label_status = f"{n_op} a conferir"
             tipo_status = "warning"
         else:
-            label_status = f"{len(opcoes)} encontrado(s)"
+            label_status = f"{n_op} {'opção' if n_op == 1 else 'opções'}"
             tipo_status = "success"
 
-        with st.expander(
-            f"#{item.item_numero or idx + 1} · {item.descricao[:80]}  —  {label_status}",
-            expanded=False,
-        ):
+        # Cabeçalho: ícone de status (Material Symbols, consistente entre SOs)
+        # + "Item N" (em vez de "#N", que soava pouco profissional) + título
+        # legível + status colorido.
+        cor_status = {"success": "green", "warning": "orange",
+                      "danger": "red"}[tipo_status]
+        icone_status = {"success": ":material/check_circle:",
+                        "warning": ":material/help:",
+                        "danger": ":material/cancel:"}[tipo_status]
+        cabecalho = (
+            f"**Item {item.item_numero or idx + 1}** · "
+            f"{_titulo_item(item.descricao)} · :{cor_status}[{label_status}]"
+        )
+        with st.expander(cabecalho, expanded=False, icon=icone_status):
             if not opcoes:
                 style.bloco_aviso(
                     "Nenhum resultado nos fornecedores. Coluna L ficará em branco.",
@@ -1097,9 +1291,7 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
                 )
                 continue
 
-            # Ordena por RELEVÂNCIA desc, preço asc — o "melhor match" fica
-            # no topo. Antes ordenava só por preço, o que levava a defaults
-            # ruins quando havia muitas categorias semelhantes.
+            # Ordena por relevância desc, preço asc — o "melhor match" no topo.
             item_desc_local = item.descricao
             opcoes_ordenadas = sorted(
                 opcoes,
@@ -1108,46 +1300,34 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
             )
             preco_min = min(o.preco for o in opcoes_ordenadas)
 
-            def _label(o):
-                tags = []
-                rel = _relev(item_desc_local, o.descricao_encontrada)
-                if o is opcoes_ordenadas[0]:
-                    tags.append("⭐ melhor match")
-                if o.preco == preco_min and o is not opcoes_ordenadas[0]:
-                    tags.append("💰 mais barato")
-                suf = (" — " + " · ".join(tags)) if tags else ""
-                return (
-                    f"{o.marca} — R$ {o.preco:.2f} ({o.fornecedor})"
-                    f"{suf} — código {o.codigo_fornecedor} — "
-                    f"rel={rel:.2f} — {o.descricao_encontrada[:50]}"
+            def _esta_selecionado(o, s=sel_atual):
+                return (s is not None and o.preco == s.preco
+                        and o.marca == s.marca
+                        and o.codigo_fornecedor == s.codigo_fornecedor)
+
+            st.caption("Escolha a marca e o preço (sugerimos o melhor match):")
+            for pos, o in enumerate(opcoes_ordenadas):
+                escolhido = _esta_selecionado(o)
+                if pos == 0:
+                    badge_html = style.pill("Melhor match", "match")
+                elif o.preco == preco_min:
+                    badge_html = style.pill("Mais barato", "barato")
+                else:
+                    badge_html = ""
+                _card_opcao(
+                    idx, pos, o, badge_html=badge_html, escolhido=escolhido,
+                    on_escolher=lambda o=o: st.session_state.selecoes.__setitem__(
+                        idx, SelecaoFornecedor(
+                            preco=o.preco, codigo_fornecedor=o.codigo_fornecedor,
+                            marca=o.marca)),
                 )
 
-            labels = ["(não usar)"] + [_label(o) for o in opcoes_ordenadas]
-            default_idx = 0
-            if sel_atual is not None:
-                # Encontra a opção que casa com a seleção atual
-                for i, o in enumerate(opcoes_ordenadas):
-                    if (o.preco == sel_atual.preco and o.marca == sel_atual.marca
-                            and o.codigo_fornecedor == sel_atual.codigo_fornecedor):
-                        default_idx = i + 1
-                        break
-
-            escolha = st.selectbox(
-                "Marca / preço (default = melhor match; preço como desempate)",
-                options=range(len(labels)),
-                format_func=lambda i: labels[i],
-                index=default_idx,
-                key=f"sel_{idx}",
-            )
-            # Substitui a lista usada abaixo para já estar ordenada
-            opcoes = opcoes_ordenadas
-            if escolha == 0:
+            # Opção de não usar este item
+            sem_sel = sel_atual is None
+            if st.button(("✓ " if sem_sel else "") + "Não usar este item",
+                         key=f"naousar_{idx}", use_container_width=True):
                 st.session_state.selecoes.pop(idx, None)
-            else:
-                op = opcoes[escolha - 1]
-                st.session_state.selecoes[idx] = SelecaoFornecedor(
-                    preco=op.preco, codigo_fornecedor=op.codigo_fornecedor, marca=op.marca,
-                )
+                st.rerun()
 
     st.divider()
     st.caption(f"{selecionados} de {total} itens com marca/preço selecionados.")
@@ -1475,17 +1655,29 @@ def _aba_catalogo():
     )
 
     if uploads and st.button("Importar planilhas", type="primary"):
-        # Salva uploads em disco temporário (importador lê de path)
-        import tempfile
+        # Salva uploads em data/historico com nome DETERMINÍSTICO (= nome
+        # original sanitizado). O importador deriva a chave de dedup do
+        # basename (fonte="import:<basename>"), então re-enviar a MESMA
+        # planilha precisa gerar o MESMO path.name — senão a dedup não
+        # reconhece e os preços duplicam (a UI promete que não duplica).
+        # Nome aleatório (tempfile) quebrava essa idempotência.
+        pasta_historico = config.DATA_DIR / "historico"
         paths = []
-        for upl in uploads:
-            tmp = tempfile.NamedTemporaryFile(
-                delete=False, suffix=".xlsx",
-                dir=str(config.DATA_DIR / "historico"),
+        try:
+            # Numa instalação nova a pasta pode não existir: criar antes de
+            # escrever evita FileNotFoundError cru para o operador.
+            pasta_historico.mkdir(parents=True, exist_ok=True)
+            for upl in uploads:
+                destino = pasta_historico / _sanitizar_nome_arquivo(upl.name)
+                destino.write_bytes(upl.read())
+                paths.append(destino)
+        except Exception as exc:
+            _log.exception("falha ao salvar planilhas para importação")
+            style.bloco_aviso(
+                erros.mensagem_amigavel(exc, "salvar as planilhas para importação"),
+                tipo="danger",
             )
-            tmp.write(upl.read())
-            tmp.close()
-            paths.append(Path(tmp.name))
+            return
 
         forn_arg = None if fornecedor.startswith("nenhum") else fornecedor
 

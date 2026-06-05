@@ -13,11 +13,16 @@ DATA_DIR = BASE_DIR / "data"
 TEMPLATES_DIR = DATA_DIR / "templates"
 EDITAIS_DIR = DATA_DIR / "editais"
 EXPORTS_DIR = DATA_DIR / "exports"
+# Planilhas históricas do cliente (formato MATRIZ) que alimentam a Camada 0
+# da busca (catálogo + códigos). Precisa existir já numa instalação nova,
+# senão o importador (python -m pregoes.importador data/historico/*.xlsx)
+# falha por pasta inexistente antes mesmo de o operador colocar arquivos.
+HISTORICO_DIR = DATA_DIR / "historico"
 DB_PATH = DATA_DIR / "pregoes.db"
 TEMPLATE_MATRIZ = TEMPLATES_DIR / "matriz_template.xlsx"
 
 # Garantir que pastas existam
-for d in (DATA_DIR, TEMPLATES_DIR, EDITAIS_DIR, EXPORTS_DIR):
+for d in (DATA_DIR, TEMPLATES_DIR, EDITAIS_DIR, EXPORTS_DIR, HISTORICO_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
 # === Parâmetros financeiros (espelham o template MATRIZ) ===

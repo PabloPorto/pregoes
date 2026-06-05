@@ -139,6 +139,10 @@ def test_disponivel_falso_sem_key(tmp_path, monkeypatch):
 
 
 def test_disponivel_verdadeiro_com_key(tmp_path, monkeypatch):
+    # disponivel() exige o SDK google-genai instalado E uma chave. Sem o SDK
+    # no ambiente (ex.: venv de dev enxuto), o correto é PULAR, não falhar —
+    # a ausência do pacote é condição de ambiente, não regressão de código.
+    pytest.importorskip("google.genai")
     from pregoes import credenciais, extrator_llm
     caminho = tmp_path / "creds.json"
     monkeypatch.setattr(credenciais, "CAMINHO", caminho)

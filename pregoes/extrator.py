@@ -138,6 +138,9 @@ def _normaliza(texto) -> str:
     return _WHITESPACE_RE.sub(" ", s)
 
 
+_MILHAR_RE = re.compile(r"^\d{1,3}(\.\d{3})+$")
+
+
 def _para_numero(valor) -> Optional[float]:
     """Converte string brasileira ('1.234,56') para float."""
     if valor is None or valor == "":
@@ -150,6 +153,14 @@ def _para_numero(valor) -> Optional[float]:
         s = s.replace(".", "").replace(",", ".")
     elif "," in s:
         s = s.replace(",", ".")
+    # Sem vírgula, o ponto é ambíguo: pode ser decimal ('1.5') ou separador
+    # de milhar ('1.500' = mil e quinhentos). Editais brasileiros escrevem
+    # quantidades grandes com ponto de milhar; tratá-lo como decimal
+    # transformava '15.000' em 15.0 (perda silenciosa de 3 ordens). Quando a
+    # string casa o padrão de grupos de milhar (1-3 dígitos + blocos de 3),
+    # removemos os pontos. '1.5' (1 dígito após ponto) segue como decimal.
+    elif _MILHAR_RE.match(s):
+        s = s.replace(".", "")
     try:
         return float(s)
     except (ValueError, TypeError):
@@ -215,8 +226,12 @@ def _identifica_cabecalho_multilinha(tabela: list[list], max_linhas: int = 3) ->
     if not tabela:
         return {}, 0
 
-    melhor_mapa: dict[str, int] = {}
-    melhor_n = 0
+    # Estratégia: o MENOR n que já produz cabeçalho válido vence. Aumentar n
+    # concatena a 1ª linha de DADOS ao cabeçalho — se essa linha contiver por
+    # acaso 'unidade'/'valor unitário'/'item'/'código', o n maior produz um
+    # mapa "mais rico" e ENGOLE o primeiro item (perda silenciosa). Por isso
+    # paramos no primeiro n cujo cabeçalho é válido (descrição E quantidade);
+    # só crescemos o cabeçalho enquanto esses campos centrais ainda faltam.
     for n in range(1, min(max_linhas, len(tabela)) + 1):
         # Concatena as primeiras n linhas célula a célula
         n_cols = max(len(l) for l in tabela[:n] if l)
@@ -229,11 +244,12 @@ def _identifica_cabecalho_multilinha(tabela: list[list], max_linhas: int = 3) ->
             linha_concat.append(" ".join(partes))
 
         mapa = _identifica_cabecalho_em_linha(linha_concat)
-        if _eh_cabecalho_valido(mapa) and len(mapa) > len(melhor_mapa):
-            melhor_mapa = mapa
-            melhor_n = n
+        if _eh_cabecalho_valido(mapa):
+            return mapa, n  # menor n válido vence — não engole a 1ª linha de dados
 
-    return melhor_mapa, melhor_n
+    # Nenhum n produziu cabeçalho válido: contrato preservado ({}, 0), o
+    # chamador cai para o mapa herdado / fallback de mapeamento manual.
+    return {}, 0
 
 
 def _eh_cabecalho_valido(mapa: dict[str, int]) -> bool:

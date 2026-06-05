@@ -33,6 +33,16 @@ _FRACOES = {
     "⅛": "1/8",
 }
 
+# Expoentes unicode de unidade de ÁREA/volume — "2.5MM²" (seção de cabo),
+# "8M²", "10CM²". O caractere ² (U+00B2) NÃO é um acento combinante (Mn),
+# então sobrevive ao stripping de acentos e quebraria o \b depois de "mm"
+# se não fosse rebaixado para o dígito ASCII. Mapear para o dígito também
+# unifica a grafia com a variante ASCII ("MM2") que o operador digita.
+_EXPOENTES = {
+    "²": "2",
+    "³": "3",
+}
+
 # Travessões e hífens unicode que aparecem nos PDFs (em "AC–II", "CA–50", etc.)
 _TRAVESSAO = re.compile(r"[‐-―−]")
 
@@ -116,6 +126,7 @@ def normalizar_descricao(descricao: str | None) -> str:
     Operações, em ordem:
     1. Remove o prefixo "NN)" que sobrou da extração do edital.
     2. Substitui frações unicode (½ → 1/2).
+    2b. Substitui expoentes de área (² → 2, ³ → 3) — "2.5MM²" → "2.5mm2".
     3. Substitui travessões unicode (–) por hífen ASCII (-).
     4. Vírgula decimal pt-BR entre dígitos vira ponto (12,5 → 12.5).
     5. Vírgula/dois-pontos/ponto-vírgula soltos viram espaço (são separadores).
@@ -142,6 +153,10 @@ def normalizar_descricao(descricao: str | None) -> str:
     s = _PREFIXO_ITEM.sub("", s)
     for frac, ascii_eq in _FRACOES.items():
         s = s.replace(frac, ascii_eq)
+    # Expoente de área (²/³) → dígito ASCII, senão "mm²" quebra o \b da
+    # extração de dimensão e a seção do cabo é perdida silenciosamente.
+    for expo, ascii_eq in _EXPOENTES.items():
+        s = s.replace(expo, ascii_eq)
     s = _TRAVESSAO.sub("-", s)
     # Decimal pt-BR antes de tratar vírgula como separador, senão "12,5" perde o 5.
     s = _VIRGULA_DECIMAL.sub(r"\1.\2", s)
@@ -336,9 +351,19 @@ _RE_AMPERE = re.compile(r"\b(\d+)(?:a\b|\s*amperes?\b)")
 _RE_VOLT = re.compile(r"\b(\d+)\s*v(?:olts?)?\b")
 _RE_WATT = re.compile(r"\b(\d+)\s*w(?:atts?)?\b")
 _RE_CA = re.compile(r"\bca[\s-]?(\d+)\b")
+# Seção de cabo elétrico em mm² (área): "2.5MM²" / "2.5MM2" / "4 mm2".
+# É um EIXO PRÓPRIO ("mm2"), distinto do diâmetro nominal "mm" — cabo
+# 2.5mm² e cabo 4mm² são subprodutos diferentes (preços diferentes), e
+# misturá-los no eixo "mm" faria 2.5mm² casar 2.5mm (joelho), o que é
+# absurdo. Deve ser testada ANTES de _RE_MM (vide ordem em
+# `extrair_dimensoes`); o lookahead negativo em _RE_MM garante a separação
+# de qualquer forma.
+_RE_MM2 = re.compile(r"\b(\d+(?:\.\d+)?)\s*mm2\b")
 # Milímetro/centímetro: diâmetro nominal de conexões, bitola de cabo, etc.
-# Exige a unidade colada/adjacente — "6m" (metros) NÃO casa "mm".
-_RE_MM = re.compile(r"\b(\d+(?:\.\d+)?)\s*mm\b")
+# Exige a unidade colada/adjacente — "6m" (metros) NÃO casa "mm". O
+# lookahead (?![0-9]) impede que "2.5mm2" (seção) seja lido como "2.5mm"
+# (diâmetro): seção é tratada por _RE_MM2.
+_RE_MM = re.compile(r"\b(\d+(?:\.\d+)?)\s*mm(?![0-9])\b")
 _RE_CM = re.compile(r"\b(\d+(?:\.\d+)?)\s*cm\b")
 
 
@@ -360,6 +385,11 @@ def extrair_dimensoes(texto: str | None) -> set[tuple[str, str]]:
     [('amp', '10'), ('tom', '5')]
     >>> sorted(extrair_dimensoes("Bateria 12V"))
     [('v', '12')]
+    >>> # Seção de cabo: eixo próprio "mm2" (não confunde com diâmetro "mm")
+    >>> sorted(extrair_dimensoes("CABO FLEXIVEL 2.5MM² 750V"))
+    [('mm2', '2.5'), ('v', '750')]
+    >>> sorted(extrair_dimensoes("CABO 4MM2 750V"))
+    [('mm2', '4'), ('v', '750')]
     """
     if not texto:
         return set()
@@ -379,11 +409,48 @@ def extrair_dimensoes(texto: str | None) -> set[tuple[str, str]]:
         dims.add(("w", v))
     for v in _RE_CA.findall(t):
         dims.add(("ca", v))
+    # Seção de cabo (mm²) ANTES do diâmetro (mm): "2.5mm2" é seção, não
+    # diâmetro. O lookahead de _RE_MM já evita o duplo-match, mas a ordem
+    # deixa a intenção explícita.
+    for v in _RE_MM2.findall(t):
+        dims.add(("mm2", v))
     for v in _RE_MM.findall(t):
         dims.add(("mm", v))
     for v in _RE_CM.findall(t):
         dims.add(("cm", v))
-    return dims
+    # Normaliza o valor de cada eixo para comparação: zeros à esquerda de
+    # inteiros somem ('05'->'5'), senão "5 tomadas" e "05 TOMADAS" pareciam
+    # eixos divergentes e rebaixavam um match verdadeiro (filtro de linha).
+    # Decimais ('2.5') e frações ('3/16') ficam intactos.
+    return {(eixo, _norm_valor_dim(v)) for eixo, v in dims}
+
+
+def _norm_valor_dim(v: str) -> str:
+    """Tira zeros à esquerda de valores inteiros de dimensão ('05'->'5').
+
+    Mantém decimais e frações como estão — só inteiros puros são normalizados,
+    para que '5' e '05' (mesma quantidade) não contem como eixo divergente.
+    """
+    return str(int(v)) if v.isdigit() else v
+
+
+def _algum_eixo_diverge(
+    dims_a: set[tuple[str, str]], dims_b: set[tuple[str, str]]
+) -> bool:
+    """True se A e B têm ALGUM eixo em comum sem nenhum valor compartilhado.
+
+    Espelha `matcher._dimensao_diverge`, mas opera sobre os pares já
+    extraídos. Avaliado por EIXO: um eixo que coincide (mesma tensão) NÃO
+    cancela a divergência de outro eixo (seção do cabo). É essa precedência
+    que impede cabo 2.5mm²/750V de casar 4mm²/750V com relevância plena.
+    """
+    eixos_comuns = {e for e, _ in dims_a} & {e for e, _ in dims_b}
+    for eixo in eixos_comuns:
+        va = {v for e, v in dims_a if e == eixo}
+        vb = {v for e, v in dims_b if e == eixo}
+        if not (va & vb):
+            return True
+    return False
 
 
 # === Tier 3: keyword discriminadora (Q12 / 2026-06) ===
@@ -546,15 +613,21 @@ def relevancia(original: str | None, candidato: str | None) -> float:
             base = max(base, _TYPO_SCORE_PISO)
 
     # Tier 2 — match de dimensão. Eixos confiáveis (polegada, tomadas,
-    # ampere, volt, watt, ca): mesmo eixo+valor → boost; mesmo eixo com
-    # valor divergente (3/16 vs 1/8) → penalidade. Distingue subprodutos.
+    # ampere, volt, watt, ca, mm, mm², cm): mesmo eixo+valor → boost;
+    # mesmo eixo com valor divergente (3/16 vs 1/8, cabo 2.5mm² vs 4mm²)
+    # → penalidade. Distingue subprodutos.
+    #
+    # A PENALIDADE TEM PRECEDÊNCIA sobre o boost: se ALGUM eixo diverge
+    # (ex.: seção do cabo), rebaixamos mesmo que OUTRO eixo coincida (ex.:
+    # mesma tensão 750V). Sem isso, dois cabos de seções diferentes mas
+    # mesma tensão batiam relevancia=1.0 (preço errado silencioso).
     dims_o = extrair_dimensoes(original)
     dims_c = extrair_dimensoes(candidato)
     if dims_o and dims_c:
-        if dims_o & dims_c:                      # alguma dimensão idêntica
-            base *= 1.15
-        elif {e for e, _ in dims_o} & {e for e, _ in dims_c}:
+        if _algum_eixo_diverge(dims_o, dims_c):
             base *= 0.6                          # mesmo eixo, valor diferente
+        elif dims_o & dims_c:                    # alguma dimensão idêntica
+            base *= 1.15
 
     # Tier 3 — keyword discriminadora. Se o edital tem um termo específico
     # (marca/tipo: "philips") e o candidato NÃO o contém, rebaixa (mostra

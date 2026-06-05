@@ -13,17 +13,26 @@ usando openpyxl.Translator (mantém $V$4 absoluto e ajusta L504→L505 relativo)
 """
 from __future__ import annotations
 
+import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
 from openpyxl import load_workbook
+from openpyxl.cell.cell import Cell
 from openpyxl.formula.translate import Translator
 from openpyxl.utils import get_column_letter
 
 from . import config
 from .extrator import ItemExtraido
+
+# Caracteres que, no início de um TEXTO, fazem o Excel/openpyxl interpretar a
+# célula como fórmula viva (data_type 'f'). Uma descrição de edital começando
+# com '=' (ou '+', '-', '@') corromperia a planilha entregue ao pregoeiro — ou,
+# pior, viraria injeção de fórmula (=cmd|...). Por isso prefixamos apóstrofo,
+# o mesmo recurso que o Excel usa para "forçar texto" numa célula.
+_PREFIXOS_PERIGOSOS = ("=", "+", "-", "@")
 
 
 @dataclass(frozen=True)
@@ -103,11 +112,11 @@ def exportar(
     wb = load_workbook(destino)   # SEM data_only — mantém fórmulas
     ws = wb.active
 
-    # Preencher cabeçalho (C1, C2)
+    # Preencher cabeçalho (C1, C2) — também texto livre, mesma neutralização
     if orgao:
-        ws["C1"] = orgao
+        _escrever_texto(ws["C1"], orgao)
     if numero_pregao:
-        ws["C2"] = numero_pregao
+        _escrever_texto(ws["C2"], numero_pregao)
 
     # Aplicar markup ANTES de expandir: assim, quando _expandir_linhas copiar
     # a fórmula da linha modelo (504) via Translator, ela já estará com o
@@ -126,21 +135,45 @@ def exportar(
         linha = LINHA_PRIMEIRO_ITEM + offset
         ws[f"A{linha}"] = offset + 1
         ws[f"B{linha}"] = item.item_numero if item.item_numero is not None else (offset + 1)
-        ws[f"C{linha}"] = item.descricao
-        ws[f"D{linha}"] = item.unidade or ""
+        # C, D, T, U recebem TEXTO LIVRE (descrição do edital, unidade,
+        # código/marca raspados). Neutralizamos prefixos de fórmula para o
+        # Excel não interpretar o conteúdo como cálculo (ver _escrever_texto).
+        _escrever_texto(ws[f"C{linha}"], item.descricao)
+        _escrever_texto(ws[f"D{linha}"], item.unidade or "")
         ws[f"E{linha}"] = item.quantidade if item.quantidade is not None else 0
         if item.valor_referencia is not None:
             ws[f"F{linha}"] = item.valor_referencia
 
-        # Colunas vindas do scraper (Fase 2): L=preço, T=código, U=marca
+        # Colunas vindas do scraper (Fase 2): L=preço (número), T=código, U=marca.
+        # T e U são texto raspado do site do fornecedor → mesma neutralização.
         sel = selecoes.get(offset)
         if sel is not None:
             ws[f"L{linha}"] = sel.preco
-            ws[f"T{linha}"] = sel.codigo_fornecedor
-            ws[f"U{linha}"] = sel.marca
+            _escrever_texto(ws[f"T{linha}"], sel.codigo_fornecedor)
+            _escrever_texto(ws[f"U{linha}"], sel.marca)
 
     wb.save(destino)
     return destino
+
+
+def _escrever_texto(celula: "Cell", texto: object) -> None:
+    """
+    Escreve TEXTO LIVRE numa célula neutralizando injeção de fórmula.
+
+    PORQUÊ: openpyxl trata qualquer string iniciada por '=', '+', '-' ou '@'
+    como fórmula viva (data_type 'f'). Uma descrição de edital ou um campo
+    raspado do site do fornecedor que comece com esses caracteres
+    (ex.: "=cmd|calc", "-3/4 POL") corromperia a planilha entregue ao
+    pregoeiro. Prefixamos apóstrofo — o mesmo recurso de "forçar texto" do
+    Excel — para que o conteúdo seja exibido literalmente.
+
+    Não usar em células numéricas nem de fórmula do template (G..AB): aqui só
+    passam C, D, T, U e os cabeçalhos C1/C2, todos texto.
+    """
+    if isinstance(texto, str) and texto[:1] in _PREFIXOS_PERIGOSOS:
+        celula.value = "'" + texto
+    else:
+        celula.value = texto
 
 
 def _aplicar_markup(ws, markup: float) -> None:
@@ -151,18 +184,35 @@ def _aplicar_markup(ws, markup: float) -> None:
     Após esta função, todas viram =Sn*<markup>. As outras fórmulas (H, I, etc.)
     referenciam G e portanto se ajustam automaticamente pelo Excel.
 
-    Implementação por string replace: cada fórmula é exatamente `=Sn*1.45`,
-    então substituir o sufixo `*<MARKUP_DEFAULT>` por `*<markup>` basta.
-    Se algum dia o template mudar o formato, este filtro falha silenciosamente
-    (a célula não vira fórmula errada — ela só não muda) e o teste pega.
+    PORQUÊ do regex (e não derivar de MARKUP_DEFAULT): o multiplicador real
+    está na própria célula (=S5*1.45). Se derivássemos o sufixo a trocar de
+    config.MARKUP_DEFAULT e alguém editasse esse valor para 1.5, a busca por
+    "*1.5" jamais casaria "=S5*1.45" e o markup deixaria de ser aplicado em
+    SILÊNCIO — erro financeiro em toda a planilha. O regex troca o número que
+    multiplica Sn diretamente, qualquer que seja o literal do template.
     """
-    sufixo_antigo = f"*{config.MARKUP_DEFAULT}"
-    sufixo_novo = f"*{markup}"
+    novo_mult = _formatar_markup(markup)
     for linha in range(LINHA_PRIMEIRO_ITEM, LINHA_ULTIMO_ITEM_TEMPLATE + 1):
         celula = ws[f"G{linha}"]
         valor = celula.value
-        if isinstance(valor, str) and valor.endswith(sufixo_antigo):
-            celula.value = valor[:-len(sufixo_antigo)] + sufixo_novo
+        if not isinstance(valor, str):
+            continue
+        # Casa o "* <número>" que multiplica a referência Sn (ex.: *1.45, *1.5,
+        # *2). O '*' obrigatório impede pegar os dígitos de "S504" (sem '*'
+        # antes). Substitui só a 1ª ocorrência.
+        nova = re.sub(r"\*\s*\d+(?:\.\d+)?", f"*{novo_mult}", valor, count=1)
+        if nova != valor:
+            celula.value = nova
+
+
+def _formatar_markup(markup: float) -> str:
+    """
+    Formata o markup como literal de fórmula Excel sem zeros/ponto supérfluos.
+
+    1.30 → '1.3', 1.6 → '1.6', 2.0 → '2'. Mantém compatibilidade com o
+    formato do template e com os testes (=S5*1.3, não =S5*1.30).
+    """
+    return f"{markup:g}"
 
 
 def _expandir_linhas(ws, n_extras: int):

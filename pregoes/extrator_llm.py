@@ -188,7 +188,15 @@ def extrair_via_gemini(
         )
 
     from google import genai
-    client = genai.Client(api_key=api_key)
+    from google.genai import types
+    # Timeout explícito (60s). O SDK google-genai NÃO impõe timeout default:
+    # sem isto, um soluço de rede trava a thread do Streamlit para sempre
+    # (spinner eterno, sem cancelar) — fatal durante o pregão. HttpOptions.timeout
+    # é em MILISSEGUNDOS no google-genai.
+    client = genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(timeout=60_000),
+    )
 
     resultado = ResultadoExtracao(arquivo=str(caminho_pdf))
 
@@ -461,7 +469,13 @@ def julgar_candidatos(
     # Chama Gemini
     try:
         from google import genai
-        client = genai.Client(api_key=api_key)
+        from google.genai import types
+        # Timeout de 60s (ms no google-genai). Sem isto a thread fica presa
+        # num soluço de rede; o except abaixo já degrada para o fallback local.
+        client = genai.Client(
+            api_key=api_key,
+            http_options=types.HttpOptions(timeout=60_000),
+        )
         candidatos_str = "\n".join(
             f"  [{i}] {c.descricao_encontrada} "
             f"(código {c.codigo_fornecedor}, {c.fornecedor})"

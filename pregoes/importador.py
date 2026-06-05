@@ -277,7 +277,9 @@ def _importar_arquivo(
 
     fonte = f"import:{path.name}"
     for row in ws.iter_rows(min_row=lcab + 2, values_only=True):
-        linha = _ler_linha_row(row, mapa)
+        linha, aviso = _ler_linha_row(row, mapa)
+        if aviso is not None:
+            stats.avisos.append(f"{path.name}: {aviso}")
         if linha is None:
             continue
         stats.linhas_lidas += 1
@@ -317,9 +319,18 @@ def _importar_arquivo(
     wb.close()
 
 
-def _ler_linha_row(row: tuple, mapa: dict[str, int]) -> Optional[LinhaImportada]:
+def _ler_linha_row(
+    row: tuple, mapa: dict[str, int]
+) -> tuple[Optional[LinhaImportada], Optional[str]]:
     """Extrai uma linha (tupla de valores) usando o mapa de colunas detectado.
-    None se inválida (descrição vazia / linha de continuação ou totalizador)."""
+
+    Retorna `(linha, aviso)`:
+    - `linha` é None se inválida (descrição vazia / continuação / totalizador).
+    - `aviso` é uma mensagem em português quando a célula de PREÇO tinha
+      conteúdo mas não pôde ser convertida em número (preço descartado).
+      O caller registra esse aviso em `stats.avisos` — para que o operador
+      saiba que um preço foi perdido, em vez de sumir em silêncio.
+    """
     def get(campo: str):
         idx = mapa.get(campo)
         if idx is None or idx >= len(row):
@@ -328,21 +339,29 @@ def _ler_linha_row(row: tuple, mapa: dict[str, int]) -> Optional[LinhaImportada]
 
     descricao_raw = _cell_str(get("descricao"))
     if not descricao_raw or len(descricao_raw) < 3:
-        return None
+        return None, None
 
     # Linha sem item E sem quantidade quase certamente é continuação ou
     # totalizador. Só aplica o filtro se ambas as colunas existem no layout.
     if "item" in mapa and "quantidade" in mapa:
         if get("item") is None and get("quantidade") is None:
-            return None
+            return None, None
 
-    return LinhaImportada(
+    preco, preco_erro = _cell_num(get("preco"))
+    aviso = None
+    if preco_erro is not None:
+        # Encurta a descrição na mensagem para não poluir o resumo.
+        rotulo = descricao_raw if len(descricao_raw) <= 60 else descricao_raw[:57] + "..."
+        aviso = f"Preço ignorado em '{rotulo}': {preco_erro}"
+
+    linha = LinhaImportada(
         descricao=descricao_raw,
         unidade=_cell_str(get("unidade")) or None,
         marca=_cell_str(get("marca")) or None,
         codigo=_cell_str(get("codigo")) or None,
-        preco=_cell_num(get("preco")),
+        preco=preco,
     )
+    return linha, aviso
 
 
 def _cell_str(valor) -> Optional[str]:
@@ -353,17 +372,52 @@ def _cell_str(valor) -> Optional[str]:
     return s if s else None
 
 
-def _cell_num(valor) -> Optional[float]:
-    """Tenta converter para float — aceita número direto, string '12,34' ou
-    '12.34'. Retorna None se for vazio, fórmula ou texto inconversível."""
+def _cell_num(valor) -> tuple[Optional[float], Optional[str]]:
+    """Converte uma célula de preço em float. Retorna `(valor, erro)`.
+
+    `valor` é o float (>0) ou None. `erro` é None em sucesso ou quando a
+    célula está legitimamente vazia; é uma mensagem curta em português quando
+    a célula TINHA conteúdo mas não pôde ser convertida — para o caller avisar
+    o operador em vez de descartar o preço em silêncio.
+
+    Aceita o formato monetário pt-BR que as planilhas reais do cliente usam:
+    `1.234,56` (ponto de milhar + vírgula decimal), `R$ 5,00`, `10`. O caminho
+    de célula numérica (`data_only=True` devolve int/float) é mantido intacto.
+    """
     if valor is None:
+        return None, None
+    # Célula numérica (data_only) — caminho rápido, sem parsing de string.
+    if isinstance(valor, (int, float)) and not isinstance(valor, bool):
+        return (float(valor) if valor > 0 else None), None
+
+    s = str(valor).strip()
+    if not s:
+        return None, None  # célula em branco — não é erro
+
+    numero = _texto_para_float_br(s)
+    if numero is None:
+        # Conteúdo presente mas inconversível: sinaliza para o caller avisar.
+        return None, f"valor não numérico {s!r}"
+    return (numero if numero > 0 else None), None
+
+
+def _texto_para_float_br(s: str) -> Optional[float]:
+    """Interpreta um texto monetário pt-BR como float, ou None se inconversível.
+
+    Regra: se há vírgula, ela é o separador decimal e os pontos são milhar
+    (`1.234,56` → 1234.56). Sem vírgula, um ponto é tratado como decimal
+    (`12.34` → 12.34). Remove `R$`, espaços (inclusive não-quebrável) e o
+    sinal de milhar antes de delegar ao `float()`.
+    """
+    limpo = s.replace("R$", "").replace("\xa0", "").strip()
+    limpo = limpo.replace(" ", "")
+    if not limpo:
         return None
-    if isinstance(valor, (int, float)):
-        return float(valor) if valor > 0 else None
-    s = str(valor).strip().replace(",", ".")
+    if "," in limpo:
+        # Vírgula decimal: ponto é separador de milhar, removê-lo.
+        limpo = limpo.replace(".", "").replace(",", ".")
     try:
-        v = float(s)
-        return v if v > 0 else None
+        return float(limpo)
     except ValueError:
         return None
 

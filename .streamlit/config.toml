@@ -10,6 +10,11 @@ textColor = "#0F172A"               # Texto principal
 font = "sans serif"
 
 [server]
+# Bind apenas no loopback: a UI NUNCA fica exposta na rede Wi-Fi local.
+# Sem isso, qualquer máquina na mesma rede abriria o sistema (sem senha)
+# e leria/editaria data/credenciais.json (e-mail/senha dos fornecedores +
+# chave Gemini paga) e o banco. Mantém o operador como único acesso.
+address = "127.0.0.1"
 headless = true
 runOnSave = true
 fileWatcherType = "auto"
@@ -18,5 +23,7 @@ fileWatcherType = "auto"
 gatherUsageStats = false
 
 [client]
-showErrorDetails = true
+# Operador leigo: nunca mostrar stacktrace cru. As telas tratam o erro
+# com mensagem amigável; o detalhe técnico vai só para o log em arquivo.
+showErrorDetails = "none"
 toolbarMode = "minimal"

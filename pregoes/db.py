@@ -180,6 +180,18 @@ def conectar(path: Path | None = None) -> sqlite3.Connection:
 # Quantas cópias de backup manter na rotação.
 _BACKUP_MANTER = 10
 
+# Motivos cujos backups NUNCA podem ser rotacionados/apagados: são as
+# "redes de segurança" criadas logo antes de operações destrutivas
+# (migration de schema, importação em massa). Perdê-los significaria não
+# ter como voltar atrás se a operação corromper dados. Ficam fora da
+# rotação por volume — a rotação só vale para os backups de rotina.
+_MOTIVOS_PROTEGIDOS = ("pre-migration", "pre-import")
+
+
+def _eh_backup_protegido(p: Path) -> bool:
+    """True se o nome do arquivo contém um motivo protegido (preserva-se)."""
+    return any(m in p.name for m in _MOTIVOS_PROTEGIDOS)
+
 
 def backup(motivo: str = "auto", path: Path | None = None,
            manter: int = _BACKUP_MANTER) -> Optional[Path]:
@@ -192,12 +204,26 @@ def backup(motivo: str = "auto", path: Path | None = None,
     `motivo` entra no nome do arquivo (ex: 'pre-migration', 'pre-import',
     'diario') para rastrear por que o backup foi feito. Retorna o caminho
     gerado, ou None se o banco ainda não existe.
+
+    Para `motivo='diario'` deduplica por dia: se já existe um backup
+    diário com a data de hoje, não cria outro (retorna o existente). Assim
+    a UI pode chamar a cada boot sem inflar a rotação — a garantia de
+    "1 por dia" vive aqui, não no call site.
     """
     path = Path(path) if path else config.DB_PATH
     if not path.exists():
         return None
     backup_dir = config.DATA_DIR / "backups"
     backup_dir.mkdir(parents=True, exist_ok=True)
+
+    # Dedup do diário por data: evita estourar a rotação quando a UI
+    # reabre várias vezes no mesmo dia (a guarda em app.py é por sessão
+    # Streamlit, não por dia).
+    if motivo == "diario":
+        existente = _backup_diario_de_hoje(backup_dir)
+        if existente is not None:
+            return existente
+
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     # Sanitiza o motivo para nome de arquivo
     motivo_safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in motivo)[:30]
@@ -216,14 +242,30 @@ def backup(motivo: str = "auto", path: Path | None = None,
     return destino
 
 
+def _backup_diario_de_hoje(backup_dir: Path) -> Optional[Path]:
+    """Retorna um backup diário já criado hoje, se houver; senão None.
+
+    O nome segue `pregoes_AAAAMMDD_HHMMSS_diario.db`, então a data de hoje
+    aparece como prefixo do timestamp. Match por prefixo + sufixo evita
+    confundir com backups de outros motivos no mesmo dia.
+    """
+    hoje = datetime.now().strftime("%Y%m%d")
+    for p in backup_dir.glob(f"pregoes_{hoje}_*_diario.db"):
+        return p
+    return None
+
+
 def _rotacionar_backups(backup_dir: Path, manter: int) -> None:
-    """Mantém apenas os `manter` backups mais recentes; apaga o resto."""
-    backups = sorted(
-        backup_dir.glob("pregoes_*.db"),
+    """Mantém apenas os `manter` backups de rotina mais recentes; apaga o
+    resto. Backups protegidos (pre-migration/pre-import) ficam de fora da
+    contagem e nunca são apagados — são a rede de segurança contra
+    operações destrutivas e devem sobreviver à rotação por volume."""
+    rotacionaveis = sorted(
+        (p for p in backup_dir.glob("pregoes_*.db") if not _eh_backup_protegido(p)),
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
-    for antigo in backups[manter:]:
+    for antigo in rotacionaveis[manter:]:
         try:
             antigo.unlink()
         except OSError:

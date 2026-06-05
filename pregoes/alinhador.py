@@ -217,9 +217,16 @@ def _chamar_llm_em_lotes(
     Falha de um lote não derruba os outros (cada lote é independente)."""
     try:
         from google import genai
+        from google.genai import types
     except ImportError:
         return {}
-    client = genai.Client(api_key=api_key)
+    # Timeout de 60s (ms no google-genai). Sem isto um soluço de rede trava a
+    # thread para sempre; com isto o except do laço abaixo degrada cada lote
+    # para o fallback local (normalizar_descricao).
+    client = genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(timeout=60_000),
+    )
     resultado: dict[str, str] = {}
     for inicio in range(0, len(normas), _LOTE_MAX):
         lote = normas[inicio:inicio + _LOTE_MAX]

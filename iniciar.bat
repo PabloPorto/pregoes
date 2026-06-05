@@ -18,7 +18,10 @@ echo  Para fechar o sistema, basta fechar esta janela.
 echo.
 
 REM Roda o Streamlit. Ele abre o navegador automaticamente.
-python -m streamlit run pregoes\ui\app.py --server.port=8501 --browser.gatherUsageStats=false --server.headless=false
+REM --server.address=127.0.0.1 prende a UI ao loopback (cinto e suspensorio
+REM junto do .streamlit\config.toml): o sistema NUNCA fica exposto na rede
+REM Wi-Fi local, protegendo credenciais dos fornecedores e a chave Gemini.
+python -m streamlit run pregoes\ui\app.py --server.port=8501 --server.address=127.0.0.1 --browser.gatherUsageStats=false --server.headless=false
 
 echo.
 echo Sistema encerrado.
