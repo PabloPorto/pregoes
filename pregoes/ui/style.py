@@ -408,6 +408,36 @@ section[data-testid="stSidebar"] .block-container {{
     font-size: 1.1rem;
     font-weight: 600;
 }}
+
+/* ===== Cards de opção (tela "Buscar preços") ===== */
+/* Card escolhido pelo operador: leve tom da cor primária + acento à esquerda,
+   para destacar ao bater o olho qual opção já está marcada. O Streamlit aplica
+   a classe `st-key-<key>` direto no container com borda (o stVerticalBlock);
+   só as opções selecionadas usam o key `ppoptsel-*`. (`st-key-ppopt-*` das
+   demais não casa este seletor — "ppoptsel-" não é substring de "ppopt-".) */
+div[class*="st-key-ppoptsel-"] {{
+    background: {PALETA['primary_light']}66 !important;
+    border-color: {PALETA['primary']} !important;
+    box-shadow: inset 4px 0 0 {PALETA['primary']};
+}}
+
+/* Pílulas de destaque — substituem os emoji (estrela/cifrão), que renderizavam
+   diferente entre Windows e Mac, por rótulos de estilo consistente. */
+.pp-pill {{
+    display: inline-block;
+    font-size: 0.66rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding: 0.1rem 0.5rem;
+    border-radius: 999px;
+    margin-left: 0.5rem;
+    vertical-align: middle;
+    line-height: 1.6;
+    white-space: nowrap;
+}}
+.pp-pill--match  {{ background: {PALETA['success_bg']}; color: {PALETA['success']}; }}
+.pp-pill--barato {{ background: {PALETA['info_bg']};    color: {PALETA['info']};    }}
 </style>
 """
 
@@ -437,6 +467,16 @@ def badge(texto: str, tipo: TipoBadge = "neutro") -> str:
 def render_badge(texto: str, tipo: TipoBadge = "neutro") -> None:
     """Renderiza badge diretamente como bloco markdown."""
     st.markdown(badge(texto, tipo), unsafe_allow_html=True)
+
+
+def pill(texto: str, tipo: Literal["match", "barato"]) -> str:
+    """Pílula de destaque inline (ex.: 'Melhor match', 'Mais barato').
+
+    Renderiza igual em qualquer SO — substitui os emoji ⭐/💰, que tinham
+    aparência diferente entre Windows e Mac. Para embutir em outra string
+    HTML: ``f"...{pill('Melhor match', 'match')}..."``.
+    """
+    return f'<span class="pp-pill pp-pill--{tipo}">{texto}</span>'
 
 
 def bloco_aviso(mensagem: str, tipo: TipoAviso = "info") -> None:
