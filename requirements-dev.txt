@@ -11,3 +11,6 @@
 # Pesada: ~1.5GB com PyTorch CPU. Opção manual sob demanda no Mapeamento
 # Manual; a Camada 2 automática é o Gemini.
 docling>=2.0.0
+
+# Empacotamento do .exe Windows (P1.1) — ver BUILD.md. Só na máquina de build.
+pyinstaller>=6.0

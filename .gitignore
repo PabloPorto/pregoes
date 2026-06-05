@@ -39,6 +39,12 @@ data/editais/*.pdf
 # Credenciais de fornecedores (Q8) — NUNCA versionar
 data/credenciais.json
 
+# Empacotamento PyInstaller (P1.1) — saída de build, gerada no Windows
+/build/
+/dist/
+/.build_env/
+*.exe
+
 # OS
 .DS_Store
 *.swp

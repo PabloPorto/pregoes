@@ -6,9 +6,37 @@ pelo código. Se o cliente quiser alterar markup, overhead, cache, etc.,
 mexe só neste arquivo.
 """
 from pathlib import Path
+import shutil
+import sys
+
+
+def _raiz_gravavel() -> Path:
+    """Raiz dos dados GRAVÁVEIS (db, backups, exports, credenciais, log).
+
+    - Empacotado (.exe via PyInstaller, ``sys.frozen``): pasta AO LADO do
+      executável — a pasta "Pregões" é portável e os dados do cliente persistem
+      entre atualizações do .exe. (Dentro do bundle é somente-leitura/temp.)
+    - Desenvolvimento: a raiz do repositório — comportamento INALTERADO.
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent.parent
+
+
+def _raiz_bundle() -> Path:
+    """Raiz dos recursos EMPACOTADOS, somente leitura (o template MATRIZ).
+
+    PyInstaller extrai os dados em ``sys._MEIPASS`` (onefile) ou na pasta do exe
+    (onedir). Em dev, é a raiz do repositório.
+    """
+    if getattr(sys, "frozen", False):
+        return Path(getattr(sys, "_MEIPASS",
+                            Path(sys.executable).resolve().parent))
+    return Path(__file__).resolve().parent.parent
+
 
 # Estrutura de diretórios
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = _raiz_gravavel()
 DATA_DIR = BASE_DIR / "data"
 TEMPLATES_DIR = DATA_DIR / "templates"
 EDITAIS_DIR = DATA_DIR / "editais"
@@ -24,6 +52,14 @@ TEMPLATE_MATRIZ = TEMPLATES_DIR / "matriz_template.xlsx"
 # Garantir que pastas existam
 for d in (DATA_DIR, TEMPLATES_DIR, EDITAIS_DIR, EXPORTS_DIR, HISTORICO_DIR):
     d.mkdir(parents=True, exist_ok=True)
+
+# Semente do template: empacotado, o template vem do bundle (read-only) e é
+# copiado UMA vez para a pasta gravável, para a exportação e o restauro do
+# ORIGINAL funcionarem. Em dev, origem == destino → no-op (não copia nada).
+_TEMPLATE_BUNDLE = _raiz_bundle() / "data" / "templates" / "matriz_template.xlsx"
+if (not TEMPLATE_MATRIZ.exists() and _TEMPLATE_BUNDLE.exists()
+        and _TEMPLATE_BUNDLE.resolve() != TEMPLATE_MATRIZ.resolve()):
+    shutil.copy2(_TEMPLATE_BUNDLE, TEMPLATE_MATRIZ)
 
 # === Parâmetros financeiros (espelham o template MATRIZ) ===
 MARKUP_DEFAULT = 1.45               # Multiplicador padrão sobre custo de aquisição
