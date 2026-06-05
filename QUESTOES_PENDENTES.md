@@ -2,6 +2,24 @@
 
 > Este arquivo é vivo. Cada item resolvido sai daqui e entra como decisão registrada na arquitetura.
 
+## STATUS 2026-06 — o que mudou desde o briefing
+
+- **Q11/Q12 (LLM + busca em 5 camadas): IMPLEMENTADAS e em produção.** O
+  Gemini deixou de ser "fallback de extração" e virou **componente central**:
+  extração (Camada 2) + canonização do catálogo (Fase B) + judge da busca.
+- **Billing pago aprovado.** Custo real **medido**: ~$1-2/mês no volume alvo
+  (chamada do judge = 641 tokens ≈ US$0,00006). O free tier (20 req/dia) era
+  insuficiente; o tier pago resolve. Substitui a estimativa antiga de "$15/mês".
+- **Catálogo populado:** 7 planilhas reais importadas → 1408 produtos (880
+  Almeida + 123 Dantas), normalizados pelo Gemini.
+- **Confiabilidade medida em edital real da especialidade:** busca por código
+  ~89-91% certa, ~2% alucinação, 0 nos itens sem correspondência.
+- **Prontidão de produção:** guardrails P0 implementados (migration de schema,
+  backup automático, log em arquivo, mensagens de erro para leigo, falhas não
+  silenciosas, sinalização de PDF escaneado). Ver plano de produção.
+- Docling saiu do `requirements.txt` (→ `requirements-dev.txt`); extração
+  automática é pdfplumber + Gemini.
+
 ## Bloco 1 — Defaults provisórios em uso (precisam confirmação para continuar fase 2 em diante)
 
 ### Q12. Busca robusta de produtos: pipeline em 5 camadas (95%+ qualidade)

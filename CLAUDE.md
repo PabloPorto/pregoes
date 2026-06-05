@@ -215,9 +215,14 @@ adicionadas a `QUESTOES_PENDENTES.md`** com:
   de G a AB são intocáveis.
 - ❌ **Não use `data_only=True` ao salvar Excel.** Isso destrói as fórmulas.
   `data_only=True` é só para leitura de valores calculados.
-- ❌ **Não adicione LLM externo, OpenAI, LangChain, vector store.** O
-  cliente disse explicitamente que isso é over-engineering para esse
-  projeto.
+- ⚠️ **LLM externo: REVISADO (Q11/Q12, 2026-06).** O briefing original
+  proibia LLM externo. Isso foi **flexibilizado e está em produção**: o
+  **Gemini (Google) é componente central** do sistema — extração de PDF
+  (Camada 2), padronização de nomes do catálogo (Fase B / canonização) e
+  o "judge" semântico da busca. **Billing pago aprovado** (~$1-2/mês no
+  volume alvo). Continua proibido: OpenAI/LangChain/vector store **sem
+  necessidade comprovada** — o Gemini cobre os casos atuais. Não reverter
+  o uso do Gemini sem falar com o usuário humano.
 - ❌ **Não crie microserviços, fila distribuída, worker em background,
   Celery, Redis.** É um operador único usando localmente.
 - ❌ **Não introduza Docker, Kubernetes, ou qualquer coisa que exija

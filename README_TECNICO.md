@@ -54,12 +54,37 @@ PDF do edital
 
 ### O que NÃO fazemos (anti-decisões intencionais)
 
-- ❌ Não usamos LLM externo (LangChain, OpenAI, etc.) — over-engineering
+- ✅ **Usamos LLM (Gemini) como componente central** (revisado em Q11/Q12).
+  Papéis: extração de PDF (Camada 2), padronização de nomes do catálogo
+  (canonização, Fase B) e judge semântico da busca. Billing **pago**
+  (~$1-2/mês). Continuamos sem OpenAI/LangChain/vector store enquanto o
+  Gemini cobrir — ver "Busca em camadas" abaixo.
 - ❌ Não usamos Docker — cliente não tem perfil técnico
 - ❌ Não usamos microserviços — operador único, dor única, app único
 - ❌ Não usamos ORM pesado (SQLAlchemy completo) — sqlite3 + raw SQL bastam
 - ❌ Não criamos abstrações para "futuros fornecedores" — quando aparecer
   o terceiro fornecedor, refatoramos com contexto real
+
+### Busca de preços em camadas (estado atual, 2026-06)
+
+Por item, do mais preciso ao mais cobertor:
+1. **Cache** (TTL 2 dias) → reusa busca recente.
+2. **Aprendizado** (Camada 4) → descrição já confirmada pelo operador vira
+   código direto.
+3. **Catálogo por código** (Camada 0) → `matcher` casa a descrição do edital
+   contra o catálogo histórico (importado das planilhas do cliente). A
+   **canonização via Gemini** (`alinhador`) alinha o vocabulário
+   (`sxt`→`sextavado`, `cano`↔`tubo`) — sem ela o fuzzy casava ~0%. Com ela,
+   busca `/busca?s={codigo}` → produto exato. Salvaguarda valida afinidade.
+4. **Busca textual** (Tiers 1-3) → query distintiva + relevância calibrada
+   (variante F) + validação de dimensão (inclui mm/pol/tomadas/volts).
+5. **Judge** (Gemini) → revisor semântico que rejeita os falsos sutis
+   (fita-rotulador ≠ fita-crepe).
+
+**Confiabilidade medida (edital real da especialidade do cliente):**
+busca por código ~89-91% certa, ~2% alucinação, 0 nos itens sem
+correspondência (diz "não encontrado"). Degrada com transparência sem
+chave/quota/rede (cai para o textual, que não alucina).
 
 ## Estrutura de pastas
 
