@@ -62,7 +62,12 @@ if (not TEMPLATE_MATRIZ.exists() and _TEMPLATE_BUNDLE.exists()
     shutil.copy2(_TEMPLATE_BUNDLE, TEMPLATE_MATRIZ)
 
 # === Parâmetros financeiros (espelham o template MATRIZ) ===
-MARKUP_DEFAULT = 1.45               # Multiplicador padrão sobre custo de aquisição
+MARKUP_DEFAULT = 1.45               # Multiplicador padrão (= MARKUP_NORMAL; retrocompat)
+# Markup por classificação tributária (Fase 4). Item COM Substituição
+# Tributária usa markup MENOR — o ICMS já foi recolhido na origem, então a
+# margem de formação de preço é diferente. Defaults editáveis por pregão na UI.
+MARKUP_NORMAL = 1.45                # item SEM substituição tributária
+MARKUP_ST = 1.30                    # item COM ST (NCM consta no Anexo 05 do estado)
 PERC_OPERACIONAL = 0.03             # 3% operacional
 PERC_COMISSAO = 0.05                # 5% comissão
 PERC_IMPOSTOS_FEDERAIS = 0.07       # 7% impostos federais

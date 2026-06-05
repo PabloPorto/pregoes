@@ -1,0 +1,1957 @@
+{
+ "fonte": "Anexo 05 do RICMS/PB (Art. 390) — Relação de Mercadorias sujeitas à Substituição Tributária",
+ "uf": "PB",
+ "vigencia": "a partir de 01.01.2024",
+ "atualizado_fonte": "2025-07-09 (Decreto 46.791/2025)",
+ "extraido_em": "2026-06-05",
+ "metodo": "extração semântica multi-agente do PDF (colunas embaralhadas); match hierárquico por prefixo 4/6/8 dígitos",
+ "cobertura": "502/509 CESTs; 7 gaps em pneumáticos/alimentícios (fora do domínio do cliente)",
+ "total": 389,
+ "ncms": [
+  {
+   "ncm": "04021",
+   "cest": "17.012.00",
+   "descricao": "Leite em pó, blocos ou grânulos, exceto creme de leite (NCM 0402.1, 0402.2 e 040"
+  },
+  {
+   "ncm": "11010010",
+   "cest": "17.044.00",
+   "descricao": "Farinha de trigo especial, em embalagem inferior ou igual a 1 kg"
+  },
+  {
+   "ncm": "1806",
+   "cest": "23.002.00",
+   "descricao": "Preparados para fabricação de sorvete em máquina (NCM 1806, 1901, 2106, 0404)"
+  },
+  {
+   "ncm": "19011010",
+   "cest": "17.014.00",
+   "descricao": "Leite modificado para alimentação de crianças"
+  },
+  {
+   "ncm": "190120",
+   "cest": "17.046.10",
+   "descricao": "Misturas e preparações para pães com, no mínimo, 80% de farinha de trigo na sua "
+  },
+  {
+   "ncm": "19012000",
+   "cest": "17.046.10",
+   "descricao": "Misturas e preparações para pães com, no mínimo, 80% de farinha de trigo na sua "
+  },
+  {
+   "ncm": "19019090",
+   "cest": "17.046.10",
+   "descricao": "Misturas e preparações para pães com, no mínimo, 80% de farinha de trigo na sua "
+  },
+  {
+   "ncm": "1902",
+   "cest": "17.048.00",
+   "descricao": "Massas alimentícias cozidas ou recheadas (de carne ou de outras substâncias) ou "
+  },
+  {
+   "ncm": "19021",
+   "cest": "17.049.00",
+   "descricao": "Massas alimentícias do tipo comum, não cozidas, nem recheadas, nem preparadas de"
+  },
+  {
+   "ncm": "19021100",
+   "cest": "17.049.02",
+   "descricao": "Massas alimentícias do tipo grano duro, não cozidas, nem recheadas, nem preparad"
+  },
+  {
+   "ncm": "19021900",
+   "cest": "17.049.03",
+   "descricao": "Massas alimentícias do tipo comum, não cozidas, nem recheadas, nem preparadas de"
+  },
+  {
+   "ncm": "19022000",
+   "cest": "17.048.02",
+   "descricao": "Massas alimentícias recheadas (mesmo cozidas ou preparadas de outro modo)"
+  },
+  {
+   "ncm": "19023000",
+   "cest": "17.047.00",
+   "descricao": "Massas alimentícias tipo instantânea, exceto as descritas no CEST 17.047.01"
+  },
+  {
+   "ncm": "19051000",
+   "cest": "17.063.00",
+   "descricao": "Pão denominado knackebrot"
+  },
+  {
+   "ncm": "190520",
+   "cest": "17.050.00",
+   "descricao": "Pães industrializados, inclusive de especiarias, exceto panetones e bolo de form"
+  },
+  {
+   "ncm": "19052010",
+   "cest": "17.052.00",
+   "descricao": "Panetones"
+  },
+  {
+   "ncm": "19052090",
+   "cest": "17.051.00",
+   "descricao": "Bolo de forma, inclusive de especiarias"
+  },
+  {
+   "ncm": "19053100",
+   "cest": "17.053.00",
+   "descricao": "Biscoitos e bolachas derivados de farinha de trigo; (exceto dos tipos \"cream cra"
+  },
+  {
+   "ncm": "19053200",
+   "cest": "17.057.00",
+   "descricao": "\"Waffles\" e \"wafers\" - sem cobertura"
+  },
+  {
+   "ncm": "19054000",
+   "cest": "17.059.00",
+   "descricao": "Torradas, pão torrado e produtos semelhantes torrados"
+  },
+  {
+   "ncm": "190590",
+   "cest": "17.064.00",
+   "descricao": "Demais pães industrializados"
+  },
+  {
+   "ncm": "19059010",
+   "cest": "17.060.00",
+   "descricao": "Outros pães de forma"
+  },
+  {
+   "ncm": "19059020",
+   "cest": "17.056.00",
+   "descricao": "Biscoitos e bolachas derivados de farinha de trigo dos tipos \"cream cracker\" e \""
+  },
+  {
+   "ncm": "19059090",
+   "cest": "17.031.01",
+   "descricao": "Salgadinhos diversos, derivados de farinha de trigo"
+  },
+  {
+   "ncm": "210500",
+   "cest": "23.001.00",
+   "descricao": "Sorvetes de qualquer espécie"
+  },
+  {
+   "ncm": "210690",
+   "cest": "03.013.00",
+   "descricao": "Bebidas energéticas em lata (NCM 2106.90 e 2202.99.00)"
+  },
+  {
+   "ncm": "21069010",
+   "cest": "03.012.00",
+   "descricao": "Xarope ou extrato concentrado destinados ao preparo de refrigerante em máquina \""
+  },
+  {
+   "ncm": "2201",
+   "cest": "03.006.00",
+   "descricao": "Outras águas minerais, gasosa ou não, ou potável, naturais; exceto as classifica"
+  },
+  {
+   "ncm": "22011000",
+   "cest": "03.003.00",
+   "descricao": "Água mineral, gasosa ou não, ou potável, naturais, em embalagem de vidro descart"
+  },
+  {
+   "ncm": "22019000",
+   "cest": "03.003.00",
+   "descricao": "Água mineral, gasosa ou não, ou potável, naturais, em embalagem de vidro descart"
+  },
+  {
+   "ncm": "2202",
+   "cest": "03.011.01",
+   "descricao": "Espumantes sem álcool"
+  },
+  {
+   "ncm": "22021000",
+   "cest": "03.007.00",
+   "descricao": "Água aromatizada artificialmente, exceto os refrescos e refrigerantes"
+  },
+  {
+   "ncm": "22029100",
+   "cest": "03.022.00",
+   "descricao": "Cerveja sem álcool em garrafa de vidro retornável"
+  },
+  {
+   "ncm": "22029900",
+   "cest": "03.008.00",
+   "descricao": "Outras águas minerais, gasosa ou não, ou potável, naturais, inclusive gaseificad"
+  },
+  {
+   "ncm": "22030000",
+   "cest": "03.021.00",
+   "descricao": "Cerveja em garrafa de vidro retornável"
+  },
+  {
+   "ncm": "2204",
+   "cest": "02.024.00",
+   "descricao": "Vinhos de uvas frescas, incluindo os vinhos enriquecidos com álcool; mostos de u"
+  },
+  {
+   "ncm": "2205",
+   "cest": "02.005.00",
+   "descricao": "Catuaba e similares"
+  },
+  {
+   "ncm": "22060010",
+   "cest": "02.022.00",
+   "descricao": "Sidra e similares"
+  },
+  {
+   "ncm": "22060090",
+   "cest": "02.005.00",
+   "descricao": "Catuaba e similares"
+  },
+  {
+   "ncm": "22071010",
+   "cest": "06.001.00",
+   "descricao": "Álcool etílico não desnaturado, com um teor alcoólico em volume igual ou superio"
+  },
+  {
+   "ncm": "22071090",
+   "cest": "06.001.01",
+   "descricao": "Álcool etílico não desnaturado, com um teor alcoólico em volume igual ou superio"
+  },
+  {
+   "ncm": "220720",
+   "cest": "02.004.00",
+   "descricao": "Cachaça e aguardentes"
+  },
+  {
+   "ncm": "22082000",
+   "cest": "02.006.00",
+   "descricao": "Conhaque, brandy e similares"
+  },
+  {
+   "ncm": "220830",
+   "cest": "02.016.00",
+   "descricao": "Uísque"
+  },
+  {
+   "ncm": "22084000",
+   "cest": "02.004.00",
+   "descricao": "Cachaça e aguardentes"
+  },
+  {
+   "ncm": "22085000",
+   "cest": "02.008.00",
+   "descricao": "Gim (gin) e genebra"
+  },
+  {
+   "ncm": "22086000",
+   "cest": "02.018.00",
+   "descricao": "Vodka"
+  },
+  {
+   "ncm": "22087000",
+   "cest": "02.010.00",
+   "descricao": "Licores e similares"
+  },
+  {
+   "ncm": "22089000",
+   "cest": "02.001.00",
+   "descricao": "Aperitivos, amargos, bitter e similares"
+  },
+  {
+   "ncm": "2309",
+   "cest": "22.001.00",
+   "descricao": "Ração tipo \"pet\" para animais domésticos"
+  },
+  {
+   "ncm": "2402",
+   "cest": "04.001.00",
+   "descricao": "Charutos, cigarrilhas e cigarros, de tabaco ou dos seus sucedâneos"
+  },
+  {
+   "ncm": "24031",
+   "cest": "04.002.00",
+   "descricao": "Tabaco para fumar, mesmo contendo sucedâneos de tabaco em qualquer proporção"
+  },
+  {
+   "ncm": "2523",
+   "cest": "05.001.00",
+   "descricao": "Cimento"
+  },
+  {
+   "ncm": "27101249",
+   "cest": "06.019.00",
+   "descricao": "Nafta Petroquímica (item 19.1)"
+  },
+  {
+   "ncm": "27101251",
+   "cest": "06.003.00",
+   "descricao": "Gasolina de aviação"
+  },
+  {
+   "ncm": "27101259",
+   "cest": "06.002.00",
+   "descricao": "Gasolina automotiva A, exceto Premium"
+  },
+  {
+   "ncm": "27101911",
+   "cest": "06.005.00",
+   "descricao": "Querosene de aviação"
+  },
+  {
+   "ncm": "27101919",
+   "cest": "06.004.00",
+   "descricao": "Querosenes, exceto de aviação"
+  },
+  {
+   "ncm": "2710192",
+   "cest": "06.006.00",
+   "descricao": "Óleo diesel A, exceto S10 e Marítimo"
+  },
+  {
+   "ncm": "27101922",
+   "cest": "06.006.11",
+   "descricao": "Óleo combustível pesado"
+  },
+  {
+   "ncm": "2710193",
+   "cest": "06.007.00",
+   "descricao": "Óleos lubrificantes"
+  },
+  {
+   "ncm": "2710199",
+   "cest": "06.008.00",
+   "descricao": "Outros óleos de petróleo ou de minerais betuminosos (exceto óleos brutos) e prep"
+  },
+  {
+   "ncm": "27101990",
+   "cest": "06.008.00",
+   "descricao": "Outros óleos de petróleo ou de minerais betuminosos (exceto óleos brutos) e prep"
+  },
+  {
+   "ncm": "27102000",
+   "cest": "06.018.00",
+   "descricao": "Óleos de petróleo ou de minerais betuminosos (exceto óleos brutos) e preparações"
+  },
+  {
+   "ncm": "27109",
+   "cest": "06.009.00",
+   "descricao": "Resíduos de óleos"
+  },
+  {
+   "ncm": "2711",
+   "cest": "06.010.00",
+   "descricao": "Gás de petróleo e outros hidrocarbonetos gasosos, exceto GLP, GLGN, Gás Natural "
+  },
+  {
+   "ncm": "27111100",
+   "cest": "06.012.00",
+   "descricao": "Gás Natural Liquefeito"
+  },
+  {
+   "ncm": "27111910",
+   "cest": "06.011.00",
+   "descricao": "Gás liquefeito de petróleo em botijão de 13 Kg (GLP)"
+  },
+  {
+   "ncm": "27112100",
+   "cest": "06.013.00",
+   "descricao": "Gás Natural Gasoso"
+  },
+  {
+   "ncm": "27112990",
+   "cest": "06.014.00",
+   "descricao": "Gás de xisto"
+  },
+  {
+   "ncm": "2713",
+   "cest": "06.015.00",
+   "descricao": "Coque de petróleo e outros resíduos de óleo de petróleo ou de minerais betuminos"
+  },
+  {
+   "ncm": "27160000",
+   "cest": "07.001.00",
+   "descricao": "Energia elétrica"
+  },
+  {
+   "ncm": "2821",
+   "cest": "24.002.00",
+   "descricao": "Xadrez e pós assemelhados, em embalagem de conteúdo inferior ou igual a 1 kg, ex"
+  },
+  {
+   "ncm": "2936",
+   "cest": "13.006.00",
+   "descricao": "Provitaminas e vitaminas, naturais ou reproduzidas por síntese (incluídos os con"
+  },
+  {
+   "ncm": "3002",
+   "cest": "13.008.00",
+   "descricao": "Antissoro, outras frações do sangue, produtos imunológicos modificados, mesmo ob"
+  },
+  {
+   "ncm": "3003",
+   "cest": "13.001.00",
+   "descricao": "Medicamentos de referência - positiva, exceto para uso veterinário (NCM 3003 e 3"
+  },
+  {
+   "ncm": "3005",
+   "cest": "13.011.00",
+   "descricao": "Algodão, atadura, esparadrapo, gazes, pensos, sinapismos, e outros, acondicionad"
+  },
+  {
+   "ncm": "30051010",
+   "cest": "13.010.00",
+   "descricao": "Curativos (pensos) adesivos e outros artigos com uma camada adesiva, impregnados"
+  },
+  {
+   "ncm": "300630",
+   "cest": "13.007.00",
+   "descricao": "Preparações opacificantes (contrastantes) para exames radiográficos e reagentes "
+  },
+  {
+   "ncm": "30066000",
+   "cest": "13.005.00",
+   "descricao": "Preparações químicas contraceptivas de referência, à base de hormônios, de outro"
+  },
+  {
+   "ncm": "3204",
+   "cest": "24.003.00",
+   "descricao": "Corantes para aplicação em bases, tintas e vernizes (NCM 3204, 3205.00.00, 3206,"
+  },
+  {
+   "ncm": "32041700",
+   "cest": "24.002.00",
+   "descricao": "Xadrez e pós assemelhados, em embalagem de conteúdo inferior ou igual a 1 kg, ex"
+  },
+  {
+   "ncm": "32050000",
+   "cest": "24.003.00",
+   "descricao": "Corantes para aplicação em bases, tintas e vernizes (NCM 3204, 3205.00.00, 3206,"
+  },
+  {
+   "ncm": "32061110",
+   "cest": "24.002.00",
+   "descricao": "Xadrez e pós assemelhados, em embalagem de conteúdo inferior ou igual a 1 kg, ex"
+  },
+  {
+   "ncm": "3208",
+   "cest": "24.001.00",
+   "descricao": "Tintas, vernizes (NCM 3208, 3209, 3210.00)"
+  },
+  {
+   "ncm": "321000",
+   "cest": "24.001.00",
+   "descricao": "Tintas, vernizes (NCM 3208, 3209, 3210.00)"
+  },
+  {
+   "ncm": "32149000",
+   "cest": "10.003.00",
+   "descricao": "Outras argamassas"
+  },
+  {
+   "ncm": "33061000",
+   "cest": "20.023.00",
+   "descricao": "Dentifrícios"
+  },
+  {
+   "ncm": "33062000",
+   "cest": "20.024.00",
+   "descricao": "Fios utilizados para limpar os espaços interdentais (fios dentais)"
+  },
+  {
+   "ncm": "33069000",
+   "cest": "20.025.00",
+   "descricao": "Outras preparações para higiene bucal ou dentária"
+  },
+  {
+   "ncm": "3403",
+   "cest": "06.017.00",
+   "descricao": "Preparações lubrificantes, exceto as contendo, como constituintes de base, 70% o"
+  },
+  {
+   "ncm": "38151210",
+   "cest": "01.001.00",
+   "descricao": "Catalisadores em colmeia cerâmica ou metálica para conversão catalítica de gases"
+  },
+  {
+   "ncm": "381600",
+   "cest": "10.002.00",
+   "descricao": "Argamassas (NCM 3816.00.1 e 3824.50.00)"
+  },
+  {
+   "ncm": "3816001",
+   "cest": "10.002.00",
+   "descricao": "Argamassas (NCM 3816.00.1 e 3824.50.00)"
+  },
+  {
+   "ncm": "38245000",
+   "cest": "10.002.00",
+   "descricao": "Argamassas (NCM 3816.00.1 e 3824.50.00)"
+  },
+  {
+   "ncm": "38260000",
+   "cest": "06.016.00",
+   "descricao": "Biodiesel e suas misturas, que não contenham ou que contenham menos de 70%, em p"
+  },
+  {
+   "ncm": "391000",
+   "cest": "10.004.00",
+   "descricao": "Silicones em formas primárias, para uso na construção"
+  },
+  {
+   "ncm": "3916",
+   "cest": "10.005.00",
+   "descricao": "Revestimentos de PVC e outros plásticos; forro, sancas e afins de PVC, para uso "
+  },
+  {
+   "ncm": "3917",
+   "cest": "01.002.00",
+   "descricao": "Tubos e seus acessórios (por exemplo: juntas, cotovelos, flanges, uniões), de pl"
+  },
+  {
+   "ncm": "3918",
+   "cest": "10.007.00",
+   "descricao": "Revestimento de pavimento de PVC e outros plásticos"
+  },
+  {
+   "ncm": "39181000",
+   "cest": "01.003.00",
+   "descricao": "Protetores de caçamba"
+  },
+  {
+   "ncm": "3919",
+   "cest": "10.008.00",
+   "descricao": "Chapas, folhas, tiras, fitas, películas e outras formas planas, autoadesivas, de"
+  },
+  {
+   "ncm": "391910",
+   "cest": "01.090.00",
+   "descricao": "Fitas, tiras, adesivos, autocolantes, de plástico, refletores, mesmo em rolos; p"
+  },
+  {
+   "ncm": "391990",
+   "cest": "01.090.00",
+   "descricao": "Fitas, tiras, adesivos, autocolantes, de plástico, refletores, mesmo em rolos; p"
+  },
+  {
+   "ncm": "3921",
+   "cest": "10.010.00",
+   "descricao": "Telha de plástico, mesmo reforçada com fibra de vidro"
+  },
+  {
+   "ncm": "3922",
+   "cest": "10.013.00",
+   "descricao": "Banheiras, boxes para chuveiros, pias, lavatórios, bidês, sanitários e seus asse"
+  },
+  {
+   "ncm": "39233000",
+   "cest": "01.004.00",
+   "descricao": "Reservatórios de óleo"
+  },
+  {
+   "ncm": "39233090",
+   "cest": "20.063.00",
+   "descricao": "Mamadeiras (NCM 3923.30.90, 3924.10.00, 3924.90.00, 4014.90.90)"
+  },
+  {
+   "ncm": "3924",
+   "cest": "10.014.00",
+   "descricao": "Artefatos de higiene/toucador de plástico, para uso na construção"
+  },
+  {
+   "ncm": "39241000",
+   "cest": "20.063.00",
+   "descricao": "Mamadeiras (NCM 3923.30.90, 3924.10.00, 3924.90.00, 4014.90.90)"
+  },
+  {
+   "ncm": "39249000",
+   "cest": "20.040.00",
+   "descricao": "Chupetas e bicos para mamadeiras e para chupetas, de silicone (NCM 3924.90.00, 3"
+  },
+  {
+   "ncm": "39251000",
+   "cest": "10.015.00",
+   "descricao": "Caixa d'água, inclusive sua tampa, de plástico, mesmo reforçadas com fibra de vi"
+  },
+  {
+   "ncm": "39252000",
+   "cest": "10.018.00",
+   "descricao": "Portas, janelas e seus caixilhos, alizares e soleiras"
+  },
+  {
+   "ncm": "39253000",
+   "cest": "10.019.00",
+   "descricao": "Postigos, estores (incluídas as venezianas) e artefatos semelhantes e suas parte"
+  },
+  {
+   "ncm": "392590",
+   "cest": "10.016.00",
+   "descricao": "Outras telhas, cumeeira e caixa d'água, inclusive sua tampa, de plástico, mesmo "
+  },
+  {
+   "ncm": "39263000",
+   "cest": "01.005.00",
+   "descricao": "Frisos, decalques, molduras e acabamentos"
+  },
+  {
+   "ncm": "392690",
+   "cest": "10.020.00",
+   "descricao": "Outras obras de plástico, para uso na construção"
+  },
+  {
+   "ncm": "39269040",
+   "cest": "20.040.00",
+   "descricao": "Chupetas e bicos para mamadeiras e para chupetas, de silicone (NCM 3924.90.00, 3"
+  },
+  {
+   "ncm": "39269090",
+   "cest": "13.016.00",
+   "descricao": "Contraceptivos (dispositivos intra-uterinos - DIU) - neutra (NCM 3926.90.90 e 90"
+  },
+  {
+   "ncm": "40081100",
+   "cest": "01.103.00",
+   "descricao": "Perfilados de borracha vulcanizada não endurecida"
+  },
+  {
+   "ncm": "4009",
+   "cest": "01.087.00",
+   "descricao": "Tubos de borracha vulcanizada não endurecida, mesmo providos de seus acessórios"
+  },
+  {
+   "ncm": "40103",
+   "cest": "01.006.00",
+   "descricao": "Correias de transmissão de borracha vulcanizada, de matérias têxteis, mesmo impr"
+  },
+  {
+   "ncm": "4011",
+   "cest": "16.002.00",
+   "descricao": "Pneus novos, dos tipos utilizados em caminhões (inclusive para os fora-de-estrad"
+  },
+  {
+   "ncm": "40111000",
+   "cest": "16.001.00",
+   "descricao": "Pneus novos, dos tipos utilizados em automóveis de passageiros (incluídos os veí"
+  },
+  {
+   "ncm": "40114000",
+   "cest": "16.003.00",
+   "descricao": "Pneus novos para motocicletas"
+  },
+  {
+   "ncm": "401290",
+   "cest": "16.007.00",
+   "descricao": "Protetores de borracha, exceto os itens classificados no CEST 16.007.01"
+  },
+  {
+   "ncm": "4013",
+   "cest": "16.008.00",
+   "descricao": "Câmaras de ar de borracha, exceto os itens classificados no CEST 16.009.00"
+  },
+  {
+   "ncm": "40141000",
+   "cest": "13.013.00",
+   "descricao": "Preservativo - neutra"
+  },
+  {
+   "ncm": "40149090",
+   "cest": "20.039.00",
+   "descricao": "Chupetas e bicos para mamadeiras e para chupetas, de borracha"
+  },
+  {
+   "ncm": "40151200",
+   "cest": "13.012.00",
+   "descricao": "Luvas cirúrgicas e luvas de procedimento - neutra (NCM 4015.12.00 e 4015.19.00)"
+  },
+  {
+   "ncm": "40151900",
+   "cest": "13.012.00",
+   "descricao": "Luvas cirúrgicas e luvas de procedimento - neutra (NCM 4015.12.00 e 4015.19.00)"
+  },
+  {
+   "ncm": "40161010",
+   "cest": "01.008.00",
+   "descricao": "Partes de veículos automóveis, tratores e máquinas autopropulsadas"
+  },
+  {
+   "ncm": "40169300",
+   "cest": "01.007.00",
+   "descricao": "Juntas, gaxetas e outros elementos com função semelhante de vedação (NCM 4016.93"
+  },
+  {
+   "ncm": "40169990",
+   "cest": "01.009.00",
+   "descricao": "Tapetes, revestimentos, mesmo confeccionados, batentes, buchas e coxins (NCM 401"
+  },
+  {
+   "ncm": "45049000",
+   "cest": "01.088.00",
+   "descricao": "Juntas de vedação de cortiça natural e de amianto"
+  },
+  {
+   "ncm": "4814",
+   "cest": "10.021.00",
+   "descricao": "Papel de parede e revestimentos de parede semelhantes; papel para vitrais"
+  },
+  {
+   "ncm": "48234000",
+   "cest": "01.089.00",
+   "descricao": "Papel-diagrama para tacógrafo, em disco"
+  },
+  {
+   "ncm": "482390",
+   "cest": "01.007.00",
+   "descricao": "Juntas, gaxetas e outros elementos com função semelhante de vedação (NCM 4016.93"
+  },
+  {
+   "ncm": "56012190",
+   "cest": "20.051.00",
+   "descricao": "Hastes flexíveis (uso não medicinal)"
+  },
+  {
+   "ncm": "56012219",
+   "cest": "01.104.00",
+   "descricao": "Artefatos de pasta de fibra de uso automotivo"
+  },
+  {
+   "ncm": "57032900",
+   "cest": "01.105.00",
+   "descricao": "Tapetes/carpetes - náilon"
+  },
+  {
+   "ncm": "57033900",
+   "cest": "01.106.00",
+   "descricao": "Tapetes de matérias têxteis sintéticas"
+  },
+  {
+   "ncm": "57050000",
+   "cest": "01.009.00",
+   "descricao": "Tapetes, revestimentos, mesmo confeccionados, batentes, buchas e coxins (NCM 401"
+  },
+  {
+   "ncm": "59039000",
+   "cest": "01.010.00",
+   "descricao": "Tecidos impregnados, revestidos, recobertos ou estratificados, com plástico"
+  },
+  {
+   "ncm": "59090000",
+   "cest": "01.011.00",
+   "descricao": "Mangueiras e tubos semelhantes, de matérias têxteis, mesmo com reforço ou acessó"
+  },
+  {
+   "ncm": "59100000",
+   "cest": "01.006.00",
+   "descricao": "Correias de transmissão de borracha vulcanizada, de matérias têxteis, mesmo impr"
+  },
+  {
+   "ncm": "59119000",
+   "cest": "01.107.00",
+   "descricao": "Forração interior capacete"
+  },
+  {
+   "ncm": "63061",
+   "cest": "01.012.00",
+   "descricao": "Encerados e toldos"
+  },
+  {
+   "ncm": "65061000",
+   "cest": "01.013.00",
+   "descricao": "Capacetes e artefatos de uso semelhante, de proteção, para uso em motocicletas, "
+  },
+  {
+   "ncm": "68101900",
+   "cest": "10.022.00",
+   "descricao": "Telhas de concreto"
+  },
+  {
+   "ncm": "6811",
+   "cest": "10.023.00",
+   "descricao": "Telha, cumeeira e caixa d'água, inclusive sua tampa, de fibrocimento, cimento-ce"
+  },
+  {
+   "ncm": "68129910",
+   "cest": "01.088.00",
+   "descricao": "Juntas de vedação de cortiça natural e de amianto"
+  },
+  {
+   "ncm": "6813",
+   "cest": "01.014.00",
+   "descricao": "Guarnições de fricção (por exemplo: placas, rolos, tiras, segmentos, discos, ané"
+  },
+  {
+   "ncm": "69010000",
+   "cest": "10.025.00",
+   "descricao": "Tijolos, placas (lajes), ladrilhos e outras peças cerâmicas de farinhas silicios"
+  },
+  {
+   "ncm": "6902",
+   "cest": "10.026.00",
+   "descricao": "Tijolos, placas (lajes), ladrilhos e peças cerâmicas semelhantes, para uso na co"
+  },
+  {
+   "ncm": "69039099",
+   "cest": "01.108.00",
+   "descricao": "Outros para-brisas"
+  },
+  {
+   "ncm": "6904",
+   "cest": "10.027.00",
+   "descricao": "Tijolos para construção, tijoleiras, tapa-vigas e produtos semelhantes, de cerâm"
+  },
+  {
+   "ncm": "6905",
+   "cest": "10.028.00",
+   "descricao": "Telhas, elementos de chaminés, condutores de fumaça, ornamentos arquitetônicos, "
+  },
+  {
+   "ncm": "69060000",
+   "cest": "10.029.00",
+   "descricao": "Tubos, calhas ou algerozes e acessórios para canalizações, de cerâmica"
+  },
+  {
+   "ncm": "6907",
+   "cest": "10.030.00",
+   "descricao": "Ladrilhos e placas de cerâmica, exclusivamente para pavimentação ou revestimento"
+  },
+  {
+   "ncm": "6910",
+   "cest": "10.031.00",
+   "descricao": "Pias, lavatórios, colunas para lavatórios, banheiras, bidês, sanitários, caixas "
+  },
+  {
+   "ncm": "69120000",
+   "cest": "10.032.00",
+   "descricao": "Artefatos de higiene/toucador de cerâmica"
+  },
+  {
+   "ncm": "7003",
+   "cest": "10.033.00",
+   "descricao": "Vidro vazado ou laminado, em chapas, folhas ou perfis, mesmo com camada absorven"
+  },
+  {
+   "ncm": "7004",
+   "cest": "10.034.00",
+   "descricao": "Vidro estirado ou soprado, em folhas, mesmo com camada absorvente, refletora ou "
+  },
+  {
+   "ncm": "7005",
+   "cest": "10.035.00",
+   "descricao": "Vidro flotado e vidro desbastado ou polido em uma ou em ambas as faces, em chapa"
+  },
+  {
+   "ncm": "70071100",
+   "cest": "01.015.00",
+   "descricao": "Vidros de dimensões e formatos que permitam aplicação automotiva (NCM 7007.11.00"
+  },
+  {
+   "ncm": "70071900",
+   "cest": "10.036.00",
+   "descricao": "Vidros temperados"
+  },
+  {
+   "ncm": "70072100",
+   "cest": "01.015.00",
+   "descricao": "Vidros de dimensões e formatos que permitam aplicação automotiva (NCM 7007.11.00"
+  },
+  {
+   "ncm": "70072900",
+   "cest": "01.109.00",
+   "descricao": "Moldura com espelho"
+  },
+  {
+   "ncm": "7008",
+   "cest": "10.038.00",
+   "descricao": "Vidros isolantes de paredes múltiplas"
+  },
+  {
+   "ncm": "7009",
+   "cest": "10.080.00",
+   "descricao": "Espelhos de vidro, mesmo emoldurados, exceto os de uso automotivo"
+  },
+  {
+   "ncm": "70091000",
+   "cest": "01.016.00",
+   "descricao": "Espelhos retrovisores"
+  },
+  {
+   "ncm": "7013",
+   "cest": "20.064.00",
+   "descricao": "Aparelhos e lâminas de barbear (NCM 7013, 8212.10.20, 8212.20.10)"
+  },
+  {
+   "ncm": "70140000",
+   "cest": "01.017.00",
+   "descricao": "Lentes de faróis, lanternas e outros utensílios"
+  },
+  {
+   "ncm": "7016",
+   "cest": "10.039.00",
+   "descricao": "Blocos, placas, tijolos, ladrilhos, telhas e outros artefatos, de vidro prensado"
+  },
+  {
+   "ncm": "7213",
+   "cest": "10.043.00",
+   "descricao": "Outros vergalhões"
+  },
+  {
+   "ncm": "72142000",
+   "cest": "10.040.00",
+   "descricao": "Barras próprias para (construção) — descrição cortada na borda do trecho"
+  },
+  {
+   "ncm": "72171090",
+   "cest": "10.044.00",
+   "descricao": "Fios de ferro ou aço não ligados, não revestidos, mesmo polidos; cordas, cabos, "
+  },
+  {
+   "ncm": "72172010",
+   "cest": "10.045.00",
+   "descricao": "Outros fios de ferro ou aço, não ligados, galvanizados com um teor de carbono su"
+  },
+  {
+   "ncm": "72172090",
+   "cest": "10.045.01",
+   "descricao": "Outros fios de ferro ou aço, não ligados, galvanizados"
+  },
+  {
+   "ncm": "7307",
+   "cest": "10.046.00",
+   "descricao": "Acessórios para tubos (inclusive uniões, cotovelos, luvas ou mangas), de ferro f"
+  },
+  {
+   "ncm": "73083000",
+   "cest": "10.047.00",
+   "descricao": "Portas e janelas, e seus caixilhos, alizares e soleiras de ferro fundido, ferro "
+  },
+  {
+   "ncm": "73084000",
+   "cest": "10.048.00",
+   "descricao": "Material para andaimes, para armações (cofragens) e para escoramentos, (inclusiv"
+  },
+  {
+   "ncm": "73089010",
+   "cest": "10.041.00",
+   "descricao": "Outras barras próprias para construções, exceto vergalhões"
+  },
+  {
+   "ncm": "73089090",
+   "cest": "10.050.00",
+   "descricao": "Telhas metálicas"
+  },
+  {
+   "ncm": "7310",
+   "cest": "10.051.00",
+   "descricao": "Caixas diversas (tais como caixa de correio, de entrada de água, de energia, de "
+  },
+  {
+   "ncm": "73110000",
+   "cest": "01.018.00",
+   "descricao": "Cilindro de aço para GNV (gás natural veicular)"
+  },
+  {
+   "ncm": "73130000",
+   "cest": "10.052.00",
+   "descricao": "Arame farpado, de ferro ou aço, arames ou tiras, retorcidos, mesmo farpados, de "
+  },
+  {
+   "ncm": "7314",
+   "cest": "10.053.00",
+   "descricao": "Telas metálicas, grades e redes, de fios de ferro ou aço"
+  },
+  {
+   "ncm": "73145000",
+   "cest": "01.110.00",
+   "descricao": "Corrente de transmissão"
+  },
+  {
+   "ncm": "73151100",
+   "cest": "01.111.00",
+   "descricao": "Corrente transmissão"
+  },
+  {
+   "ncm": "73151210",
+   "cest": "01.112.00",
+   "descricao": "Outras correntes de transmissão"
+  },
+  {
+   "ncm": "73151290",
+   "cest": "10.055.00",
+   "descricao": "Outras correntes de elos articulados, de ferro fundido, ferro ou aço"
+  },
+  {
+   "ncm": "73158200",
+   "cest": "10.056.00",
+   "descricao": "Correntes de elos soldados, de ferro fundido, de ferro ou aço"
+  },
+  {
+   "ncm": "731700",
+   "cest": "10.057.00",
+   "descricao": "Tachas, pregos, percevejos, escápulas, grampos ondulados ou biselados e artefato"
+  },
+  {
+   "ncm": "7318",
+   "cest": "10.058.00",
+   "descricao": "Parafusos, pinos ou pernos, roscados, porcas, tira-fundos, ganchos roscados, reb"
+  },
+  {
+   "ncm": "7320",
+   "cest": "01.020.00",
+   "descricao": "Molas e folhas de molas, de ferro ou aço"
+  },
+  {
+   "ncm": "73229010",
+   "cest": "01.128.00",
+   "descricao": "Geradores de ar quente a combustível líquido, com capacidade superior ou igual a"
+  },
+  {
+   "ncm": "7323",
+   "cest": "10.059.00",
+   "descricao": "Palha de ferro ou aço, exceto as de uso doméstico classificadas na posição NCM 7"
+  },
+  {
+   "ncm": "73231000",
+   "cest": "10.059.00",
+   "descricao": "Palha de ferro ou aço, exceto as de uso doméstico classificadas na posição NCM 7"
+  },
+  {
+   "ncm": "7324",
+   "cest": "10.060.00",
+   "descricao": "Artefatos de higiene ou de toucador, e suas partes, de ferro fundido, ferro ou a"
+  },
+  {
+   "ncm": "7325",
+   "cest": "01.021.00",
+   "descricao": "Obras moldadas, de ferro fundido, ferro ou aço, exceto as do código 7325.91.00"
+  },
+  {
+   "ncm": "73259100",
+   "cest": "01.021.00",
+   "descricao": "Obras moldadas, de ferro fundido, ferro ou aço, exceto as do código 7325.91.00"
+  },
+  {
+   "ncm": "7326",
+   "cest": "10.062.00",
+   "descricao": "Abraçadeiras"
+  },
+  {
+   "ncm": "7407",
+   "cest": "10.063.00",
+   "descricao": "Barras de cobre"
+  },
+  {
+   "ncm": "74111010",
+   "cest": "10.064.00",
+   "descricao": "Tubos de cobre e suas ligas, para instalações de água quente e gás, para uso na "
+  },
+  {
+   "ncm": "7412",
+   "cest": "10.065.00",
+   "descricao": "Acessórios para tubos (por exemplo, uniões, cotovelos, luvas ou mangas) de cobre"
+  },
+  {
+   "ncm": "74130000",
+   "cest": "12.006.00",
+   "descricao": "Cabos, tranças e semelhantes, de cobre, não isolados para usos elétricos, exceto"
+  },
+  {
+   "ncm": "7415",
+   "cest": "10.066.00",
+   "descricao": "Tachas, pregos, percevejos, escápulas e artefatos semelhantes, de cobre, ou de f"
+  },
+  {
+   "ncm": "74182000",
+   "cest": "10.067.00",
+   "descricao": "Artefatos de higiene/toucador de cobre, para uso na construção"
+  },
+  {
+   "ncm": "76071990",
+   "cest": "10.068.00",
+   "descricao": "Manta de subcobertura aluminizada"
+  },
+  {
+   "ncm": "7608",
+   "cest": "10.069.00",
+   "descricao": "Tubos de alumínio e suas ligas, para refrigeração e ar condicionado, para uso na"
+  },
+  {
+   "ncm": "76090000",
+   "cest": "10.070.00",
+   "descricao": "Acessórios para tubos (por exemplo, uniões, cotovelos, luvas ou mangas), de alum"
+  },
+  {
+   "ncm": "7610",
+   "cest": "10.071.00",
+   "descricao": "Construções e suas partes (por exemplo, pontes e elementos de pontes, torres, pó"
+  },
+  {
+   "ncm": "7614",
+   "cest": "12.007.00",
+   "descricao": "Fios e cabos (mesmo com peças de conexão, inclusive fios e cabos elétricos, para"
+  },
+  {
+   "ncm": "76152000",
+   "cest": "10.072.00",
+   "descricao": "Artefatos de higiene/toucador de alumínio, para uso na construção"
+  },
+  {
+   "ncm": "7616",
+   "cest": "10.073.00",
+   "descricao": "Outras obras de alumínio, próprias para construções, incluídas as persianas"
+  },
+  {
+   "ncm": "780600",
+   "cest": "01.022.00",
+   "descricao": "Peso de chumbo para balanceamento de roda"
+  },
+  {
+   "ncm": "80070090",
+   "cest": "01.023.00",
+   "descricao": "Peso para balanceamento de roda e outros utensílios de estanho"
+  },
+  {
+   "ncm": "82121020",
+   "cest": "20.064.00",
+   "descricao": "Aparelhos e lâminas de barbear (NCM 7013, 8212.10.20, 8212.20.10)"
+  },
+  {
+   "ncm": "82122010",
+   "cest": "20.064.00",
+   "descricao": "Aparelhos e lâminas de barbear (NCM 7013, 8212.10.20, 8212.20.10)"
+  },
+  {
+   "ncm": "8301",
+   "cest": "10.075.00",
+   "descricao": "Fechaduras e ferrolhos (de chave, de segredo ou elétricos), de metais comuns, in"
+  },
+  {
+   "ncm": "830120",
+   "cest": "01.024.00",
+   "descricao": "Fechaduras e partes de fechaduras"
+  },
+  {
+   "ncm": "830170",
+   "cest": "01.025.00",
+   "descricao": "Chaves apresentadas isoladamente"
+  },
+  {
+   "ncm": "83021000",
+   "cest": "01.026.00",
+   "descricao": "Dobradiças, guarnições, ferragens e artigos semelhantes de metais comuns"
+  },
+  {
+   "ncm": "83024100",
+   "cest": "10.074.00",
+   "descricao": "Outras guarnições, ferragens e artigos semelhantes de metais comuns, para constr"
+  },
+  {
+   "ncm": "8307",
+   "cest": "10.077.00",
+   "descricao": "Tubos flexíveis de metais comuns, mesmo com acessórios, para uso na construção"
+  },
+  {
+   "ncm": "831000",
+   "cest": "01.027.00",
+   "descricao": "Triângulo de segurança"
+  },
+  {
+   "ncm": "8311",
+   "cest": "10.078.00",
+   "descricao": "Fios, varetas, tubos, chapas, eletrodos e artefatos semelhantes, de metais comun"
+  },
+  {
+   "ncm": "84073",
+   "cest": "01.028.00",
+   "descricao": "Motores de pistão alternativo dos tipos utilizados para propulsão de veículos do"
+  },
+  {
+   "ncm": "840820",
+   "cest": "01.029.00",
+   "descricao": "Motores dos tipos utilizados para propulsão de veículos automotores"
+  },
+  {
+   "ncm": "84099",
+   "cest": "01.030.00",
+   "descricao": "Partes reconhecíveis como exclusiva ou principalmente destinadas aos motores das"
+  },
+  {
+   "ncm": "84122",
+   "cest": "01.031.00",
+   "descricao": "Motores hidráulicos"
+  },
+  {
+   "ncm": "84123110",
+   "cest": "01.091.00",
+   "descricao": "Cilindros pneumáticos"
+  },
+  {
+   "ncm": "84131900",
+   "cest": "01.092.00",
+   "descricao": "Bomba elétrica de lavador de para-brisa"
+  },
+  {
+   "ncm": "841330",
+   "cest": "01.032.00",
+   "descricao": "Bombas para combustíveis, lubrificantes ou líquidos de arrefecimento, próprias p"
+  },
+  {
+   "ncm": "84135090",
+   "cest": "01.092.00",
+   "descricao": "Bomba elétrica de lavador de para-brisa"
+  },
+  {
+   "ncm": "84136019",
+   "cest": "01.093.00",
+   "descricao": "Bomba de assistência de direção hidráulica"
+  },
+  {
+   "ncm": "84137010",
+   "cest": "01.093.00",
+   "descricao": "Bomba de assistência de direção hidráulica"
+  },
+  {
+   "ncm": "84138100",
+   "cest": "01.092.00",
+   "descricao": "Bomba elétrica de lavador de para-brisa"
+  },
+  {
+   "ncm": "84139190",
+   "cest": "01.035.00",
+   "descricao": "Partes das bombas, compressores e turbocompressores dos CEST 01.032.00, 01.033.0"
+  },
+  {
+   "ncm": "84141000",
+   "cest": "01.033.00",
+   "descricao": "Bombas de vácuo"
+  },
+  {
+   "ncm": "84145910",
+   "cest": "01.094.00",
+   "descricao": "Motoventiladores"
+  },
+  {
+   "ncm": "84145990",
+   "cest": "01.094.00",
+   "descricao": "Motoventiladores"
+  },
+  {
+   "ncm": "84148010",
+   "cest": "01.034.00",
+   "descricao": "Compressores e turbocompressores de ar"
+  },
+  {
+   "ncm": "841520",
+   "cest": "01.036.00",
+   "descricao": "Máquinas e aparelhos de ar condicionado"
+  },
+  {
+   "ncm": "84189900",
+   "cest": "01.113.00",
+   "descricao": "Condensador tubular metálico"
+  },
+  {
+   "ncm": "841950",
+   "cest": "01.114.00",
+   "descricao": "Trocadores de calor"
+  },
+  {
+   "ncm": "84212300",
+   "cest": "01.037.00",
+   "descricao": "Aparelhos para filtrar óleos minerais nos motores de ignição por centelha ou por"
+  },
+  {
+   "ncm": "84212990",
+   "cest": "01.038.00",
+   "descricao": "Filtros a vácuo"
+  },
+  {
+   "ncm": "84213100",
+   "cest": "01.041.00",
+   "descricao": "Filtros de entrada de ar para motores de ignição por centelha ou por compressão"
+  },
+  {
+   "ncm": "84213200",
+   "cest": "01.042.00",
+   "descricao": "Depuradores por conversão catalítica de gases de escape"
+  },
+  {
+   "ncm": "84213990",
+   "cest": "01.095.00",
+   "descricao": "Filtros de pólen do ar-condicionado"
+  },
+  {
+   "ncm": "84219",
+   "cest": "01.039.00",
+   "descricao": "Partes dos aparelhos para filtrar ou depurar líquidos ou gases"
+  },
+  {
+   "ncm": "84241000",
+   "cest": "01.040.00",
+   "descricao": "Extintores, mesmo carregados"
+  },
+  {
+   "ncm": "84249090",
+   "cest": "01.115.00",
+   "descricao": "Partes de aparelhos mecânicos de pulverizar ou dispersar"
+  },
+  {
+   "ncm": "84254200",
+   "cest": "01.043.00",
+   "descricao": "Macacos"
+  },
+  {
+   "ncm": "84254910",
+   "cest": "01.116.00",
+   "descricao": "Macacos manuais para veículos"
+  },
+  {
+   "ncm": "84311010",
+   "cest": "01.044.00",
+   "descricao": "Partes para macacos do CEST 01.043.00"
+  },
+  {
+   "ncm": "84314100",
+   "cest": "01.117.00",
+   "descricao": "Caçambas, pás, ganchos e tenazes para máquinas rodoviárias"
+  },
+  {
+   "ncm": "843149",
+   "cest": "01.045.00",
+   "descricao": "Partes reconhecíveis como exclusiva ou principalmente destinadas às máquinas agr"
+  },
+  {
+   "ncm": "84339090",
+   "cest": "01.045.01",
+   "descricao": "Partes reconhecíveis como exclusiva ou principalmente destinadas às máquinas agr"
+  },
+  {
+   "ncm": "8481",
+   "cest": "10.079.00",
+   "descricao": "Torneiras, válvulas (incluídas as redutoras de pressão e as termostáticas) e dis"
+  },
+  {
+   "ncm": "84811000",
+   "cest": "01.046.00",
+   "descricao": "Válvulas redutoras de pressão"
+  },
+  {
+   "ncm": "84812",
+   "cest": "01.047.00",
+   "descricao": "Válvulas para transmissão óleo-hidráulicas ou pneumáticas"
+  },
+  {
+   "ncm": "84818092",
+   "cest": "01.048.00",
+   "descricao": "Válvulas solenoides"
+  },
+  {
+   "ncm": "8482",
+   "cest": "01.049.00",
+   "descricao": "Rolamentos"
+  },
+  {
+   "ncm": "8483",
+   "cest": "01.050.00",
+   "descricao": "Árvores de transmissão (incluídas as árvores de \"cames\" e virabrequins) e manive"
+  },
+  {
+   "ncm": "8484",
+   "cest": "01.051.00",
+   "descricao": "Juntas metaloplásticas; jogos ou sortidos de juntas de composições diferentes, a"
+  },
+  {
+   "ncm": "85011019",
+   "cest": "01.096.00",
+   "descricao": "\"Máquina\" de vidro elétrico de porta"
+  },
+  {
+   "ncm": "85013110",
+   "cest": "01.097.00",
+   "descricao": "Motor de limpador de para-brisa"
+  },
+  {
+   "ncm": "85016100",
+   "cest": "01.118.00",
+   "descricao": "Geradores de corrente alternada de potência não superior a 75 kva"
+  },
+  {
+   "ncm": "8504",
+   "cest": "12.001.00",
+   "descricao": "Transformadores, bobinas de reatância e de auto indução, inclusive os transforma"
+  },
+  {
+   "ncm": "85041000",
+   "cest": "09.003.00",
+   "descricao": "Reatores para lâmpadas ou tubos de descargas"
+  },
+  {
+   "ncm": "85043300",
+   "cest": "12.001.00",
+   "descricao": "Transformadores, bobinas de reatância e de auto indução, inclusive os transforma"
+  },
+  {
+   "ncm": "85043400",
+   "cest": "12.001.00",
+   "descricao": "Transformadores, bobinas de reatância e de auto indução, inclusive os transforma"
+  },
+  {
+   "ncm": "85044010",
+   "cest": "12.001.00",
+   "descricao": "Transformadores, bobinas de reatância e de auto indução, inclusive os transforma"
+  },
+  {
+   "ncm": "85044040",
+   "cest": "12.001.00",
+   "descricao": "Transformadores, bobinas de reatância e de auto indução, inclusive os transforma"
+  },
+  {
+   "ncm": "85045000",
+   "cest": "01.098.00",
+   "descricao": "Bobinas de reatância e de autoindução"
+  },
+  {
+   "ncm": "850520",
+   "cest": "01.052.00",
+   "descricao": "Acoplamentos, embreagens, variadores de velocidade e freios, eletromagnéticos"
+  },
+  {
+   "ncm": "850710",
+   "cest": "01.053.00",
+   "descricao": "Acumuladores elétricos de chumbo, do tipo utilizado para o arranque dos motores "
+  },
+  {
+   "ncm": "85071010",
+   "cest": "01.053.01",
+   "descricao": "Acumuladores elétricos de chumbo, do tipo utilizado para o arranque dos motores "
+  },
+  {
+   "ncm": "850720",
+   "cest": "01.099.00",
+   "descricao": "Baterias de chumbo e de níquel-cádmio"
+  },
+  {
+   "ncm": "850730",
+   "cest": "01.099.00",
+   "descricao": "Baterias de chumbo e de níquel-cádmio"
+  },
+  {
+   "ncm": "8511",
+   "cest": "01.054.00",
+   "descricao": "Aparelhos e dispositivos elétricos de ignição ou de arranque para motores de ign"
+  },
+  {
+   "ncm": "851220",
+   "cest": "01.055.00",
+   "descricao": "Aparelhos elétricos de iluminação ou de sinalização (exceto os da posição 8539),"
+  },
+  {
+   "ncm": "85123000",
+   "cest": "01.100.00",
+   "descricao": "Aparelhos de sinalização acústica (buzina)"
+  },
+  {
+   "ncm": "851240",
+   "cest": "01.055.00",
+   "descricao": "Aparelhos elétricos de iluminação ou de sinalização (exceto os da posição 8539),"
+  },
+  {
+   "ncm": "85129000",
+   "cest": "01.055.00",
+   "descricao": "Aparelhos elétricos de iluminação ou de sinalização (exceto os da posição 8539),"
+  },
+  {
+   "ncm": "8516",
+   "cest": "12.002.00",
+   "descricao": "Aquecedores elétricos de água, incluídos os de imersão, chuveiros ou duchas elét"
+  },
+  {
+   "ncm": "85166000",
+   "cest": "12.002.00",
+   "descricao": "Aquecedores elétricos de água, incluídos os de imersão, chuveiros ou duchas elét"
+  },
+  {
+   "ncm": "85171300",
+   "cest": "21.053.00",
+   "descricao": "Telefones inteligentes (\"smartphones\") e para redes celulares, excetos por satél"
+  },
+  {
+   "ncm": "851714",
+   "cest": "21.053.00",
+   "descricao": "Telefones inteligentes (\"smartphones\") e para redes celulares, excetos por satél"
+  },
+  {
+   "ncm": "85171410",
+   "cest": "01.056.00",
+   "descricao": "Telefones móveis do tipo dos utilizados em veículos automóveis"
+  },
+  {
+   "ncm": "85171431",
+   "cest": "21.053.01",
+   "descricao": "Telefones inteligentes (\"smartphones\") e para redes celulares portáteis, excetos"
+  },
+  {
+   "ncm": "8518",
+   "cest": "01.057.00",
+   "descricao": "Alto-falantes, amplificadores elétricos de audiofrequência e partes"
+  },
+  {
+   "ncm": "85185000",
+   "cest": "01.058.00",
+   "descricao": "Aparelhos elétricos de amplificação de som para veículos automotores"
+  },
+  {
+   "ncm": "851981",
+   "cest": "01.059.00",
+   "descricao": "Aparelhos de reprodução de som"
+  },
+  {
+   "ncm": "85219090",
+   "cest": "01.062.01",
+   "descricao": "Outros aparelhos videofônicos de gravação ou de reprodução, mesmo incorporando u"
+  },
+  {
+   "ncm": "852352",
+   "cest": "21.063.00",
+   "descricao": "Cartões inteligentes (\"smartcards\"), exceto o item classificado no CEST 21.064.0"
+  },
+  {
+   "ncm": "852550",
+   "cest": "01.060.00",
+   "descricao": "Aparelhos transmissores (emissores) de radiotelefonia ou radiotelegrafia (rádio "
+  },
+  {
+   "ncm": "85255010",
+   "cest": "01.060.00",
+   "descricao": "Aparelhos transmissores (emissores) de radiotelefonia ou radiotelegrafia (rádio "
+  },
+  {
+   "ncm": "85256010",
+   "cest": "01.060.00",
+   "descricao": "Aparelhos transmissores (emissores) de radiotelefonia ou radiotelegrafia (rádio "
+  },
+  {
+   "ncm": "85272100",
+   "cest": "01.061.00",
+   "descricao": "Aparelhos receptores de radiodifusão que só funcionem com fonte externa de energ"
+  },
+  {
+   "ncm": "85272900",
+   "cest": "01.062.00",
+   "descricao": "Outros aparelhos receptores de radiodifusão que só funcionem com fonte externa d"
+  },
+  {
+   "ncm": "852910",
+   "cest": "01.063.00",
+   "descricao": "Antenas"
+  },
+  {
+   "ncm": "85311090",
+   "cest": "01.119.00",
+   "descricao": "Aparelhos elétricos para alarme de uso automotivo"
+  },
+  {
+   "ncm": "853400",
+   "cest": "01.064.00",
+   "descricao": "Circuitos impressos"
+  },
+  {
+   "ncm": "8535",
+   "cest": "12.003.00",
+   "descricao": "Aparelhos para interrupção, seccionamento, proteção, derivação, ligação ou conex"
+  },
+  {
+   "ncm": "853530",
+   "cest": "01.065.00",
+   "descricao": "Interruptores e seccionadores e comutadores (NCM 8535.30 e 8536.50)"
+  },
+  {
+   "ncm": "8536",
+   "cest": "12.004.00",
+   "descricao": "Aparelhos para interrupção, seccionamento, proteção, derivação, ligação ou conex"
+  },
+  {
+   "ncm": "85361000",
+   "cest": "01.066.00",
+   "descricao": "Fusíveis e corta-circuitos de fusíveis"
+  },
+  {
+   "ncm": "85362000",
+   "cest": "01.067.00",
+   "descricao": "Disjuntores"
+  },
+  {
+   "ncm": "85364",
+   "cest": "01.068.00",
+   "descricao": "Relés"
+  },
+  {
+   "ncm": "853650",
+   "cest": "01.065.00",
+   "descricao": "Interruptores e seccionadores e comutadores (NCM 8535.30 e 8536.50)"
+  },
+  {
+   "ncm": "8538",
+   "cest": "01.069.00",
+   "descricao": "Partes reconhecíveis como exclusivas ou principalmente destinados aos aparelhos "
+  },
+  {
+   "ncm": "8539",
+   "cest": "09.001.00",
+   "descricao": "Lâmpadas elétricas"
+  },
+  {
+   "ncm": "853910",
+   "cest": "01.070.00",
+   "descricao": "Faróis e projetores, em unidades seladas"
+  },
+  {
+   "ncm": "85392",
+   "cest": "01.071.00",
+   "descricao": "Lâmpadas e tubos de incandescência, exceto de raios ultravioleta ou infravermelh"
+  },
+  {
+   "ncm": "85395200",
+   "cest": "09.005.00",
+   "descricao": "Lâmpadas de LED (Diodos Emissores de Luz)"
+  },
+  {
+   "ncm": "8540",
+   "cest": "09.002.20",
+   "descricao": "Lâmpadas eletrônicas"
+  },
+  {
+   "ncm": "8544",
+   "cest": "12.007.00",
+   "descricao": "Fios, cabos (incluídos os cabos coaxiais) e outros condutores, isolados ou não, "
+  },
+  {
+   "ncm": "85442000",
+   "cest": "01.072.00",
+   "descricao": "Cabos coaxiais e outros condutores elétricos coaxiais"
+  },
+  {
+   "ncm": "85443000",
+   "cest": "01.073.00",
+   "descricao": "Jogos de fios para velas de ignição e outros jogos de fios"
+  },
+  {
+   "ncm": "8546",
+   "cest": "12.008.00",
+   "descricao": "Isoladores de qualquer matéria, para usos elétricos"
+  },
+  {
+   "ncm": "8547",
+   "cest": "12.009.00",
+   "descricao": "Peças isolantes inteiramente de matérias isolantes, ou com simples peças metálic"
+  },
+  {
+   "ncm": "87021000",
+   "cest": "25.001.00",
+   "descricao": "Veículos automóveis para transporte de 10 pessoas ou mais, incluindo o motorista"
+  },
+  {
+   "ncm": "87022000",
+   "cest": "25.022.00",
+   "descricao": "Veículos automóveis para transporte de 10 pessoas ou mais, incluindo o motorista"
+  },
+  {
+   "ncm": "87023000",
+   "cest": "25.023.00",
+   "descricao": "Veículos automóveis para transporte de 10 pessoas ou mais, incluindo o motorista"
+  },
+  {
+   "ncm": "87024090",
+   "cest": "25.002.00",
+   "descricao": "Veículos automóveis para transporte de 10 pessoas ou mais, incluindo o motorista"
+  },
+  {
+   "ncm": "87029000",
+   "cest": "25.024.00",
+   "descricao": "Outros veículos automóveis para transporte de 10 pessoas ou mais, incluindo o mo"
+  },
+  {
+   "ncm": "87032100",
+   "cest": "25.003.00",
+   "descricao": "Automóveis unicamente com motor de pistão alternativo de ignição por centelha (f"
+  },
+  {
+   "ncm": "87032210",
+   "cest": "25.004.00",
+   "descricao": "Automóveis unicamente com motor de pistão alternativo de ignição por centelha (f"
+  },
+  {
+   "ncm": "87032290",
+   "cest": "25.005.00",
+   "descricao": "Outros automóveis unicamente com motor de pistão alternativo de ignição por cent"
+  },
+  {
+   "ncm": "87032310",
+   "cest": "25.006.00",
+   "descricao": "Automóveis unicamente com motor de pistão alternativo de ignição por centelha (f"
+  },
+  {
+   "ncm": "87032390",
+   "cest": "25.007.00",
+   "descricao": "Outros automóveis unicamente com motor de pistão alternativo de ignição por cent"
+  },
+  {
+   "ncm": "87032410",
+   "cest": "25.008.00",
+   "descricao": "Automóveis unicamente com motor de pistão alternativo de ignição por centelha (f"
+  },
+  {
+   "ncm": "87032490",
+   "cest": "25.009.00",
+   "descricao": "Outros automóveis unicamente com motor de pistão alternativo de ignição por cent"
+  },
+  {
+   "ncm": "87033210",
+   "cest": "25.010.00",
+   "descricao": "Automóveis unicamente com motor diesel ou semidiesel, de cilindrada superior a 1"
+  },
+  {
+   "ncm": "87033290",
+   "cest": "25.011.00",
+   "descricao": "Outros automóveis unicamente com motor diesel ou semidiesel, de cilindrada super"
+  },
+  {
+   "ncm": "87033310",
+   "cest": "25.012.00",
+   "descricao": "Automóveis unicamente com motor diesel ou semidiesel, de cilindrada superior a 2"
+  },
+  {
+   "ncm": "87033390",
+   "cest": "25.013.00",
+   "descricao": "Outros automóveis unicamente com motor diesel ou semidiesel, de cilindrada super"
+  },
+  {
+   "ncm": "87034000",
+   "cest": "25.025.00",
+   "descricao": "Automóveis equipados para propulsão, simultaneamente, com um motor de pistão alt"
+  },
+  {
+   "ncm": "87035000",
+   "cest": "25.026.00",
+   "descricao": "Automóveis equipados para propulsão, simultaneamente, com um motor de pistão por"
+  },
+  {
+   "ncm": "87036000",
+   "cest": "25.027.00",
+   "descricao": "Automóveis equipados para propulsão, simultaneamente, com um motor de pistão alt"
+  },
+  {
+   "ncm": "87037000",
+   "cest": "25.028.00",
+   "descricao": "Automóveis equipados para propulsão, simultaneamente, com um motor de pistão por"
+  },
+  {
+   "ncm": "87038000",
+   "cest": "25.029.00",
+   "descricao": "Outros veículos, equipados unicamente com motor elétrico para propulsão"
+  },
+  {
+   "ncm": "87042110",
+   "cest": "25.014.00",
+   "descricao": "Veículos automóveis para transporte de mercadorias, de peso em carga máxima não "
+  },
+  {
+   "ncm": "87042120",
+   "cest": "25.015.00",
+   "descricao": "Veículos automóveis para transporte de mercadorias, de peso em carga máxima não "
+  },
+  {
+   "ncm": "87042130",
+   "cest": "25.016.00",
+   "descricao": "Veículos automóveis para transporte de mercadorias, de peso em carga máxima não "
+  },
+  {
+   "ncm": "87042190",
+   "cest": "25.017.00",
+   "descricao": "Outros veículos automóveis para transporte de mercadorias, de peso em carga máxi"
+  },
+  {
+   "ncm": "87043110",
+   "cest": "25.018.00",
+   "descricao": "Veículos automóveis para transporte de mercadorias, de peso em carga máxima não "
+  },
+  {
+   "ncm": "87043120",
+   "cest": "25.019.00",
+   "descricao": "Veículos automóveis para transporte de mercadorias, de peso em carga máxima não "
+  },
+  {
+   "ncm": "87043130",
+   "cest": "25.020.00",
+   "descricao": "Veículos automóveis para transporte de mercadorias, de peso em carga máxima não "
+  },
+  {
+   "ncm": "87043190",
+   "cest": "25.021.00",
+   "descricao": "Outros veículos automóveis para transporte de mercadorias, de peso em carga máxi"
+  },
+  {
+   "ncm": "87044100",
+   "cest": "25.030.00",
+   "descricao": "Outros veículos para transportes de mercadorias equipados para propulsão, simult"
+  },
+  {
+   "ncm": "87045100",
+   "cest": "25.031.00",
+   "descricao": "Outros veículos para transportes de mercadorias equipados para propulsão, simult"
+  },
+  {
+   "ncm": "87046000",
+   "cest": "25.032.00",
+   "descricao": "Outros veículos para transporte de mercadorias, unicamente com motor elétrico pa"
+  },
+  {
+   "ncm": "8707",
+   "cest": "01.074.00",
+   "descricao": "Carroçarias para os veículos automóveis das posições 8701 a 8705, incluídas as c"
+  },
+  {
+   "ncm": "8708",
+   "cest": "01.075.00",
+   "descricao": "Partes e acessórios dos veículos automóveis das posições 8701 a 8705"
+  },
+  {
+   "ncm": "87082999",
+   "cest": "01.090.00",
+   "descricao": "Fitas, tiras, adesivos, autocolantes, de plástico, refletores, mesmo em rolos; p"
+  },
+  {
+   "ncm": "8711",
+   "cest": "26.001.00",
+   "descricao": "Motocicletas (incluídos os ciclomotores) e outros ciclos equipados com motor aux"
+  },
+  {
+   "ncm": "87141",
+   "cest": "01.076.00",
+   "descricao": "Partes e acessórios de motocicletas (incluídos os ciclomotores)"
+  },
+  {
+   "ncm": "871690",
+   "cest": "01.127.00",
+   "descricao": "Peças para reboques e semi-reboques, exceto os itens classificados no CEST 01.07"
+  },
+  {
+   "ncm": "87169090",
+   "cest": "01.077.00",
+   "descricao": "Engates para reboques e semi-reboques"
+  },
+  {
+   "ncm": "90141000",
+   "cest": "01.120.00",
+   "descricao": "Bússolas"
+  },
+  {
+   "ncm": "901831",
+   "cest": "13.014.00",
+   "descricao": "Seringas, mesmo com agulhas - neutra"
+  },
+  {
+   "ncm": "9018321",
+   "cest": "13.015.00",
+   "descricao": "Agulhas para seringas - neutra"
+  },
+  {
+   "ncm": "90189099",
+   "cest": "13.016.00",
+   "descricao": "Contraceptivos (dispositivos intra-uterinos - DIU) - neutra (NCM 3926.90.90 e 90"
+  },
+  {
+   "ncm": "90251990",
+   "cest": "01.121.00",
+   "descricao": "Indicadores de temperatura"
+  },
+  {
+   "ncm": "90259010",
+   "cest": "01.122.00",
+   "descricao": "Partes de indicadores de temperatura"
+  },
+  {
+   "ncm": "902610",
+   "cest": "01.078.00",
+   "descricao": "Medidores de nível; Medidores de vazão"
+  },
+  {
+   "ncm": "902620",
+   "cest": "01.079.00",
+   "descricao": "Aparelhos para medida ou controle da pressão"
+  },
+  {
+   "ncm": "902690",
+   "cest": "01.123.00",
+   "descricao": "Partes de aparelhos de medida ou controle"
+  },
+  {
+   "ncm": "90271000",
+   "cest": "01.102.00",
+   "descricao": "Analisadores de gases ou de fumaça (sonda lambda)"
+  },
+  {
+   "ncm": "9029",
+   "cest": "01.080.00",
+   "descricao": "Contadores, indicadores de velocidade e tacômetros, suas partes e acessórios"
+  },
+  {
+   "ncm": "90303321",
+   "cest": "01.081.00",
+   "descricao": "Amperímetros"
+  },
+  {
+   "ncm": "90318040",
+   "cest": "01.082.00",
+   "descricao": "Aparelhos digitais, de uso em veículos automóveis, para medida e indicação de mú"
+  },
+  {
+   "ncm": "90321010",
+   "cest": "01.124.00",
+   "descricao": "Termostatos"
+  },
+  {
+   "ncm": "90321090",
+   "cest": "01.125.00",
+   "descricao": "Instrumentos e aparelhos para regulação"
+  },
+  {
+   "ncm": "90322000",
+   "cest": "01.126.00",
+   "descricao": "Pressostatos"
+  },
+  {
+   "ncm": "9032892",
+   "cest": "01.083.00",
+   "descricao": "Controladores eletrônicos"
+  },
+  {
+   "ncm": "9032898",
+   "cest": "01.101.00",
+   "descricao": "Instrumentos para regulação de grandezas não elétricas"
+  },
+  {
+   "ncm": "9032899",
+   "cest": "01.101.00",
+   "descricao": "Instrumentos para regulação de grandezas não elétricas"
+  },
+  {
+   "ncm": "91040000",
+   "cest": "01.084.00",
+   "descricao": "Relógios para painéis de instrumentos e relógios semelhantes"
+  },
+  {
+   "ncm": "94012000",
+   "cest": "01.085.00",
+   "descricao": "Assentos e partes de assentos"
+  },
+  {
+   "ncm": "96032100",
+   "cest": "20.058.00",
+   "descricao": "Escovas de dentes, incluídas as escovas para dentaduras"
+  },
+  {
+   "ncm": "96138000",
+   "cest": "01.086.00",
+   "descricao": "Acendedores"
+  },
+  {
+   "ncm": "96190000",
+   "cest": "20.048.00",
+   "descricao": "Fraldas, exceto os descritos no CEST 20.048.01"
+  }
+ ]
+}
