@@ -13,12 +13,14 @@ não escreve HTML cru nem repete cores hex.
 """
 from pathlib import Path
 import os
+import re
 import tempfile
 
 import streamlit as st
 import pandas as pd
 
 from pregoes import config, credenciais, erros, mapeamento_manual
+from pregoes.ranking import bonus_codigo as _bonus_codigo
 from pregoes.extrator import extrair_com_pipeline
 from pregoes.exportador import exportar
 from pregoes.db import init_db, get_conn
@@ -1182,12 +1184,16 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
     from pregoes.exportador import SelecaoFornecedor
     from pregoes.normalizador import relevancia as _relev
 
+    def _chave_default(item_desc: str, o):
+        """Ordena candidatos para o DEFAULT: 1º quem casa código forte do
+        edital, 2º relevância, 3º menor preço. Sem código casado, o 1º termo
+        é 0 para todos → idêntico ao critério anterior (relevância, preço)."""
+        return (-_bonus_codigo(item_desc, o.descricao_encontrada),
+                -_relev(item_desc, o.descricao_encontrada), o.preco)
+
     def _melhor(item_desc: str, opcoes: list):
-        """Maior relevância, preço como desempate."""
-        return min(
-            opcoes,
-            key=lambda o: (-_relev(item_desc, o.descricao_encontrada), o.preco),
-        )
+        """Melhor default: código forte do edital, depois relevância, preço."""
+        return min(opcoes, key=lambda o: _chave_default(item_desc, o))
 
     # Inicializa estado de seleções com a opção de MAIOR RELEVÂNCIA por item
     if "selecoes" not in st.session_state:
@@ -1295,13 +1301,12 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
                 )
                 continue
 
-            # Ordena por relevância desc, preço asc — o "melhor match" no topo.
+            # Mesma chave do default (_chave_default): código forte do edital,
+            # depois relevância, depois preço — para o topo da lista coincidir
+            # com a opção pré-selecionada.
             item_desc_local = item.descricao
             opcoes_ordenadas = sorted(
-                opcoes,
-                key=lambda o: (-_relev(item_desc_local, o.descricao_encontrada),
-                                o.preco),
-            )
+                opcoes, key=lambda o: _chave_default(item_desc_local, o))
             preco_min = min(o.preco for o in opcoes_ordenadas)
 
             def _esta_selecionado(o, s=sel_atual):
