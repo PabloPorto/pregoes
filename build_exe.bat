@@ -2,16 +2,33 @@
 REM ============================================================
 REM  Build do executavel Pregoes (RODAR NO WINDOWS).
 REM  Gera:  dist\Pregoes\Pregoes.exe  (pasta portavel)
-REM  Pre-requisito: Python 3.11+ instalado e no PATH.
+REM  Pre-requisito: Python 3.11+ instalado (ver BUILD.md).
 REM ============================================================
 setlocal
 
 echo === Pregoes - build do executavel ===
-python --version 1>nul 2>nul || (echo [ERRO] Python nao encontrado no PATH. & pause & exit /b 1)
+
+REM Detecta o Python. Prefere o launcher "py" (instalado por padrao com o
+REM Python e NAO depende do PATH de "python"); cai para "python" se preciso.
+set "PYEXE="
+py -3 --version 1>nul 2>nul && set "PYEXE=py -3"
+if not defined PYEXE ( python --version 1>nul 2>nul && set "PYEXE=python" )
+if not defined PYEXE (
+    echo.
+    echo [ERRO] Python 3.11+ nao encontrado nesta maquina.
+    echo.
+    echo  1. Baixe em: https://www.python.org/downloads/windows/
+    echo  2. No instalador, NA PRIMEIRA TELA, marque "Add python.exe to PATH".
+    echo  3. Conclua a instalacao, abra um NOVO Prompt de Comando e rode de novo.
+    echo.
+    pause & exit /b 1
+)
+echo Python encontrado:
+%PYEXE% --version
 
 REM 1. Ambiente isolado de build
 if not exist .build_env (
-    python -m venv .build_env || (echo [ERRO] venv falhou. & pause & exit /b 1)
+    %PYEXE% -m venv .build_env || (echo [ERRO] criacao do venv falhou. & pause & exit /b 1)
 )
 call .build_env\Scripts\activate.bat
 
