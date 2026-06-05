@@ -177,7 +177,7 @@ def _renderizar_sidebar():
             if st.button(
                 rotulo,
                 key=f"nav_{tela_id}",
-                use_container_width=True,
+                width="stretch",
                 type="primary" if ativo else "secondary",
             ):
                 # "Novo pregão" pelo menu sempre limpa estado (mesma intenção do
@@ -424,10 +424,10 @@ def tela_revisao():
 
     bcol1, bcol2 = st.columns(2)
     with bcol1:
-        if st.button("Marcar todos", use_container_width=True):
+        if st.button("Marcar todos", width="stretch"):
             _marcar_todos(True)
     with bcol2:
-        if st.button("Desmarcar todos", use_container_width=True):
+        if st.button("Desmarcar todos", width="stretch"):
             _marcar_todos(False)
 
     # `num_rows="fixed"` (default) em vez de "dynamic": evita que o
@@ -442,7 +442,7 @@ def tela_revisao():
     # carregar nova extração.
     edited = st.data_editor(
         st.session_state.df_editavel,
-        use_container_width=True,
+        width="stretch",
         height=500,
         column_config={
             "OK": st.column_config.CheckboxColumn("OK?", default=True),
@@ -485,7 +485,7 @@ def tela_revisao():
     # Botões em linha própria, com proporções iguais.
     col_btn1, col_btn2 = st.columns(2)
     with col_btn1:
-        if st.button("Buscar preços", type="primary", use_container_width=True,
+        if st.button("Buscar preços", type="primary", width="stretch",
                      help="Consulta Almeida e Dantas (qualquer um configurado). Pode demorar minutos."):
             if not st.session_state.itens_revisados:
                 style.bloco_aviso("Nenhum item marcado como OK — nada para buscar.", tipo="danger")
@@ -500,7 +500,7 @@ def tela_revisao():
                 ir_para("busca_precos")
 
     with col_btn2:
-        if st.button("Gerar sem buscar", use_container_width=True,
+        if st.button("Gerar sem buscar", width="stretch",
                      help="Gera a planilha matriz com colunas L/T/U vazias (preço, código, marca em branco)."):
             _gerar_excel(_df_para_itens(edited), markup=markup, selecoes={})
 
@@ -567,7 +567,7 @@ def _gerar_excel(itens: list, markup: float, selecoes: dict,
             data=f.read(),
             file_name=destino.name,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
+            width="stretch",
             type="primary",
         )
 
@@ -865,9 +865,9 @@ def tela_busca_precos():
 
     col_a, col_b, _spacer = st.columns([2, 2, 6])
     with col_a:
-        iniciar = st.button("Iniciar busca", type="primary", use_container_width=True)
+        iniciar = st.button("Iniciar busca", type="primary", width="stretch")
     with col_b:
-        if st.button("Voltar para revisão", use_container_width=True):
+        if st.button("Voltar para revisão", width="stretch"):
             ir_para("revisao")
             return
     if iniciar:
@@ -1167,7 +1167,7 @@ def _card_opcao(idx: int, pos: int, opcao, *, badge_html: str,
                     unsafe_allow_html=True,
                 )
             elif st.button("Escolher", key=f"esc_{idx}_{pos}",
-                           use_container_width=True):
+                           width="stretch"):
                 on_escolher()
                 st.rerun()
 
@@ -1398,7 +1398,7 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
             # Opção de não usar este item
             sem_sel = sel_atual is None
             if st.button(("✓ " if sem_sel else "") + "Não usar este item",
-                         key=f"naousar_{idx}", use_container_width=True):
+                         key=f"naousar_{idx}", width="stretch"):
                 st.session_state.selecoes.pop(idx, None)
                 st.rerun()
 
@@ -1409,7 +1409,7 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
     markups = _painel_markup(st.session_state.selecoes, itens)
 
     if st.button("Gerar planilha matriz com preços", type="primary",
-                 use_container_width=True):
+                 width="stretch"):
         # Usa itens_revisados (populado em tela_revisao a partir do
         # estado ATUAL do data_editor, via `edited`). df_editavel não
         # serve aqui porque é só snapshot inicial — não reflete as
@@ -1562,7 +1562,7 @@ def tela_mapeamento():
         [(linha + [""] * n_cols_tabela)[:n_cols_tabela] for linha in tabela_alvo[:5]],
         columns=[f"Col {i+1}" for i in range(n_cols_tabela)],
     )
-    st.dataframe(df_preview, use_container_width=True, hide_index=True)
+    st.dataframe(df_preview, width="stretch", hide_index=True)
 
     # === Passo 2 ===
     st.subheader("Passo 2 — O que é cada coluna?")
