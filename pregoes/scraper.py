@@ -79,6 +79,7 @@ class ResultadoBusca:
     codigo_fornecedor: str
     confianca: str   # 'exato' | 'variacao'
     fornecedor: str  # 'almeida' | 'dantas'
+    ncm: Optional[str] = None  # Fase 4: NCM p/ classificação de ST; None se não capturado
 
 
 class Fornecedor(Protocol):

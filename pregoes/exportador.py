@@ -24,7 +24,7 @@ from openpyxl.cell.cell import Cell
 from openpyxl.formula.translate import Translator
 from openpyxl.utils import get_column_letter
 
-from . import config
+from . import config, tributacao
 from .extrator import ItemExtraido
 
 # Caracteres que, no início de um TEXTO, fazem o Excel/openpyxl interpretar a
@@ -47,6 +47,7 @@ class SelecaoFornecedor:
     preco: float
     codigo_fornecedor: str
     marca: str
+    ncm: str | None = None   # Fase 4: NCM do produto escolhido → markup por ST
 
 
 # Faixa de linhas que o template já tem prontas
@@ -63,6 +64,7 @@ def exportar(
     orgao: str | None = None,
     numero_pregao: str | None = None,
     markup: float | None = None,
+    markups: dict[int, float] | None = None,
     selecoes: dict[int, "SelecaoFornecedor"] | None = None,
     destino: Path | str | None = None,
     template: Path | str | None = None,
@@ -118,13 +120,14 @@ def exportar(
     if numero_pregao:
         _escrever_texto(ws["C2"], numero_pregao)
 
-    # Aplicar markup ANTES de expandir: assim, quando _expandir_linhas copiar
-    # a fórmula da linha modelo (504) via Translator, ela já estará com o
-    # markup correto e as linhas novas herdam o valor sem retrabalho.
+    # Markup GLOBAL do pregão (template-wide): comportamento legado — todas as
+    # linhas G recebem o multiplicador. Aplicado ANTES de expandir, para as
+    # linhas novas herdarem. O markup POR ITEM (Fase 4) sobrescreve linhas
+    # específicas depois, no laço.
     if markup_efetivo != config.MARKUP_DEFAULT:
         _aplicar_markup(ws, markup_efetivo)
 
-    # Expandir template se o edital tiver mais que 500 itens
+    # Expandir template se o edital tiver mais que 500 itens.
     n_itens = len(itens)
     if n_itens > 500:
         _expandir_linhas(ws, n_extras=n_itens - 500)
@@ -151,6 +154,18 @@ def exportar(
             ws[f"L{linha}"] = sel.preco
             _escrever_texto(ws[f"T{linha}"], sel.codigo_fornecedor)
             _escrever_texto(ws[f"U{linha}"], sel.marca)
+
+        # Markup POR ITEM (Fase 4) — sobrescreve a fórmula G SÓ desta linha
+        # quando há (1) override explícito do operador na UI, ou (2) default
+        # por classificação tributária (NCM com ST → markup menor). Sem isso, a
+        # linha mantém o markup GLOBAL do pregão já aplicado acima.
+        m_item = None
+        if markups is not None and offset in markups:
+            m_item = markups[offset]
+        elif sel is not None and getattr(sel, "ncm", None):
+            m_item = tributacao.markup_para(sel.ncm)
+        if m_item is not None:
+            _aplicar_markup_em_linha(ws, linha, m_item)
 
     wb.save(destino)
     return destino
@@ -191,18 +206,26 @@ def _aplicar_markup(ws, markup: float) -> None:
     SILÊNCIO — erro financeiro em toda a planilha. O regex troca o número que
     multiplica Sn diretamente, qualquer que seja o literal do template.
     """
-    novo_mult = _formatar_markup(markup)
     for linha in range(LINHA_PRIMEIRO_ITEM, LINHA_ULTIMO_ITEM_TEMPLATE + 1):
-        celula = ws[f"G{linha}"]
-        valor = celula.value
-        if not isinstance(valor, str):
-            continue
-        # Casa o "* <número>" que multiplica a referência Sn (ex.: *1.45, *1.5,
-        # *2). O '*' obrigatório impede pegar os dígitos de "S504" (sem '*'
-        # antes). Substitui só a 1ª ocorrência.
-        nova = re.sub(r"\*\s*\d+(?:\.\d+)?", f"*{novo_mult}", valor, count=1)
-        if nova != valor:
-            celula.value = nova
+        _aplicar_markup_em_linha(ws, linha, markup)
+
+
+def _aplicar_markup_em_linha(ws, linha: int, markup: float) -> None:
+    """Reescreve o multiplicador do markup SÓ na fórmula G desta linha.
+
+    Base do markup POR ITEM (Fase 4): cada linha pode ter um markup diferente
+    (ST vs normal). As demais fórmulas (H, I, …) referenciam G e se ajustam.
+    """
+    celula = ws[f"G{linha}"]
+    valor = celula.value
+    if not isinstance(valor, str):
+        return
+    # Casa o "* <número>" que multiplica a referência Sn (ex.: *1.45, *1.5, *2).
+    # O '*' obrigatório impede pegar os dígitos de "S504" (sem '*' antes).
+    nova = re.sub(r"\*\s*\d+(?:\.\d+)?", f"*{_formatar_markup(markup)}",
+                  valor, count=1)
+    if nova != valor:
+        celula.value = nova
 
 
 def _formatar_markup(markup: float) -> str:
