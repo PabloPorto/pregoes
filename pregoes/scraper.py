@@ -769,13 +769,12 @@ def buscar_precos_para_itens(
         usar_catalogo: False desabilita Camada 0 (raro — útil em testes que
             isolam só o caminho textual).
         usar_llm_judge: True ativa Camada 3 (judge do Gemini sob demanda).
-            **Default False** desde 2026-05-27 — em testes reais o judge
-            estava aprovando candidatos absurdos e consumindo quota do
-            Gemini que também é usada pela extração de PDF. Vamos
-            calibrar via diagnóstico antes de reativar por padrão.
-            Compartilha a mesma API key com extrator_llm.extrair_via_gemini —
-            se a quota daily acabar pelo judge, a extração de PDF também
-            falha.
+            **Default True** — o judge fica ligado por padrão para resolver
+            sinônimos que as Camadas 0-2 não pegam. Compartilha a mesma API
+            key com extrator_llm.extrair_via_gemini — se a quota daily acabar
+            pelo judge, a extração de PDF também é afetada; por isso o judge
+            só dispara sob demanda (quando o casamento textual + fuzzy não
+            atinge relevância suficiente).
         diagnostico: opcional. Se fornecido, o orquestrador preenche o log
             com o que cada camada fez por item × fornecedor. Use com
             `pregoes.diagnostico.exportar_xlsx` para gerar a planilha de

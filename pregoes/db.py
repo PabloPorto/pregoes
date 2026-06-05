@@ -4,12 +4,21 @@ Banco SQLite — schema mínimo, suficiente para o MVP.
 Filosofia: começar com poucas tabelas e adicionar quando houver dor real.
 Nada de criar tabelas "porque pode precisar".
 
-Tabelas:
-- produtos:           catálogo canônico do cliente (cresce com uso)
-- precos_historico:   toda consulta de preço no tempo (alimenta cache + dashboard)
-- editais:            cada PDF processado vira um edital
-- edital_itens:       cada linha de cada edital (vincula a produtos quando casa)
-- mapeamentos_pdf:    memória de heurísticas de extração (resp 9 = schemas variáveis)
+Tabelas (11 no total):
+- schema_version:          versão da migration aplicada (MAX(version) = atual)
+- produtos:                catálogo canônico do cliente (cresce com uso)
+- precos_historico:        preços de planilhas históricas do cliente. Hoje só o
+                           importador grava aqui; o scraper NÃO escreve nesta
+                           tabela (ele usa precos_cache_descricao).
+- precos_cache_descricao:  cache TTL=2d das buscas do scraper, por (descrição
+                           normalizada, fornecedor)
+- editais:                 cada PDF processado vira um edital
+- edital_itens:            cada linha de cada edital (vincula a produtos quando casa)
+- mapeamentos_pdf:         memória de heurísticas de extração (resp 9 = schemas variáveis)
+- cache_canonico:          cache da normalização canônica via LLM (Fase B)
+- produtos_canonico:       formas canônicas dos produtos (Fase B / matching)
+- cache_llm_judge:         cache (TTL infinito) do judge semântico da busca (Camada 3)
+- mapeamentos_aprendidos:  feedback do operador reaproveitado em buscas futuras (Camada 4)
 """
 import sqlite3
 from contextlib import contextmanager
@@ -427,8 +436,9 @@ def cache_gravar(
 ) -> None:
     """
     Salva (ou substitui) o payload JSON para a chave `(desc, fornecedor)`.
-    UPSERT manual: SQLite `INSERT OR REPLACE` mantém o `id` se já existia
-    a tupla, mas reseta `consultado_em` para o momento atual via DEFAULT.
+    UPSERT via `ON CONFLICT(descricao_normalizada, fornecedor) DO UPDATE`:
+    preserva o `id` da linha existente e atualiza `payload` +
+    `consultado_em` (renova o TTL para o momento atual).
     """
     if not descricao_normalizada or not fornecedor:
         return

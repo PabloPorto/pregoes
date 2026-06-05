@@ -117,9 +117,10 @@ def _parse_codigo(codigo, default_forn: Optional[str]) -> tuple[Optional[str], O
 
     Convenção do cliente: a inicial do fornecedor pode vir colada ao FIM do
     código — `A` = Almeida, `D` = Dantas. O sufixo NÃO entra na busca
-    (`/busca?s={codigo_busca}`). Só é tratado como sufixo se o resto for
-    numérico — assim "43026D" vira ("43026","dantas") mas um código alfanumérico
-    genuíno não é mutilado.
+    (`/busca?s={codigo_busca}`). A última letra só é tratada como sufixo se
+    for `A`/`D` E todo o trecho que a precede for numérico — assim "43026D"
+    vira ("43026","dantas"), mas um código alfanumérico genuíno (ex.: "ABC12D")
+    não é mutilado e segue inteiro com o `default_forn`.
 
     Sem sufixo → usa `default_forn` (o fornecedor que o operador indicou para
     aquela planilha).

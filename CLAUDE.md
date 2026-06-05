@@ -94,15 +94,25 @@ significa que você está num clone parcial ou no diretório errado.
   central, template MATRIZ copiado.
 - **Fase 1 — Extração + revisão + exportação:** extrator de PDF, UI
   Streamlit local, exportador que preserva fórmulas do template.
+- **Fase 2 — Scraper Almeida + Dantas + cache:** ambas as classes
+  (`AlmeidaDistribuidor` e `DantasDistribuidora`) implementadas, busca em
+  camadas, cache TTL=2d (`precos_cache_descricao`) como 1º passo de cada
+  busca, tela "Buscar preços" na UI.
+- **Fase 3 — Bootstrap, fuzzy matching, dashboard:** importador de
+  planilhas históricas, matcher (rapidfuzz), alinhador/canonização via
+  Gemini e Camadas 0-4 da busca. **Ressalva:** a Camada 0 (busca por
+  código no catálogo) só dispara depois que o cliente importa as planilhas
+  históricas — enquanto Q2 não for confirmada, o catálogo começa do zero
+  e essa camada fica inerte.
 
 ### Fases NÃO entregues (próximas)
-- **Fase 2 — Scraper Almeida + Dantas + cache** (3-5 dias estimados)
-- **Fase 3 — Bootstrap, fuzzy matching, dashboard** (2-3 dias)
 - **Fase 4 — Inteligência tributária via NF-e** (TBD, valida com contador)
 
 ### Status de testes
-19/19 testes passando em `tests/test_mvp.py`. Sempre rode antes e depois
-de mexer:
+A suíte completa passa — rode `python -m pytest tests/ -v` antes e depois
+de mexer. (Retrato atual: 325 testes coletados, sendo 45 em
+`tests/test_mvp.py`; 2 são pulados quando o SDK `google-genai` não está
+no venv.)
 
 ```bash
 cd pregoes_app
@@ -132,11 +142,15 @@ Abre em `http://localhost:8501`.
 | `pytest` | Testes |
 | `reportlab` | Apenas em `tests/` para gerar PDF sintético |
 
+**Bibliotecas das fases 2/3 (já em uso):**
+| Lib | Uso |
+|---|---|
+| `playwright` | Scraping Almeida e Dantas (Fase 2) |
+| `rapidfuzz` | Casamento aproximado de descrições (Fase 3 — matcher) |
+
 **Bibliotecas reservadas para próximas fases (não instalar agora):**
 | Lib | Quando |
 |---|---|
-| `playwright` | Fase 2 — scraping Almeida e Dantas |
-| `rapidfuzz` | Fase 3 — casamento aproximado de descrições |
 | `lxml` | Fase 4 — parser de XML NF-e |
 
 **Onde roda:** Local na máquina Windows do cliente. Sem servidor, sem

@@ -1,5 +1,5 @@
 """
-Camada de extração via LLM (Gemini 2.0 Flash) — Camada 2 automática
+Camada de extração via LLM (gemini-2.5-flash-lite) — Camada 2 automática
 do pipeline quando pdfplumber retorna confiança < 95%.
 
 Também fornece **Camada 3 da busca de produtos** (Q12) via

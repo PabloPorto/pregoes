@@ -82,9 +82,10 @@ Por item, do mais preciso ao mais cobertor:
    (fita-rotulador ≠ fita-crepe).
 
 **Confiabilidade medida (edital real da especialidade do cliente):**
-busca por código ~89-91% certa, ~2% alucinação, 0 nos itens sem
-correspondência (diz "não encontrado"). Degrada com transparência sem
-chave/quota/rede (cai para o textual, que não alucina).
+~88-90% certa para piloto supervisionado, após o sprint pré-piloto de
+correções. Nos itens sem correspondência diz "não encontrado" (não inventa).
+Degrada com transparência sem chave/quota/rede (cai para o textual, que não
+alucina).
 
 ## Estrutura de pastas
 
@@ -110,6 +111,7 @@ pregoes_app/
 │   ├── scraper.py             # ✅ Almeida + Dantas + busca por código (Camada 0)
 │   ├── matcher.py             # ✅ rapidfuzz contra catálogo (Camada 0)
 │   ├── importador.py          # ✅ CLI: importa planilhas históricas (Camada 0)
+│   ├── alinhador.py           # ✅ canonização de nomes via Gemini (Fase B)
 │   ├── extrator_llm.py        # ✅ Camada 2 extração + Camada 3 judge (Q11/Q12)
 │   └── ui/
 │       ├── __init__.py
@@ -137,34 +139,46 @@ pregoes_app/
     └── test_fase3.py          # Fase 3 — matcher, importador, Camadas 0-4
 ```
 
-Total atual: **159 testes verdes** (`pytest -v`).
+A suíte completa passa (`python -m pytest -v`). Retrato atual: 325 testes
+coletados, 323 passando — os 2 pulados dependem do SDK `google-genai`, que
+o CI roda sem ele instalado.
 
 ## Schema SQLite
 
+11 tabelas no total:
+
 ```
+schema_version            — versão da migration aplicada (MAX(version) = atual)
 produtos                  — catálogo canônico (cresce com uso + importador histórico)
-precos_historico          — toda consulta com timestamp (alimenta cache TTL=2d)
-precos_cache_descricao    — cache de buscas do scraper por descrição normalizada
+precos_historico          — preços das planilhas históricas do cliente. Hoje só o
+                            importador grava aqui; o scraper NÃO escreve nesta tabela
+precos_cache_descricao    — cache TTL=2d das buscas do scraper por (descrição
+                            normalizada, fornecedor)
 editais                   — cada PDF processado
 edital_itens              — linhas dos editais; FK para produtos quando casa
 mapeamentos_pdf           — heurísticas aprendidas para schemas não-padrão
+cache_canonico            — Fase B: cache da normalização canônica via Gemini
+produtos_canonico         — Fase B: forma canônica de cada produto do catálogo (1:1)
 cache_llm_judge           — Camada 3: cache TTL infinito por SHA256(desc + códigos)
 mapeamentos_aprendidos    — Camada 4: descrição_norm → código escolhido pelo operador
 ```
 
 ## Próximas fases (em ordem)
 
-### Fase 2 — Scraper Almeida + Dantas (3-5 dias) — 🟡 em andamento
+### Fase 2 — Scraper Almeida + Dantas (3-5 dias) — ✅ entregue
 - Playwright para navegar nos sites — ✅ pronto (sync API, headless)
-- Busca em 3 camadas: descrição normalizada → top-3 keywords → top-2 keywords. A 4ª camada (código histórico) fica para a Fase 3, quando `produtos.codigo_almeida` for populado pelo importador.
+- Busca textual em camadas: descrição normalizada → top-3 keywords → top-2
+  keywords. A busca por código histórico (Camada 0) entrou na Fase 3 — ver
+  "Busca de preços em camadas" acima.
 - Almeida (`AlmeidaDistribuidor`) — ✅ login via cookies PHPSESSID+token, parse via `data-*` em `.product-card__info`
-- Dantas (`DantasDistribuidora`) — ⏳ esqueleto, precisa sessão de inspeção do site
-- Cache TTL=2 dias — schema pronto em `db.preco_em_cache` mas ainda não integrado ao orquestrador
+- Dantas (`DantasDistribuidora`) — ✅ implementada (login, `buscar`, `buscar_por_codigo`, parser `_parse_card_dantas`)
+- Cache TTL=2 dias (`precos_cache_descricao`) — ✅ integrado: é o 1º passo de
+  `scraper.buscar_precos_para_itens` (hit reaproveita, miss busca e grava o
+  cache). Distinto de `precos_historico`, que só o importador alimenta.
 - UI: tela de busca de preços com seleção manual de marca por item — ✅ pronta
-- Polimento e paralelismo do scraper — pendente
 
-### Fase 3 — Busca robusta em 5 camadas — ✅ infraestrutura entregue
-Implementado em 2026-05-27 (commit pendente):
+### Fase 3 — Busca robusta em 5 camadas — ✅ entregue
+Implementado e commitado:
 - ✅ `importador.py` — CLI lê planilhas MATRIZ históricas e popula `produtos`
 - ✅ `matcher.py` — `rapidfuzz.token_sort_ratio` contra catálogo (threshold 90)
 - ✅ Camada 0 — `buscar_por_codigo` em Almeida e Dantas (`/busca?s={codigo}`)

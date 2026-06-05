@@ -741,6 +741,7 @@ def tela_configuracoes():
                         try:
                             from google import genai
                             from google.genai import types
+                            from pregoes.extrator_llm import MODELO_DEFAULT
                             # Timeout explícito (60s em ms): sem isto, um
                             # soluço de rede deixaria o spinner "Testando…"
                             # eterno, sem cancelar. Mesmo padrão dos demais
@@ -750,7 +751,10 @@ def tela_configuracoes():
                                 http_options=types.HttpOptions(timeout=60_000),
                             )
                             resp = client.models.generate_content(
-                                model="gemini-2.0-flash",
+                                # Mesmo modelo do pipeline (gemini-2.5-flash-lite):
+                                # o 2.0-flash perdeu o free tier para contas novas
+                                # e falharia justo na tela de validação da chave.
+                                model=MODELO_DEFAULT,
                                 contents="Responda apenas 'OK'.",
                             )
                             if resp.text and "OK" in resp.text.upper():
