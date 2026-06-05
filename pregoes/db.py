@@ -165,6 +165,19 @@ CREATE TABLE IF NOT EXISTS produtos_canonico (
     canonico       TEXT NOT NULL,
     atualizado_em  TEXT DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Registro de cada planilha histórica importada (rastreabilidade). Uma linha
+-- por arquivo, gravada DEPOIS do commit por-arquivo do importador — assim o
+-- operador vê o que entrou e o que falhou (e a falha não deixa import parcial).
+CREATE TABLE IF NOT EXISTS imports_log (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    arquivo       TEXT NOT NULL,
+    n_produtos    INTEGER DEFAULT 0,
+    n_precos      INTEGER DEFAULT 0,
+    status        TEXT NOT NULL,        -- 'ok' | 'falha' | 'nao_encontrado'
+    erro          TEXT,
+    criado_em     TEXT DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
@@ -544,6 +557,28 @@ def produto_canonico_gravar(
             atualizado_em = CURRENT_TIMESTAMP
         """,
         (produto_id, canonico),
+    )
+
+
+def import_log_gravar(
+    conn: sqlite3.Connection,
+    arquivo: str,
+    n_produtos: int,
+    n_precos: int,
+    status: str,
+    erro: str | None = None,
+) -> None:
+    """Registra o resultado da importação de UMA planilha (rastreabilidade).
+
+    NÃO faz commit — o chamador (importador) controla a transação por arquivo
+    para gravar a linha junto do commit/rollback correspondente.
+    """
+    conn.execute(
+        """
+        INSERT INTO imports_log (arquivo, n_produtos, n_precos, status, erro)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (arquivo, n_produtos, n_precos, status, erro),
     )
 
 

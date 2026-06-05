@@ -190,6 +190,19 @@ class LinhaImportada:
     preco: Optional[float]
 
 
+def _log_import_seguro(conn, arquivo, n_produtos, n_precos, status, erro=None):
+    """Registra em imports_log SEM nunca derrubar a importação.
+
+    Rastreabilidade é best-effort: se gravar o log falhar (ex.: um caller
+    injetou um conn de banco sem a tabela), o resultado real do import — já
+    commitado ou já revertido — não pode ser afetado. Por isso engolimos o erro.
+    """
+    try:
+        db.import_log_gravar(conn, arquivo, n_produtos, n_precos, status, erro)
+    except Exception:
+        pass
+
+
 def importar(
     arquivos: Iterable[Path | str],
     *,
@@ -227,17 +240,41 @@ def importar(
             path = Path(path)
             if not path.exists():
                 stats.avisos.append(f"Arquivo não encontrado: {path}")
+                _log_import_seguro(conn, path.name, 0, 0, "nao_encontrado",
+                                     "arquivo inexistente")
+                conn.commit()
                 continue
+            # Snapshot dos contadores: se o arquivo falhar no meio, fazemos
+            # ROLLBACK das linhas parciais no banco E revertemos os contadores
+            # em memória (que _importar_arquivo já incrementou) — senão a
+            # telemetria contaria linhas que foram desfeitas.
+            snap = (stats.linhas_lidas, stats.produtos_criados,
+                    stats.produtos_atualizados, stats.precos_gravados,
+                    stats.precos_pulados)
             try:
                 _importar_arquivo(path, fornecedor=fornecedor, conn=conn, stats=stats)
+                n_prod = ((stats.produtos_criados + stats.produtos_atualizados)
+                          - (snap[1] + snap[2]))
+                n_preco = stats.precos_gravados - snap[3]
+                _log_import_seguro(conn, path.name, n_prod, n_preco, "ok")
+                # Commit POR ARQUIVO: persiste só este arquivo (linhas + log
+                # juntos). Um crash depois daqui preserva os arquivos já
+                # importados; e uma falha no PRÓXIMO não afeta este.
+                conn.commit()
                 stats.arquivos_processados += 1
             except Exception as exc:
-                # Não derruba o batch — registra e segue. Caller decide se
-                # quer interromper baseado nos avisos.
+                # Desfaz QUALQUER linha parcial deste arquivo (atomicidade por
+                # arquivo) e reverte os contadores; não derruba o batch.
+                conn.rollback()
+                (stats.linhas_lidas, stats.produtos_criados,
+                 stats.produtos_atualizados, stats.precos_gravados,
+                 stats.precos_pulados) = snap
                 stats.avisos.append(
                     f"Falha ao processar {path.name}: {type(exc).__name__}: {exc}"
                 )
-        conn.commit()
+                _log_import_seguro(conn, path.name, 0, 0, "falha",
+                                     f"{type(exc).__name__}: {exc}")
+                conn.commit()  # persiste só o registro de falha (pós-rollback)
     finally:
         if deve_fechar:
             conn.close()
