@@ -520,7 +520,8 @@ def _df_para_itens(df: pd.DataFrame) -> list:
     ]
 
 
-def _gerar_excel(itens: list, markup: float, selecoes: dict):
+def _gerar_excel(itens: list, markup: float, selecoes: dict,
+                 markups: dict | None = None):
     """Exporta uma lista de ItemExtraido para a planilha matriz.
 
     `selecoes` é o mapa {indice_item: SelecaoFornecedor} já preparado pela
@@ -544,6 +545,7 @@ def _gerar_excel(itens: list, markup: float, selecoes: dict):
                 orgao=st.session_state.get("orgao"),
                 numero_pregao=st.session_state.get("numero"),
                 markup=markup,
+                markups=markups,
                 selecoes=selecoes,
             )
         except Exception as exc:
@@ -1168,6 +1170,54 @@ def _card_opcao(idx: int, pos: int, opcao, *, badge_html: str,
                 st.rerun()
 
 
+def _painel_markup(selecoes: dict, itens: list) -> dict:
+    """Painel "Markup deste pregão" (Fase 4 — Substituição Tributária).
+
+    Gerencia POR EXCEÇÃO: o automático classifica cada item pelo NCM (ST →
+    markup menor; normal → maior); o operador só ajusta os DOIS markups do
+    pregão e decide os itens SEM NCM (nada é presumido ST em silêncio —
+    princípio Resp 7). Devolve ``{offset -> markup}`` para o exportador.
+    """
+    from pregoes import tributacao
+
+    st.markdown("#### Markup deste pregão")
+    c1, c2 = st.columns(2)
+    m_st = c1.number_input(
+        "Itens com Substituição Tributária", min_value=1.0, step=0.05,
+        value=float(st.session_state.get("mk_st", config.MARKUP_ST)),
+        format="%.2f", key="mk_st",
+        help="O NCM consta na lista de ST do estado → ICMS já recolhido na "
+             "origem, markup menor.")
+    m_normal = c2.number_input(
+        "Itens normais", min_value=1.0, step=0.05,
+        value=float(st.session_state.get("mk_normal", config.MARKUP_NORMAL)),
+        format="%.2f", key="mk_normal")
+
+    overrides = st.session_state.setdefault("markup_overrides", {})
+    ncms = {off: getattr(s, "ncm", None) for off, s in selecoes.items()}
+    markups, resumo, sem_ncm = tributacao.classificar_markups(
+        ncms, m_st, m_normal, overrides)
+
+    st.caption(
+        f"✅ {resumo['normal']} normais  ·  🟦 {resumo['st']} com ST  ·  "
+        f"⚠️ {resumo['sem_ncm']} sem NCM identificado")
+
+    # Exceções: itens SEM NCM — o operador decide (default = normal).
+    if sem_ncm:
+        with st.expander(f"⚠️ {len(sem_ncm)} itens sem NCM — confira o markup"):
+            for off in sem_ncm:
+                item = itens[off] if 0 <= off < len(itens) else None
+                desc = (getattr(item, "descricao", None) or f"Item {off + 1}")[:54]
+                escolha = st.radio(
+                    desc, ("Normal", "Com ST"), horizontal=True,
+                    index=1 if overrides.get(off) == m_st else 0,
+                    key=f"ov_markup_{off}")
+                overrides[off] = m_st if escolha == "Com ST" else m_normal
+        markups, _, _ = tributacao.classificar_markups(
+            ncms, m_st, m_normal, overrides)
+    return markups
+
+
 def _mostrar_selecao(itens: list, resultados: dict) -> None:
     """Lista paginada de itens; cada candidato vira um card. Operador escolhe.
 
@@ -1205,6 +1255,7 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
                     preco=melhor.preco,
                     codigo_fornecedor=melhor.codigo_fornecedor,
                     marca=melhor.marca,
+                    ncm=getattr(melhor, "ncm", None),
                 )
 
     # Resumo
@@ -1328,7 +1379,7 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
                     on_escolher=lambda o=o: st.session_state.selecoes.__setitem__(
                         idx, SelecaoFornecedor(
                             preco=o.preco, codigo_fornecedor=o.codigo_fornecedor,
-                            marca=o.marca)),
+                            marca=o.marca, ncm=getattr(o, "ncm", None))),
                 )
 
             # Opção de não usar este item
@@ -1340,6 +1391,9 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
 
     st.divider()
     st.caption(f"{selecionados} de {total} itens com marca/preço selecionados.")
+
+    # Markup por item via Substituição Tributária (Fase 4).
+    markups = _painel_markup(st.session_state.selecoes, itens)
 
     if st.button("Gerar planilha matriz com preços", type="primary",
                  use_container_width=True):
@@ -1354,7 +1408,8 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
         # `db.aprendido_buscar`, pulando scraper textual.
         _registrar_aprendizado(itens, st.session_state.selecoes,
                                 st.session_state.get("resultados_busca") or {})
-        _gerar_excel(itens, markup=markup, selecoes=st.session_state.selecoes)
+        _gerar_excel(itens, markup=markup, selecoes=st.session_state.selecoes,
+                     markups=markups)
 
 
 def _registrar_aprendizado(itens: list, selecoes: dict, resultados: dict) -> None:

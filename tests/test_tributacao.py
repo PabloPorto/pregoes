@@ -52,6 +52,23 @@ def test_ncm_de_texto_pagina_detalhe():
     assert tributacao.ncm_de_texto(None) is None
 
 
+def test_classificar_markups():
+    # 0=ST (3917), 1=normal, 2=sem NCM
+    ncms = {0: "39174090", 1: "99999999", 2: None}
+    markups, resumo, sem = tributacao.classificar_markups(ncms, 1.30, 1.45)
+    assert markups == {0: 1.30, 1: 1.45, 2: 1.45}
+    assert resumo == {"st": 1, "normal": 1, "sem_ncm": 1}
+    assert sem == [2]
+
+
+def test_classificar_markups_override_e_knobs():
+    ncms = {0: "39174090", 1: None}
+    # operador troca os knobs do pregão e força o item 1 (sem NCM) como ST
+    markups, _, _ = tributacao.classificar_markups(
+        ncms, markup_st=1.25, markup_normal=1.5, overrides={1: 1.25})
+    assert markups == {0: 1.25, 1: 1.25}
+
+
 def test_markup_por_classificacao():
     assert tributacao.markup_para("39174090") == config.MARKUP_ST      # 1.30
     assert tributacao.markup_para("99999999") == config.MARKUP_NORMAL  # 1.45

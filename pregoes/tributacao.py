@@ -89,6 +89,47 @@ def ncm_de_card(valor: str | None) -> str | None:
     return n if len(n) == 8 else None
 
 
+def classificar_markups(
+    ncms_por_item: dict[int, str | None],
+    markup_st: float,
+    markup_normal: float,
+    overrides: dict[int, float] | None = None,
+) -> tuple[dict[int, float], dict[str, int], list[int]]:
+    """Decide o markup de cada item selecionado pela classificação tributária.
+
+    Núcleo PURO da UX "gerenciar por exceção": o automático faz o trabalho
+    (ST → markup_st; normal → markup_normal); o operador só decide os SEM NCM
+    e os overrides individuais.
+
+    Args:
+        ncms_por_item: ``{offset -> ncm (str|None)}`` dos itens selecionados.
+        markup_st / markup_normal: os dois markups do pregão (editáveis na UI).
+        overrides: ``{offset -> markup}`` com escolhas manuais do operador
+            (precedência total sobre a classificação automática).
+
+    Retorna ``(markups, resumo, sem_ncm)``:
+        - markups: ``{offset -> markup}`` para passar ao exportador.
+        - resumo: ``{"st": n, "normal": n, "sem_ncm": n}`` para o painel.
+        - sem_ncm: offsets sem NCM (o operador decide; default = normal).
+    """
+    overrides = overrides or {}
+    markups: dict[int, float] = {}
+    resumo = {"st": 0, "normal": 0, "sem_ncm": 0}
+    sem_ncm: list[int] = []
+    for offset, ncm in ncms_por_item.items():
+        if not ncm:
+            resumo["sem_ncm"] += 1
+            sem_ncm.append(offset)
+            markups[offset] = overrides.get(offset, markup_normal)
+        elif eh_st(ncm):
+            resumo["st"] += 1
+            markups[offset] = overrides.get(offset, markup_st)
+        else:
+            resumo["normal"] += 1
+            markups[offset] = overrides.get(offset, markup_normal)
+    return markups, resumo, sem_ncm
+
+
 _RE_NCM_TEXTO = re.compile(r"NCM[:\s]*([\d.]{8,12})", re.IGNORECASE)
 
 
