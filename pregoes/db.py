@@ -20,6 +20,13 @@ from . import config
 
 
 SCHEMA = """
+-- Versão do schema (migration versionada). MAX(version) = versão atual.
+-- Permite evoluir o schema em bancos que já têm dados, sem quebrar.
+CREATE TABLE IF NOT EXISTS schema_version (
+    version     INTEGER NOT NULL,
+    applied_at  TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS produtos (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     descricao_canonica  TEXT NOT NULL,
@@ -170,13 +177,69 @@ def conectar(path: Path | None = None) -> sqlite3.Connection:
     return conn
 
 
+# Quantas cópias de backup manter na rotação.
+_BACKUP_MANTER = 10
+
+
+def backup(motivo: str = "auto", path: Path | None = None,
+           manter: int = _BACKUP_MANTER) -> Optional[Path]:
+    """Cópia CONSISTENTE do banco em data/backups/, mesmo com WAL ativo.
+
+    Usa a API nativa `sqlite3.Connection.backup()` — diferente de
+    `shutil.copyfile`, que pegaria um WAL parcial e geraria um backup
+    corrompido. Roda online (não precisa parar a aplicação).
+
+    `motivo` entra no nome do arquivo (ex: 'pre-migration', 'pre-import',
+    'diario') para rastrear por que o backup foi feito. Retorna o caminho
+    gerado, ou None se o banco ainda não existe.
+    """
+    path = Path(path) if path else config.DB_PATH
+    if not path.exists():
+        return None
+    backup_dir = config.DATA_DIR / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Sanitiza o motivo para nome de arquivo
+    motivo_safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in motivo)[:30]
+    destino = backup_dir / f"pregoes_{ts}_{motivo_safe}.db"
+
+    origem = sqlite3.connect(path, timeout=_BUSY_TIMEOUT_S)
+    alvo = sqlite3.connect(destino)
+    try:
+        with alvo:
+            origem.backup(alvo)
+    finally:
+        origem.close()
+        alvo.close()
+
+    _rotacionar_backups(backup_dir, manter)
+    return destino
+
+
+def _rotacionar_backups(backup_dir: Path, manter: int) -> None:
+    """Mantém apenas os `manter` backups mais recentes; apaga o resto."""
+    backups = sorted(
+        backup_dir.glob("pregoes_*.db"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    for antigo in backups[manter:]:
+        try:
+            antigo.unlink()
+        except OSError:
+            pass
+
+
 def init_db(path: Path | None = None) -> Path:
-    """Cria o banco e as tabelas se não existirem. Idempotente."""
+    """Cria/atualiza o banco. Idempotente. Aplica migrations pendentes."""
     path = Path(path) if path else config.DB_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(path, timeout=_BUSY_TIMEOUT_S) as conn:
         conn.execute("PRAGMA journal_mode = WAL;")   # persistente no arquivo
         conn.executescript(SCHEMA)
+    # Migrations rodam DEPOIS do schema base (que cria as tabelas atuais).
+    from . import migrations
+    migrations.migrate(path)
     return path
 
 
