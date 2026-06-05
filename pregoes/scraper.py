@@ -47,7 +47,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Callable, Optional, Protocol
 from urllib.parse import quote_plus
 
-from . import config, credenciais, db
+from . import config, credenciais, db, tributacao
 from .diagnostico import (
     LogCandidatoFinal,
     LogDiagnostico,
@@ -226,6 +226,7 @@ def _parse_card_attributes(attrs: dict, confianca: str) -> Optional[ResultadoBus
         codigo_fornecedor=codigo,
         confianca=confianca,
         fornecedor="almeida",
+        ncm=tributacao.ncm_de_card(attrs.get("data-ncm")),
     )
 
 
@@ -450,6 +451,7 @@ class AlmeidaDistribuidor:
                     'data-nome':           el.getAttribute('data-nome'),
                     'data-preco':          el.getAttribute('data-preco'),
                     'data-marca':          el.getAttribute('data-marca'),
+                    'data-ncm':            el.getAttribute('data-ncm'),
                 }));
             }
         """ % _MAX_RESULTADOS_POR_QUERY)
@@ -505,6 +507,7 @@ def _parse_card_dantas(attrs: dict, confianca: str) -> Optional[ResultadoBusca]:
         codigo_fornecedor=codigo,
         confianca=confianca,
         fornecedor="dantas",
+        ncm=tributacao.ncm_de_card(attrs.get("data-ncm")),
     )
 
 
@@ -661,6 +664,7 @@ class DantasDistribuidora:
                     'data-nome':           el.getAttribute('data-nome'),
                     'data-preco':          el.getAttribute('data-preco'),
                     'data-marca':          el.getAttribute('data-marca'),
+                    'data-ncm':            el.getAttribute('data-ncm'),
                 }));
             }
         """ % _MAX_RESULTADOS_POR_QUERY)

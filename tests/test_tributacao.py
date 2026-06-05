@@ -37,6 +37,21 @@ def test_nao_st_e_entradas_invalidas():
     assert tributacao.eh_st("12") is False         # curto demais p/ classificar
 
 
+def test_ncm_de_card():
+    assert tributacao.ncm_de_card("39174090") == "39174090"
+    assert tributacao.ncm_de_card("3917.40.90") == "39174090"
+    assert tributacao.ncm_de_card(None) is None
+    assert tributacao.ncm_de_card("12345") is None     # não tem 8 dígitos
+
+
+def test_ncm_de_texto_pagina_detalhe():
+    # Como aparece na página do fornecedor (imagens Almeida/Dantas).
+    assert tributacao.ncm_de_texto("Código NCM: 39174090") == "39174090"
+    assert tributacao.ncm_de_texto("... Código NCM: 8544.42.00 ...") == "85444200"
+    assert tributacao.ncm_de_texto("sem ncm aqui") is None
+    assert tributacao.ncm_de_texto(None) is None
+
+
 def test_markup_por_classificacao():
     assert tributacao.markup_para("39174090") == config.MARKUP_ST      # 1.30
     assert tributacao.markup_para("99999999") == config.MARKUP_NORMAL  # 1.45

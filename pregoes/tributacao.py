@@ -75,3 +75,29 @@ def markup_para(
     m_st = markup_st if markup_st is not None else config.MARKUP_ST
     m_normal = markup_normal if markup_normal is not None else config.MARKUP_NORMAL
     return m_st if eh_st(ncm) else m_normal
+
+
+# === Captura do NCM no scraper (a fonte é o site do fornecedor) ===
+
+def ncm_de_card(valor: str | None) -> str | None:
+    """NCM de 8 dígitos vindo de um atributo (ex.: ``data-ncm`` do card), ou None.
+
+    Os cards de busca de Almeida/Dantas podem ou não trazer o NCM — se trouxer,
+    capturamos de graça; se não, fica None e o operador decide na UI.
+    """
+    n = normalizar_ncm(valor)
+    return n if len(n) == 8 else None
+
+
+_RE_NCM_TEXTO = re.compile(r"NCM[:\s]*([\d.]{8,12})", re.IGNORECASE)
+
+
+def ncm_de_texto(texto: str | None) -> str | None:
+    """Extrai o NCM da PÁGINA de detalhe do produto (ex.: ``Código NCM:
+    39174090``). Para o caminho em que o card não traz ``data-ncm`` — basta o
+    scraper passar o texto da página. None se não houver NCM de 8 dígitos.
+    """
+    if not texto:
+        return None
+    m = _RE_NCM_TEXTO.search(texto)
+    return ncm_de_card(m.group(1)) if m else None
