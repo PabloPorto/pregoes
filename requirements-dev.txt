@@ -1,0 +1,13 @@
+# Dependências OPCIONAIS / de desenvolvimento.
+# Instalação: pip install -r requirements-dev.txt
+#
+# Não são necessárias para o cliente final — o caminho de produção usa
+# pdfplumber + Gemini. Instale isto só se for usar a extração visual
+# Docling (opção manual de mapeamento) ou desenvolver/testar.
+
+-r requirements.txt
+
+# Extração visual de PDF (Docling IBM, TableFormer + DocLayNet).
+# Pesada: ~1.5GB com PyTorch CPU. Opção manual sob demanda no Mapeamento
+# Manual; a Camada 2 automática é o Gemini.
+docling>=2.0.0

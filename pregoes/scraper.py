@@ -1067,10 +1067,12 @@ def _invalidar_cache_se_versao_mudou(conn) -> None:
             n = db.cache_limpar(conn)
             arq.write_text(BUSCA_VERSAO)
             if n:
-                print(f"[scraper] Cache invalidado: {n} entradas "
-                      f"removidas (versão de busca mudou).")
+                from .logconf import get_logger
+                get_logger("scraper").info(
+                    "Cache invalidado: %d entradas (versão de busca mudou).", n)
     except Exception:
-        pass
+        from .logconf import get_logger
+        get_logger("scraper").exception("falha ao invalidar cache por versão")
 
 
 def _aplicar_llm_judge(

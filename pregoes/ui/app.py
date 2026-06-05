@@ -18,7 +18,7 @@ import tempfile
 import streamlit as st
 import pandas as pd
 
-from pregoes import config, credenciais, mapeamento_manual
+from pregoes import config, credenciais, erros, mapeamento_manual
 from pregoes.extrator import extrair_com_pipeline
 from pregoes.exportador import exportar
 from pregoes.db import init_db, get_conn
@@ -38,8 +38,22 @@ st.set_page_config(
 )
 style.aplicar_estilo()
 
-# Inicializa banco no primeiro load
+# Logging em arquivo (data/pregoes.log) para diagnóstico remoto, e backup
+# diário no boot — antes de qualquer escrita.
+from pregoes import logconf, db as _db
+logconf.configurar()
+_log = logconf.get_logger("ui")
+
+# Inicializa/migra o banco no primeiro load
 init_db()
+
+# Backup diário automático (1 por dia; rotação cuida do volume).
+if "backup_feito" not in st.session_state:
+    try:
+        _db.backup("diario")
+    except Exception:
+        _log.exception("falha no backup diário de boot")
+    st.session_state.backup_feito = True
 
 # === Estado da sessão ===
 if "tela" not in st.session_state:
@@ -168,7 +182,9 @@ def tela_upload():
             try:
                 resultado = extrair_com_pipeline(tmp_path)
             except Exception as exc:
-                style.bloco_aviso(f"Falha ao ler PDF: {exc}", tipo="danger")
+                _log.exception("falha ao extrair PDF")
+                style.bloco_aviso(erros.mensagem_amigavel(exc, "ler o PDF"),
+                                  tipo="danger")
                 return
 
         # Pipeline automático ficou abaixo do limite? Tenta mapas aprendidos
@@ -263,12 +279,23 @@ def tela_revisao():
             ir_para("mapeamento")
 
     if res.total_itens == 0:
-        style.bloco_aviso(
-            "Nenhum item foi extraído automaticamente. Se o PDF tem uma "
-            "tabela de itens visível, use o <b>Mapeamento Manual</b> acima. "
-            "Se o PDF está escaneado (imagem), precisa OCR — avise o time.",
-            tipo="danger",
-        )
+        from pregoes.extrator import tem_texto_extraivel
+        pdf_path = st.session_state.get("pdf_path")
+        escaneado = pdf_path and not tem_texto_extraivel(pdf_path)
+        if escaneado:
+            style.bloco_aviso(
+                "Este PDF parece ser <b>escaneado</b> (imagem), sem texto que o "
+                "sistema consiga ler. Peça ao órgão o edital em PDF com texto "
+                "(ou copie a tabela de itens para um PDF/planilha). Leitura de "
+                "imagem (OCR) ainda não é suportada.",
+                tipo="danger",
+            )
+        else:
+            style.bloco_aviso(
+                "Nenhum item foi extraído automaticamente. Se o PDF tem uma "
+                "tabela de itens visível, use o <b>Mapeamento Manual</b> acima.",
+                tipo="danger",
+            )
         return
 
     st.caption("Confira os itens abaixo. Você pode editar qualquer célula clicando nela. "
@@ -423,7 +450,9 @@ def _gerar_excel(itens: list, markup: float, selecoes: dict):
                 selecoes=selecoes,
             )
         except Exception as exc:
-            style.bloco_aviso(f"Falha ao gerar planilha: {exc}", tipo="danger")
+            _log.exception("falha ao gerar planilha")
+            style.bloco_aviso(erros.mensagem_amigavel(exc, "gerar a planilha"),
+                              tipo="danger")
             return
 
         # Persistir edital + itens no banco (Fase 2: itens vinculados às seleções)
@@ -872,12 +901,13 @@ def _executar_busca(itens: list, fornecedores_nomes: list[str],
         except Exception as exc:
             # Falha grave (login, layout mudou) — registra como erro
             # global mas segue para o próximo fornecedor.
+            _log.exception("falha grave na busca em %s", nome)
             from pregoes.scraper import ErroBusca
             erros_agregados.append(ErroBusca(
                 indice_item=-1,
                 fornecedor=nome,
                 descricao_resumo="(login/inicialização)",
-                mensagem=f"{type(exc).__name__}: {exc}",
+                mensagem=erros.mensagem_amigavel(exc, f"buscar na {nome.capitalize()}"),
             ))
             stats_concluidos.append((nome, 0, 0, total_itens))
             continue
@@ -1177,11 +1207,10 @@ def _registrar_aprendizado(itens: list, selecoes: dict, resultados: dict) -> Non
                     sel.codigo_fornecedor, sel.marca, sel.preco,
                 )
     except Exception:
-        # Aprendizado é melhoria progressiva — falha aqui não bloqueia
-        # a geração da planilha. Logamos no console pra debug, mas a UI
-        # segue normal.
-        import traceback
-        traceback.print_exc()
+        # Aprendizado é melhoria progressiva — falha aqui não bloqueia a
+        # geração da planilha. Vai para data/pregoes.log (diagnóstico
+        # remoto), a UI segue normal.
+        _log.exception("falha ao registrar aprendizado de seleções")
 
 
 # === Tela: MAPEAMENTO MANUAL ===
@@ -1464,8 +1493,9 @@ def _aba_catalogo():
             try:
                 stats = _importador.importar(paths, fornecedor=forn_arg)
             except Exception as exc:
+                _log.exception("falha ao importar planilhas")
                 style.bloco_aviso(
-                    f"Falha ao importar: {type(exc).__name__}: {exc}",
+                    erros.mensagem_amigavel(exc, "importar as planilhas"),
                     tipo="danger",
                 )
                 return
@@ -1483,13 +1513,26 @@ def _aba_catalogo():
             from pregoes import alinhador
             barra = st.progress(0.0, text="Preparando o catálogo para a busca…")
             try:
-                alinhador.normalizar_catalogo(
+                stats_norm = alinhador.normalizar_catalogo(
                     callback=lambda f, t: barra.progress(
                         min(f / max(t, 1), 1.0),
                         text=f"Preparando o catálogo… {f}/{t}"))
                 barra.progress(1.0, text="Catálogo pronto.")
-            except Exception:
-                barra.empty()  # degrada em silêncio — busca usa modo textual
+                # Cobertura real — avisa se ficou parcial (quota/rede).
+                if stats_norm.get("falhos"):
+                    style.bloco_aviso(
+                        f"{stats_norm['falhos']} produto(s) não foram "
+                        "padronizados (limite da IA ou internet). A busca "
+                        "funciona, mas para cobertura total clique em importar "
+                        "de novo mais tarde.", tipo="warning")
+            except Exception as exc:
+                _log.exception("falha ao padronizar catálogo")
+                barra.empty()
+                style.bloco_aviso(
+                    "Não consegui padronizar os nomes agora "
+                    f"({erros.mensagem_amigavel(exc)}). A busca funciona "
+                    "mesmo assim; tente importar de novo mais tarde.",
+                    tipo="warning")
         st.rerun()
 
 

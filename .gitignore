@@ -16,6 +16,11 @@ data/pregoes.db-shm
 data/pregoes.db-wal
 data/exports/*.xlsx
 
+# Backups do banco e log de runtime (gerados na máquina do cliente)
+data/backups/
+data/pregoes.log
+data/pregoes.log.*
+
 # Relatórios de diagnóstico da busca (gerados em runtime, podem conter
 # descrições de editais reais do cliente — não versionar)
 data/diagnostico/

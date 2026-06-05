@@ -23,17 +23,16 @@ pytest>=8.0.0
 # Após pip install, rodar uma vez: python -m playwright install chromium
 playwright>=1.40.0
 
-# Extração robusta de PDF — camada visual (Docling IBM, TableFormer + DocLayNet).
-# Mantido como opção sob demanda na tela de Mapeamento Manual. Para extração
-# automática quando pdfplumber falha, a Camada 2 padrão agora é Gemini (LLM).
-# Pesada (~1.5GB com PyTorch CPU). Pode ser removida se for confirmado que
-# 100% dos editais reais resolvem com pdfplumber + Gemini.
-docling>=2.0.0
-
-# Camada de extração via LLM (Gemini 2.0 Flash) — Camada 2 automática.
-# Free tier do Google cobre folgadamente o volume alvo (1500 req/dia).
-# Decisão Q11 em QUESTOES_PENDENTES.md.
+# Camada de extração via LLM (Gemini) — Camada 2 automática quando
+# pdfplumber fica < 95%, e o motor da busca (canonização + judge).
+# Billing pago aprovado (~$1-2/mês no volume alvo). Ver Q11/Q12.
 google-genai>=1.0.0
+
+# NOTA: o Docling (camada visual de extração, ~1.5GB com PyTorch) saiu do
+# requirements padrão — é opcional e fica em requirements-dev.txt. A Camada 2
+# automática é o Gemini; o Docling era só uma opção manual de mapeamento.
+# O carregamento já é tardio (import dentro da função), então sua ausência
+# degrada sozinha sem quebrar nada.
 
 # Fuzzy matching de descrições — matcher do catálogo (Camada 0)
 # e componente da relevância híbrida (Camada 2). Decisão Q12.

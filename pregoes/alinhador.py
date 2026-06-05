@@ -135,11 +135,16 @@ def normalizar_catalogo(
     callback=None,
 ) -> dict:
     """Normaliza os produtos do catálogo (one-shot) e grava em
-    `produtos_canonico`. Retorna stats `{total, normalizados, ja_tinham}`.
+    `produtos_canonico`. Retorna stats `{total, normalizados, falhos, ja_tinham}`.
 
     Idempotente: por padrão pula produtos que já têm forma canônica
     (`apenas_faltantes=True`). O cache por descrição (`cache_canonico`)
     também evita re-chamar o LLM para descrições repetidas entre planilhas.
+
+    **Só grava o que o LLM REALMENTE alinhou** (presente em `cache_canonico`).
+    Se a quota/rede falhar, a descrição cai no fallback local — esse NÃO é
+    gravado como canônico, para não "prender" um vocabulário desalinhado.
+    Os que falharam contam em `falhos` e podem ser re-tentados depois.
 
     `callback(feitos, total)` é opcional — para a UI mostrar progresso.
     """
@@ -169,21 +174,37 @@ def normalizar_catalogo(
 
         total = conn.execute("SELECT COUNT(*) FROM produtos").fetchone()[0]
         if not rows:
-            return {"total": total, "normalizados": 0, "ja_tinham": total}
+            return {"total": total, "normalizados": 0, "falhos": 0, "ja_tinham": total}
 
         descricoes = [r["descricao_canonica"] for r in rows]
-        canon = normalizar_canonico(descricoes, conn=conn)
+        normalizar_canonico(descricoes, conn=conn)   # popula cache_canonico
 
-        feitos = 0
+        # Só grava produtos cujo canônico VEIO DO LLM (está no cache). O
+        # fallback local não é cacheado, então não vira canônico preso.
+        hash_por_id = {
+            r["id"]: _hash(normalizar_descricao(r["descricao_canonica"]))
+            for r in rows
+        }
+        cache = db.canonico_buscar_muitos(conn, list(hash_por_id.values()))
+
+        feitos = falhos = 0
         for r in rows:
-            c = canon.get(r["descricao_canonica"])
-            if c:
-                db.produto_canonico_gravar(conn, r["id"], c)
+            canon = cache.get(hash_por_id[r["id"]])
+            if canon:
+                db.produto_canonico_gravar(conn, r["id"], canon)
                 feitos += 1
                 if callback and feitos % 50 == 0:
                     callback(feitos, len(rows))
+            else:
+                falhos += 1
         conn.commit()
-        return {"total": total, "normalizados": feitos, "ja_tinham": total - len(rows)}
+        if falhos:
+            from .logconf import get_logger
+            get_logger("alinhador").warning(
+                "Padronização parcial: %d ok, %d não alinhados (quota/rede?).",
+                feitos, falhos)
+        return {"total": total, "normalizados": feitos, "falhos": falhos,
+                "ja_tinham": total - len(rows)}
     finally:
         if deve_fechar:
             conn.close()
@@ -208,7 +229,13 @@ def _chamar_llm_em_lotes(
             resp = client.models.generate_content(model=modelo, contents=prompt)
             arr = _parse_array(resp.text or "")
         except Exception:
-            continue   # lote falhou — os outros seguem; estes viram fallback
+            # Lote falhou (quota/rede) — os outros seguem; estes viram
+            # fallback local. Loga para diagnóstico (não silencioso).
+            from .logconf import get_logger
+            get_logger("alinhador").warning(
+                "Lote de canonização falhou (%d itens) — virou fallback local.",
+                len(lote))
+            continue
         for obj in arr:
             try:
                 i = int(obj["id"])

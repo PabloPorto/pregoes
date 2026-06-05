@@ -491,6 +491,27 @@ def processar_tabelas_brutas(
     return resultado
 
 
+def tem_texto_extraivel(caminho_pdf: str | Path, min_chars: int = 80) -> bool:
+    """True se o PDF tem texto suficiente para ler (não é escaneado/imagem).
+
+    Checa as primeiras páginas e para assim que acumula `min_chars`. Na dúvida
+    (erro ao abrir), retorna True — deixa o pipeline tentar e falhar com aviso
+    próprio. Usado pela UI para distinguir "PDF escaneado" de "não achei a
+    tabela", dando ao operador uma mensagem clara (P0.6).
+    """
+    try:
+        import pdfplumber
+        total = 0
+        with pdfplumber.open(caminho_pdf) as pdf:
+            for page in pdf.pages[:5]:
+                total += len((page.extract_text() or "").strip())
+                if total >= min_chars:
+                    return True
+        return total >= min_chars
+    except Exception:
+        return True
+
+
 def extrair_pdf(caminho_pdf: str | Path) -> ResultadoExtracao:
     """Extrai itens via pdfplumber + score semântico.
 
