@@ -12,6 +12,7 @@ Este arquivo cuida apenas de **roteamento, estado e composição** das telas —
 não escreve HTML cru nem repete cores hex.
 """
 from pathlib import Path
+import html
 import os
 import re
 import tempfile
@@ -1111,8 +1112,9 @@ def _titulo_item(descricao: str) -> str:
         tecnico = any(c.isdigit() for c in p) or "/" in p or len(p) <= 3
         palavras.append(p.capitalize() if (p.isupper() and not tecnico) else p)
     titulo = " ".join(palavras)
-    if len(titulo) > 70:
-        titulo = titulo[:70].rstrip() + "…"
+    # Encurta só o CABEÇALHO (a descrição completa aparece dentro do item).
+    if len(titulo) > 95:
+        titulo = titulo[:95].rstrip() + "…"
     return (titulo[:1].upper() + titulo[1:]) if titulo else titulo
 
 
@@ -1345,6 +1347,17 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
             f"{_titulo_item(item.descricao)} · :{cor_status}[{label_status}]"
         )
         with st.expander(cabecalho, expanded=False, icon=icone_status):
+            # Descrição COMPLETA e exata do edital. O cabeçalho encurta para
+            # caber na linha; aqui o operador lê o item inteiro (como veio do
+            # edital, sem capitalização nem corte) para julgar os candidatos.
+            st.markdown(
+                "<div style='background:#f8fafc;border:1px solid #e2e8f0;"
+                "border-left:3px solid #1E40AF;border-radius:8px;"
+                "padding:0.6rem 0.85rem;margin-bottom:0.75rem;font-size:0.9rem;"
+                "color:#334155;line-height:1.5'>"
+                f"{html.escape(item.descricao or '')}</div>",
+                unsafe_allow_html=True,
+            )
             if not opcoes:
                 style.bloco_aviso(
                     "Nenhum resultado nos fornecedores. Coluna L ficará em branco.",
