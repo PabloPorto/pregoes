@@ -60,6 +60,19 @@ _VIRGULA_DECIMAL = re.compile(r"(\d),(\d)")
 # Hífen, barra e parênteses são preservados (fazem parte de códigos: ca-50, c/100).
 _PONTUACAO_RUIDO = re.compile(r"[,;:]")
 
+# Cola número + unidade de medida separados por espaço: "500 L" → "500l",
+# "12,5 MM" → "12.5mm", "750 V" → "750v".
+# PORQUÊ: a unidade sozinha é descartada como keyword (aparece em tudo) e leva
+# o número junto na poda — "caixa d agua 500 L" vira só "caixa agua" (genérico
+# demais → casa errado/alucina). Colada, "500l" sobrevive como token distintivo
+# e a busca acerta. Roda DEPOIS do lower e da vírgula-decimal (o número já é
+# "500"/"12.5"). Só unidades de MEDIDA — unidades de embalagem (pct/und) ficam
+# de fora porque o número antes costuma ser a dimensão, não a contagem do pacote
+# (ex.: "100 X 2.5 PCT" → "2.5" é a bitola, não "2.5 pacotes").
+_UNIDADES_MEDIDA = r"mm2|mm|cm|km|ml|kg|mg|kw|kva|kv|mah|ah|va|hp|cv|l|m|g|v|w"
+_NUM_UNIDADE = re.compile(
+    r"\b(\d+(?:\.\d+)?)\s+(" + _UNIDADES_MEDIDA + r")\b")
+
 # Grafias divergentes de alta frequência no domínio: a mesma característica
 # escrita de formas diferentes no edital vs no catálogo do fornecedor. Mapeia
 # para uma forma canônica (Tier 2.5 / 2026-06). Conservador — só pares reais
@@ -142,9 +155,11 @@ def normalizar_descricao(descricao: str | None) -> str:
     >>> normalizar_descricao("14) ACO CA–50, ½, VERGALHAO C/ 12M SUPERFÍCIE LISA")
     'aco ca-50 1/2 vergalhao c/ 12m superficie lisa'
     >>> normalizar_descricao("10) ACO CA-50, 12,5 MM, VERGALHAO")
-    'aco ca-50 12.5 mm vergalhao'
+    'aco ca-50 12.5mm vergalhao'
     >>> normalizar_descricao("VÁLVULA  DE  RETENÇÃO(SUCÇÃO)\\n32MM")
     'valvula de retencao(succao) 32mm'
+    >>> normalizar_descricao("CAIXA D AGUA 500 L")  # unidade colada ao número
+    'caixa d agua 500l'
     """
     if not descricao:
         return ""
@@ -168,6 +183,9 @@ def normalizar_descricao(descricao: str | None) -> str:
     # colapso de espaços. Barato e estável.
     for padrao, canonico in _GRAFIAS_EQUIVALENTES:
         s = padrao.sub(canonico, s)
+    # Cola "número unidade" (ver _NUM_UNIDADE): "500 l" → "500l". Preventivo
+    # contra o espaço solto que perde a medida na busca.
+    s = _NUM_UNIDADE.sub(r"\1\2", s)
     s = _WHITESPACE.sub(" ", s).strip()
     return s
 
@@ -186,7 +204,9 @@ def keywords(descricao: str | None) -> list[str]:
     >>> keywords("1) ABRAÇADEIRA DE NYLON 100 X 2.5 PCT C/100UND")
     ['abracadeira', 'nylon', 'c/100und']
     >>> keywords("10) ACO CA-50, 12,5 MM, VERGALHAO C/ 12M SUPERFÍCIE NERVURADA")
-    ['aco', 'ca-50', 'vergalhao', '12m', 'superficie', 'nervurada']
+    ['aco', 'ca-50', '12.5mm', 'vergalhao', '12m', 'superficie', 'nervurada']
+    >>> keywords("CAIXA D AGUA 500 L")  # '500l' sobrevive; sem o fix viria só caixa/agua
+    ['caixa', 'agua', '500l']
     """
     normalizada = normalizar_descricao(descricao)
     if not normalizada:

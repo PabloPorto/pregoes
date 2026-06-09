@@ -32,7 +32,7 @@ from pregoes.extrator import ItemExtraido
     ("14) ACO CA–50, ½, VERGALHAO C/ 12M SUPERFÍCIE LISA",
      "aco ca-50 1/2 vergalhao c/ 12m superficie lisa"),
     ("10) ACO CA-50, 12,5 MM, VERGALHAO",
-     "aco ca-50 12.5 mm vergalhao"),
+     "aco ca-50 12.5mm vergalhao"),   # nº+unidade colados (preventivo do espaço)
     ("VÁLVULA  DE  RETENÇÃO(SUCÇÃO)\n32MM",
      "valvula de retencao(succao) 32mm"),
     ("  ÁCIDO   MURIÁTICO  ", "acido muriatico"),
@@ -67,6 +67,23 @@ def test_keywords_descarta_ruido():
 def test_keywords_vazio():
     assert keywords("") == []
     assert keywords(None) == []
+
+
+def test_unidade_separada_do_numero_e_colada():
+    """Preventivo do espaço número-unidade: '500 L' (separado) deve normalizar
+    IGUAL a '500L' (colado), preservando a medida como token distintivo. Sem
+    isto, a unidade solta é descartada e leva o número junto → query genérica
+    ('caixa agua') que casa errado/alucina."""
+    assert normalizar_descricao("CAIXA D AGUA 500 L") == \
+           normalizar_descricao("CAIXA D AGUA 500L") == "caixa d agua 500l"
+    # A medida sobrevive como keyword distintiva nos dois casos.
+    assert keywords("CAIXA D AGUA 500 L") == keywords("CAIXA D AGUA 500L")
+    assert "500l" in keywords("CAIXA D AGUA 500 L")
+    # Outras unidades comuns no domínio elétrico/hidráulico.
+    assert normalizar_descricao("CABO 2,5 MM 750 V") == "cabo 2.5mm 750v"
+    assert normalizar_descricao("LAMPADA LED 9 W") == "lampada led 9w"
+    # NÃO cola unidade de embalagem (o número antes é a bitola, não a contagem).
+    assert normalizar_descricao("NYLON 100 X 2.5 PCT") == "nylon 100 x 2.5 pct"
 
 
 # === Relevância ===
