@@ -13,6 +13,7 @@ usando openpyxl.Translator (mantém $V$4 absoluto e ajusta L504→L505 relativo)
 """
 from __future__ import annotations
 
+import os
 import re
 import shutil
 from dataclasses import dataclass
@@ -58,6 +59,73 @@ LINHA_TOTAL_REFERENCIA = 505                           # =SUM(Y5:Y504)
 LINHA_CABECALHO_TOTAL = 506                            # 'FATURAMENTO', 'MARGEM', 'LUCRO'
 LINHA_TOTAL_FINAL = 507                                # =SUM(I5:I504), =G507/C507, =SUM(K5:K504)
 
+# Coluna (1-based) mais à direita que o exportador escreve: U = 21 (preço,
+# código e marca vindos do scraper). Define a largura mínima do template.
+_COLUNA_MAX_ESCRITA = 21
+
+
+def validar_template(template_path: Path) -> None:
+    """Confere que o template tem a estrutura que o exportador assume.
+
+    PORQUÊ: o cliente abre o MATRIZ no Excel e pode, sem querer, mover uma
+    coluna, apagar uma fórmula ou salvar por cima. Sem esta checagem, o
+    exportador escreveria descrição/preço na célula errada ou deixaria de
+    aplicar o markup — e a planilha entregue ao pregoeiro sairia corrompida
+    EM SILÊNCIO (erro financeiro). Aqui falhamos cedo, com mensagem clara em
+    português, ANTES de copiar o template e começar a preencher.
+
+    Invariantes (calibrados no template real do cliente — ver G5=`=S5*1.45`):
+    - existe uma aba ativa que alcança ao menos a coluna U (preço/cód/marca);
+    - os cabeçalhos-âncora da linha 4 (B,C,D,E,F,L,T,U) não estão vazios;
+    - a fórmula de PREÇO VENDA da coluna G, na primeira e na última linha do
+      bloco de itens, é do tipo `=S{n}*<markup>` — a base que o markup por
+      item reescreve. Se esse padrão sumiu, o markup falharia calado.
+
+    Levanta ValueError (mensagem para leigo) se algo não bate.
+    """
+    aviso_restaurar = ("Restaure uma cópia limpa do MATRIZ (reinstale ou "
+                       "peça o arquivo original) e tente de novo.")
+    try:
+        wb = load_workbook(template_path)   # com fórmulas (sem data_only)
+    except Exception as exc:
+        raise ValueError(
+            f"Não foi possível abrir o template '{template_path.name}' "
+            f"({type(exc).__name__}). O arquivo pode estar corrompido. "
+            f"{aviso_restaurar}"
+        ) from exc
+    try:
+        ws = wb.active
+        if ws is None:
+            raise ValueError(
+                f"O template '{template_path.name}' não tem planilha ativa. "
+                f"{aviso_restaurar}")
+        if (ws.max_column or 0) < _COLUNA_MAX_ESCRITA:
+            raise ValueError(
+                f"O template '{template_path.name}' tem colunas a menos que o "
+                f"esperado (não alcança a coluna U de preço/marca). "
+                f"{aviso_restaurar}")
+        faltando = [c for c in ("B", "C", "D", "E", "F", "L", "T", "U")
+                    if not str(ws[f"{c}{config.LINHA_CABECALHO}"].value
+                               or "").strip()]
+        if faltando:
+            raise ValueError(
+                f"O template '{template_path.name}' está com cabeçalhos vazios "
+                f"nas colunas {', '.join(faltando)} (linha "
+                f"{config.LINHA_CABECALHO}). Provável coluna movida ou apagada. "
+                f"{aviso_restaurar}")
+        for linha in (LINHA_PRIMEIRO_ITEM, LINHA_ULTIMO_ITEM_TEMPLATE):
+            valor = ws[f"G{linha}"].value
+            if not (isinstance(valor, str)
+                    and re.search(r"S\d+", valor)
+                    and re.search(r"\*\s*\d+(?:\.\d+)?", valor)):
+                raise ValueError(
+                    f"A fórmula de PREÇO VENDA da coluna G (linha {linha}) do "
+                    f"template '{template_path.name}' não está no formato "
+                    f"esperado (=S{linha}*markup). Sem ela o preço de venda "
+                    f"sairia errado. {aviso_restaurar}")
+    finally:
+        wb.close()
+
 
 def exportar(
     itens: Iterable[ItemExtraido],
@@ -96,6 +164,9 @@ def exportar(
     template_path = Path(template) if template else config.TEMPLATE_MATRIZ
     if not template_path.exists():
         raise FileNotFoundError(f"Template não encontrado: {template_path}")
+    # Falha cedo e com mensagem clara se o cliente moveu/apagou coluna ou
+    # corrompeu o template — antes de copiar e preencher (P1.4).
+    validar_template(template_path)
 
     itens = list(itens)
     if not itens:
@@ -109,10 +180,19 @@ def exportar(
     destino = Path(destino)
     destino.parent.mkdir(parents=True, exist_ok=True)
 
-    # Cópia binária do template — preserva tudo (estilos, fórmulas, mesclagens)
-    shutil.copyfile(template_path, destino)
+    # Escrita ATÔMICA: monta tudo num arquivo temporário e só "publica" no
+    # destino final com um rename atômico no fim. Se algo falhar no meio do
+    # preenchimento/save, o destino nunca aparece pela metade (e, se já existia
+    # de uma exportação anterior, fica intacto). (P1.5)
+    # Mantém o sufixo .xlsx no temporário — o openpyxl valida a extensão ao
+    # abrir/salvar e recusaria um ".tmp".
+    destino_tmp = destino.with_name(f"{destino.stem}.part{destino.suffix}")
+    destino_tmp.unlink(missing_ok=True)   # remove lixo de uma falha anterior
 
-    wb = load_workbook(destino)   # SEM data_only — mantém fórmulas
+    # Cópia binária do template — preserva tudo (estilos, fórmulas, mesclagens)
+    shutil.copyfile(template_path, destino_tmp)
+
+    wb = load_workbook(destino_tmp)   # SEM data_only — mantém fórmulas
     ws = wb.active
 
     # Preencher cabeçalho (C1, C2) — também texto livre, mesma neutralização
@@ -168,7 +248,8 @@ def exportar(
         if m_item is not None:
             _aplicar_markup_em_linha(ws, linha, m_item)
 
-    wb.save(destino)
+    wb.save(destino_tmp)
+    os.replace(destino_tmp, destino)   # rename atômico → publicação do destino
     return destino
 
 

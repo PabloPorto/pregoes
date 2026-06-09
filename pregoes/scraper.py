@@ -308,6 +308,13 @@ class AlmeidaDistribuidor:
             self._browser = self._playwright.chromium.launch(headless=self._headless)
             self._context = self._browser.new_context(viewport={"width": 1280, "height": 900})
             self._page = self._context.new_page()
+            # Bound de tempo por operação Playwright (navegação, espera de
+            # seletor, clique). Centralizado em config.SCRAPER_TIMEOUT_SEGUNDOS
+            # para afinar num lugar só durante o piloto. 30s = comportamento
+            # atual (era o default implícito do Playwright) — zero regressão.
+            _timeout_ms = config.SCRAPER_TIMEOUT_SEGUNDOS * 1000
+            self._page.set_default_timeout(_timeout_ms)
+            self._page.set_default_navigation_timeout(_timeout_ms)
             self._login(self._page)
         except BaseException:
             self._fechar()
@@ -336,7 +343,7 @@ class AlmeidaDistribuidor:
 
     def _login(self, page) -> None:
         page.goto(f"{_BASE_URL_ALMEIDA}/entrar",
-                  wait_until="networkidle", timeout=30_000)
+                  wait_until="networkidle", timeout=config.SCRAPER_TIMEOUT_SEGUNDOS * 1000)
         page.locator("input[name='email']").first.fill(self._email)
         senha_input = page.locator("input[name='senha']").first
         senha_input.fill(self._senha)
@@ -436,7 +443,7 @@ class AlmeidaDistribuidor:
         """Faz uma busca crua usando a página recebida e retorna até N
         resultados parseados (sem filtro de relevância — caller filtra)."""
         url = f"{_BASE_URL_ALMEIDA}/busca?s={quote_plus(query)}"
-        page.goto(url, wait_until="networkidle", timeout=30_000)
+        page.goto(url, wait_until="networkidle", timeout=config.SCRAPER_TIMEOUT_SEGUNDOS * 1000)
         page.wait_for_timeout(1_500)
 
         # Pega todos os cards e seus atributos data-* num único round-trip
@@ -561,6 +568,13 @@ class DantasDistribuidora:
             self._browser = self._playwright.chromium.launch(headless=self._headless)
             self._context = self._browser.new_context(viewport={"width": 1280, "height": 900})
             self._page = self._context.new_page()
+            # Bound de tempo por operação Playwright (navegação, espera de
+            # seletor, clique). Centralizado em config.SCRAPER_TIMEOUT_SEGUNDOS
+            # para afinar num lugar só durante o piloto. 30s = comportamento
+            # atual (era o default implícito do Playwright) — zero regressão.
+            _timeout_ms = config.SCRAPER_TIMEOUT_SEGUNDOS * 1000
+            self._page.set_default_timeout(_timeout_ms)
+            self._page.set_default_navigation_timeout(_timeout_ms)
             self._login(self._page)
         except BaseException:
             self._fechar()
@@ -588,7 +602,7 @@ class DantasDistribuidora:
 
     def _login(self, page) -> None:
         page.goto(f"{_BASE_URL_DANTAS}/entrar",
-                  wait_until="networkidle", timeout=30_000)
+                  wait_until="networkidle", timeout=config.SCRAPER_TIMEOUT_SEGUNDOS * 1000)
         page.locator("input[name='email']").first.fill(self._email)
         senha_input = page.locator("input[name='senha']").first
         senha_input.fill(self._senha)
@@ -656,7 +670,7 @@ class DantasDistribuidora:
 
     def _buscar_query(self, page, query: str, confianca: str) -> list[ResultadoBusca]:
         url = f"{_BASE_URL_DANTAS}/busca?s={quote_plus(query)}"
-        page.goto(url, wait_until="networkidle", timeout=30_000)
+        page.goto(url, wait_until="networkidle", timeout=config.SCRAPER_TIMEOUT_SEGUNDOS * 1000)
         page.wait_for_timeout(1_500)
 
         cards_attrs = page.evaluate("""
@@ -1030,6 +1044,15 @@ def buscar_precos_para_itens(
                         _marcar_aprovados_judge(log_item, bag_judged, item.descricao)
 
             resultados[idx] = bag
+
+            # Commit incremental: persiste já o cache deste item. Sem isto, uma
+            # interrupção no meio do lote (operador fecha a janela, queda de
+            # rede, timeout) descartaria TODAS as buscas da rodada — meia hora
+            # de trabalho perdida. Com WAL o custo por commit é baixo; o ganho
+            # é a re-busca retomar do cache de onde parou.
+            if conn is not None:
+                conn.commit()
+
             if progresso_callback is not None:
                 progresso_callback(idx + 1, total, item.descricao[:60])
 
@@ -1196,7 +1219,7 @@ def consultar_ncms(pedidos, *, progresso=None) -> dict:
                 for chave, url in lista:
                     try:
                         scraper._page.goto(url, wait_until="networkidle",
-                                           timeout=30_000)
+                                           timeout=config.SCRAPER_TIMEOUT_SEGUNDOS * 1000)
                         scraper._page.wait_for_timeout(500)
                         txt = scraper._page.evaluate("() => document.body.innerText")
                         out[chave] = tributacao.ncm_de_texto(txt)

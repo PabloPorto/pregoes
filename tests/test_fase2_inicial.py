@@ -550,3 +550,43 @@ def test_buscar_paralelo_serial_quando_mock_sem_pool(tmp_path, monkeypatch):
                               usar_cache=False)
     # Como pool não definido → serial → ordem garantida
     assert progresso == [(1, "I0"), (2, "I1"), (3, "I2"), (4, "I3"), (5, "I4")]
+
+
+# === Commit incremental do cache (sprint P1 / A1) ===
+
+def test_buscar_precos_commit_incremental_preserva_itens_antes_de_interrupcao(
+        tmp_path, monkeypatch):
+    """Regressão (A1): se o lote é interrompido no meio (operador fecha a
+    janela, queda de rede — aqui simulado por um callback que levanta), as
+    buscas já concluídas DEVEM estar commitadas no cache. Sem o commit
+    incremental, o commit só aconteceria no fim (nunca alcançado) e o
+    `finally: conn.close()` descartaria a transação inteira — a rodada toda
+    de buscas se perderia e a re-busca recomeçaria do zero."""
+    from pregoes import db, config
+
+    db_path = tmp_path / "incremental.db"
+    monkeypatch.setattr(config, "DB_PATH", db_path)
+    db.init_db(db_path)
+
+    itens = [ItemExtraido(descricao=d) for d in ("ITEM A", "ITEM B", "ITEM C")]
+    forn = _FornecedorFake(
+        "fake", {it.descricao: [_r(it.descricao, "M", 1.0)] for it in itens})
+
+    def cb_que_trava(atual, total, msg):
+        # Levanta DEPOIS de concluir o 2º item (atual=2): A e B já passaram
+        # pelo commit incremental; C nem chega a ser buscado.
+        if atual == 2:
+            raise KeyboardInterrupt("janela fechada no meio da busca")
+
+    with pytest.raises(KeyboardInterrupt):
+        buscar_precos_para_itens(itens, [forn], progresso_callback=cb_que_trava,
+                                  usar_cache=True, usar_catalogo=False)
+
+    # Conexão NOVA (a do lote foi fechada no finally). A e B persistem; C não.
+    conn = db.conectar()
+    try:
+        assert db.cache_buscar(conn, normalizar_descricao("ITEM A"), "fake") is not None
+        assert db.cache_buscar(conn, normalizar_descricao("ITEM B"), "fake") is not None
+        assert db.cache_buscar(conn, normalizar_descricao("ITEM C"), "fake") is None
+    finally:
+        conn.close()

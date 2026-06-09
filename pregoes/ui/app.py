@@ -155,6 +155,70 @@ def ir_para(tela: str):
     st.rerun()
 
 
+# Estado de sessão pertencente ao pregão em andamento (extração, revisão,
+# busca, seleções). "Novo pregão" descarta tudo isto.
+CHAVES_PREGAO = ("extracao", "df_editavel", "resultados_busca",
+                 "selecoes", "pagina_busca", "itens_revisados",
+                 "usando_tabelas_docling", "mapeamento_tabela_idx")
+
+
+def _limpar_pregao() -> None:
+    """Descarta o estado do pregão atual da sessão."""
+    for k in CHAVES_PREGAO:
+        st.session_state.pop(k, None)
+
+
+def _tem_pregao_em_andamento() -> bool:
+    """Há trabalho que seria perdido ao começar um novo pregão?
+
+    Sinais: um PDF já extraído, itens já revisados ou marcas/preços já
+    escolhidos. (Não inspeciona `df_editavel` porque a verdade de um
+    DataFrame é ambígua e levantaria exceção.)
+    """
+    if st.session_state.get("extracao") is not None:
+        return True
+    if st.session_state.get("itens_revisados"):
+        return True
+    if st.session_state.get("selecoes"):
+        return True
+    return False
+
+
+@st.dialog("Começar um novo pregão?")
+def _confirmar_novo_pregao() -> None:
+    """Confirmação antes de descartar um pregão em andamento (P1.7).
+
+    Evita que um clique acidental em 'Novo pregão' apague extração, revisão e
+    seleções de marca já feitas — trabalho de minutos perdido em silêncio.
+
+    Aberto no nível superior do script (não dentro da sidebar) via a flag
+    `_confirmar_novo_pregao`, para o modal não renderizar dentro da sidebar.
+    """
+    st.warning("Você tem um pregão em andamento. Começar um novo vai descartar "
+               "a extração, a revisão e as marcas/preços já escolhidos.")
+    col_sim, col_nao = st.columns(2)
+    if col_sim.button("Descartar e começar novo", type="primary",
+                      width="stretch"):
+        st.session_state.pop("_confirmar_novo_pregao", None)
+        _limpar_pregao()
+        ir_para("upload")          # ir_para já faz st.rerun()
+    if col_nao.button("Continuar o atual", width="stretch"):
+        st.session_state.pop("_confirmar_novo_pregao", None)
+        st.rerun()                 # fecha o diálogo sem mexer no estado
+
+
+def _novo_pregao() -> None:
+    """Inicia um novo pregão. Se há trabalho a perder, sinaliza para abrir o
+    modal de confirmação (no nível superior); senão limpa direto e navega.
+    Usado pelos atalhos da sidebar e da home."""
+    if _tem_pregao_em_andamento():
+        st.session_state["_confirmar_novo_pregao"] = True
+        st.rerun()
+    else:
+        _limpar_pregao()
+        ir_para("upload")
+
+
 # === Sidebar fixa ===
 def _renderizar_sidebar():
     """Navegação global + status do operador. Sempre visível."""
@@ -180,14 +244,12 @@ def _renderizar_sidebar():
                 width="stretch",
                 type="primary" if ativo else "secondary",
             ):
-                # "Novo pregão" pelo menu sempre limpa estado (mesma intenção do
-                # botão antigo na home).
+                # "Novo pregão" pede confirmação se há trabalho a perder
+                # (extração/revisão/seleções); as demais telas só navegam.
                 if tela_id == "upload":
-                    for k in ("extracao", "df_editavel", "resultados_busca",
-                              "selecoes", "pagina_busca", "itens_revisados",
-                              "usando_tabelas_docling", "mapeamento_tabela_idx"):
-                        st.session_state.pop(k, None)
-                ir_para(tela_id)
+                    _novo_pregao()
+                else:
+                    ir_para(tela_id)
 
         st.markdown("###### Status", unsafe_allow_html=True)
         cred_almeida = credenciais.carregar("almeida")
@@ -228,11 +290,7 @@ def tela_home():
     # quem chega na tela home e quer começar imediatamente.
     st.write("")
     if st.button("Iniciar novo pregão", type="primary"):
-        for k in ("extracao", "df_editavel", "resultados_busca",
-                  "selecoes", "pagina_busca", "itens_revisados",
-                  "usando_tabelas_docling", "mapeamento_tabela_idx"):
-            st.session_state.pop(k, None)
-        ir_para("upload")
+        _novo_pregao()
 
 
 # === Tela: UPLOAD ===
@@ -1886,3 +1944,8 @@ TELAS = {
 
 _renderizar_sidebar()
 TELAS[st.session_state.tela]()
+
+# Confirmação de "Novo pregão" — aberta aqui, no nível superior do script
+# (fora do `with st.sidebar`), para o modal não renderizar dentro da sidebar.
+if st.session_state.get("_confirmar_novo_pregao"):
+    _confirmar_novo_pregao()

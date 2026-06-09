@@ -320,5 +320,60 @@ def test_dedup_opcoes_mantem_precos_diferentes():
     assert len(app._dedup_opcoes([p25, p32])) == 2   # produtos distintos ficam
 
 
+# === Sprint P1 / C1 — confirmar antes de descartar o pregão (P1.7) ===
+#
+# Testa a LÓGICA de detecção/limpeza diretamente sobre o session_state falso
+# (app.st.session_state). O fluxo de UI do modal foi validado à parte via
+# streamlit.testing.AppTest; aqui travamos as duas funções puras que decidem
+# se há trabalho a perder e que apagam o estado do pregão.
+
+def _reset_ss():
+    app.st.session_state.clear()
+
+
+def test_tem_pregao_em_andamento_falso_quando_vazio():
+    _reset_ss()
+    assert app._tem_pregao_em_andamento() is False
+
+
+def test_tem_pregao_em_andamento_detecta_extracao_revisao_selecoes():
+    _reset_ss()
+    app.st.session_state["extracao"] = object()      # PDF já extraído
+    assert app._tem_pregao_em_andamento() is True
+
+    _reset_ss()
+    app.st.session_state["itens_revisados"] = [1, 2]  # revisão feita
+    assert app._tem_pregao_em_andamento() is True
+
+    _reset_ss()
+    app.st.session_state["selecoes"] = {0: "x"}       # marca escolhida
+    assert app._tem_pregao_em_andamento() is True
+
+
+def test_tem_pregao_em_andamento_ignora_colecoes_vazias():
+    """dict/lista vazios não contam como trabalho — não vale incomodar com o
+    modal de confirmação se não há nada a perder."""
+    _reset_ss()
+    app.st.session_state["selecoes"] = {}
+    app.st.session_state["itens_revisados"] = []
+    assert app._tem_pregao_em_andamento() is False
+
+
+def test_limpar_pregao_remove_chaves_do_pregao_e_preserva_navegacao():
+    _reset_ss()
+    for k in app.CHAVES_PREGAO:
+        app.st.session_state[k] = "algo"
+    app.st.session_state["tela"] = "busca_precos"     # navegação, não é do pregão
+    app.st.session_state["_confirmar_novo_pregao"] = True
+
+    app._limpar_pregao()
+
+    for k in app.CHAVES_PREGAO:
+        assert k not in app.st.session_state, f"{k} deveria ter sido removida"
+    # _limpar_pregao só mexe nas chaves do pregão; navegação fica intacta.
+    assert app.st.session_state.get("tela") == "busca_precos"
+    _reset_ss()
+
+
 if __name__ == "__main__":  # pragma: no cover
     sys.exit(pytest.main([__file__, "-v"]))

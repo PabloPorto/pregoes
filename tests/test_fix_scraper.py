@@ -62,6 +62,12 @@ class _FakePage:
     def wait_for_timeout(self, *a, **k):
         pass
 
+    def set_default_timeout(self, *a, **k):
+        pass
+
+    def set_default_navigation_timeout(self, *a, **k):
+        pass
+
 
 class _FakeContext:
     def __init__(self, cookies):
