@@ -607,3 +607,34 @@ def test_buscar_precos_commit_incremental_preserva_itens_antes_de_interrupcao(
         assert db.cache_buscar(conn, normalizar_descricao("ITEM C"), "fake") is None
     finally:
         conn.close()
+
+
+# === Dedup de candidatos antes do corte top-N (busca cross-brand) ===
+
+def test_top_n_dedup_remove_repetidos_e_surface_distintos():
+    """O site repete cards (mesmo produto/fornecedor) — visto ao vivo:
+    L.R.METAIS×2, LUCONI×2 no mesmo resultado. _top_n_por_relevancia deve
+    DEDUPLICAR antes do corte, para as repetições não gastarem slots do top-N
+    e o operador ver N produtos DISTINTOS (mais opções cross-brand)."""
+    from pregoes.scraper import _top_n_por_relevancia
+    desc = "VALVULA PARA LAVATORIO SEM LADRAO"
+    cands = [
+        _r("VALVULA P/ LAVATORIO 1603 SEM LADRAO", "L.R.METAIS", 10.0, codigo="1"),
+        _r("VALVULA P/ LAVATORIO 1603 SEM LADRAO", "L.R.METAIS", 10.0, codigo="1"),  # dup
+        _r("VALVULA P/ LAVATORIO SEM LADRAO BRANCO", "LUCONI", 9.0, codigo="2"),
+        _r("VALVULA P/ LAVATORIO SEM LADRAO BRANCO", "LUCONI", 9.0, codigo="2"),  # dup
+        _r("VALVULA P/ LAVATORIO SEM LADRAO PRETO", "ASTRA", 8.0, codigo="3"),
+        _r("VALVULA P/ LAVATORIO SOCEL SEM UNHA", "SOCELPLAST", 7.0, codigo="4"),
+    ]
+    # ANTES (sem dedup), o top-5 traria L.R×2, LUCONI×2, ASTRA → 3 distintos.
+    # AGORA o top-5 traz 4 produtos DISTINTOS (SOCELPLAST deixa de ser cortado).
+    res = _top_n_por_relevancia(desc, cands, 5)
+    marcas = [r.marca for r in res]
+    assert len(res) == 4, marcas                 # 6 cards, 2 repetidos → 4 distintos
+    assert marcas.count("L.R.METAIS") == 1       # repetição colapsada
+    assert marcas.count("LUCONI") == 1
+    assert "ASTRA" in marcas and "SOCELPLAST" in marcas  # distinto antes cortado, agora aparece
+    # Ordenação por relevância preservada: o 1º é um match de relevância máxima
+    # (sem regressão no topo — o dedup só remove repetição, não reordena por mérito).
+    assert relevancia(desc, res[0].descricao_encontrada) == max(
+        relevancia(desc, r.descricao_encontrada) for r in res)

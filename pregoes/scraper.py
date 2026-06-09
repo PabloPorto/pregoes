@@ -189,7 +189,25 @@ def _top_n_por_relevancia(
         for c in candidatos
     ]
     pontuados.sort(key=lambda x: (-x[0], x[1]))
-    return [c for _, _, c in pontuados[:n]]
+    # Dedup ANTES do corte: o site repete cards (visto ao vivo: L.R.METAIS×2,
+    # LUCONI×2 no mesmo resultado). Sem deduplicar aqui, as repetições gastam
+    # slots do top-N e o operador vê MENOS produtos distintos para escolher.
+    # Mantém a 1ª ocorrência (maior relevância). Chave = mesmo produto do mesmo
+    # fornecedor (código+marca+descrição+preço).
+    vistos: set = set()
+    unicos: list[ResultadoBusca] = []
+    for _rel, _preco, c in pontuados:
+        chave = (
+            (c.codigo_fornecedor or "").strip(),
+            (c.marca or "").strip().lower(),
+            (c.descricao_encontrada or "").strip().lower(),
+            c.preco,
+        )
+        if chave in vistos:
+            continue
+        vistos.add(chave)
+        unicos.append(c)
+    return unicos[:n]
 
 
 def _parse_card_attributes(attrs: dict, confianca: str) -> Optional[ResultadoBusca]:
