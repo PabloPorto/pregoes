@@ -10,13 +10,30 @@
 - **Billing pago aprovado.** Custo real **medido**: ~$1-2/mês no volume alvo
   (chamada do judge = 641 tokens ≈ US$0,00006). O free tier (20 req/dia) era
   insuficiente; o tier pago resolve. Substitui a estimativa antiga de "$15/mês".
-- **Catálogo populado:** 7 planilhas reais importadas → 1408 produtos (880
-  Almeida + 123 Dantas), normalizados pelo Gemini.
+- **Catálogo populado:** 7 planilhas reais importadas → 1408 produtos
+  normalizados pelo Gemini (cobertura de código: 880 com código Almeida ~62%,
+  123 com código Dantas ~9% — não é partição do total; alavanca 1).
 - **Confiabilidade medida em edital real da especialidade:** busca por código
   ~89-91% certa, ~2% alucinação, 0 nos itens sem correspondência.
 - **Prontidão de produção:** guardrails P0 implementados (migration de schema,
   backup automático, log em arquivo, mensagens de erro para leigo, falhas não
   silenciosas, sinalização de PDF escaneado). Ver plano de produção.
+- **Empacotamento .exe (P1.1): ENTREGUE e testado no Windows pelo cliente.**
+  `run_app.py` (launcher), `pregoes.spec` (PyInstaller), `build_exe.bat`,
+  `BUILD.md`; `config.py` ciente de execução *frozen* (dados ao lado do
+  `.exe`). Pendências de robustez seguem abertas (P1.4 validar template,
+  P1.6 cancelar busca em andamento).
+- **Fase 4 (markup por Substituição Tributária): ENTREGUE e funcionando.**
+  Itens cujo NCM consta na lista de ST do estado usam markup 1,30; os demais,
+  1,45 — POR ITEM, editável por pregão na UI. Componentes:
+  `pregoes/tributacao.py`, `pregoes/dados/ncm_st.json` (389 NCMs), painel
+  "Markup deste pregão" + botão "Identificar NCM" na UI. Ver Q3/decisões
+  abaixo. **Escopo entregue = SÓ o markup**; a Fase 4 completa (importador de
+  NF-e via lxml + preenchimento de %ST/%IPI/%Frete pela fórmula do contador)
+  ficou FORA de escopo por decisão do cliente.
+- **Catálogo populado:** 7 planilhas reais importadas → 1408 produtos,
+  normalizados pelo Gemini. Camada 0 ativa. Cobertura de código Almeida ~62%,
+  Dantas só ~9% (alavanca 1 — depende de mais dado do cliente).
 - Docling saiu do `requirements.txt` (→ `requirements-dev.txt`); extração
   automática é pdfplumber + Gemini.
 
@@ -47,7 +64,10 @@ python -m pregoes.importador --fornecedor=dantas  data/historico/*.xlsx
 ```
 
 **Pendente (não bloqueia funcionamento).**
-- Tela UI para acionar o importador (hoje é CLI).
+- ✅ **Tela UI para acionar o importador: RESOLVIDA.** Há tela de importação
+  na UI; a importação é transacional por arquivo (commit/rollback por
+  planilha) e fica rastreada na tabela `imports_log`. O CLI continua
+  disponível.
 - Dashboard de variação de preço por marca/fornecedor (item extra do plano).
 - Mostrar `codigo_hits` e `llm_judge_hits` no painel "Busca concluída"
   da UI para o operador entender o que foi resolvido por cada camada
@@ -205,7 +225,13 @@ Item do edital (descrição + opcional valor de referência)
 
 ---
 
-### Q11. Camada LLM (Gemini 2.0 Flash) — próxima grande frente de extração
+### Q11. Camada LLM (Gemini 2.0 Flash) — ✅ RESOLVIDA (implementada e em produção)
+
+> **Status atual.** O plano abaixo foi **executado**. O Gemini está integrado
+> e em produção (extração Camada 2 + canonização do catálogo + judge da busca),
+> com billing pago aprovado (ver bloco STATUS no topo). O texto original fica
+> como registro histórico da decisão; o "Default em uso: sistema sem LLM"
+> abaixo está **superado**.
 
 **Contexto.** Diagnóstico com 5 PDFs reais (2026-05-27) mostrou:
 - 2 dos 5 editais resolvem 100% automático
@@ -276,7 +302,12 @@ Trade-offs aceitos pelo operador:
 
 ---
 
-### Q10. Etapa 1.0.B (PyMuPDF + Camelot) — adiar até benchmark do Docling
+### Q10. Etapa 1.0.B (PyMuPDF + Camelot) — ✅ RESOLVIDA (fora de escopo, decisão fechada)
+
+> **Status atual.** O pipeline de extração estabilizou em pdfplumber + Gemini
+> (Docling moveu-se para `requirements-dev.txt`). PyMuPDF e Camelot **não**
+> foram integrados e ficam **permanentemente fora do escopo** — a dor que
+> justificaria a Camada 1.5 não se materializou. Questão encerrada.
 
 **Contexto.** Em 2026-05-27, na proposta de 3 etapas para robustez de
 extração (1.0.A score semântico, 1.0.B PyMuPDF+Camelot, 1.0.C Docling +
@@ -300,15 +331,29 @@ mapeamento manual cobre os 2 restantes com aprendizado para reuso.
 
 ---
 
-### Q2. Bootstrap do catálogo histórico (5.000 produtos mencionados)
+### Q2. Bootstrap do catálogo histórico (5.000 produtos mencionados) — 🟡 PARCIALMENTE RESOLVIDA
 
 **Contexto.** O cliente declarou base mental de ~5.000 produtos acumulados em pregões anteriores.
 
-**Default em uso.** Sistema começa do zero. O importador (`pregoes/importador.py`) ainda não foi escrito — será criado na Fase 3, quando as planilhas históricas chegarem. Sem importador rodado, o catálogo nasce vazio.
+**Status atual (2026-06).** Deixou de ser "começa do zero". O cliente entregou
+**7 planilhas históricas**; o importador (`pregoes/importador.py`) rodou e o
+catálogo tem **1408 produtos** normalizados pelo Gemini. **Camada 0 ativa** —
+busca por código histórico já resolve a maior parte dos itens em editais
+recorrentes da especialidade.
 
-**Próximo passo necessário.** O cliente nos passar 10-20 planilhas de pregões anteriores no mesmo formato da `MATRIZ`. Idealmente cobrindo categorias variadas: construção, hidráulico, elétrico.
+**Pendência restante.** Cobertura de código baixa no lado **Dantas** (~9% dos
+produtos têm `codigo_dantas`, contra ~62% no Almeida). É a **alavanca 1** de
+melhoria da busca e depende de mais dado do cliente — idealmente planilhas
+históricas que tragam os códigos Dantas, ou um mapeamento Almeida↔Dantas.
 
-**Impacto.** Sem isso, os primeiros 3-5 pregões serão lentos — nenhum casamento automático. Com isso, ~3-4 mil produtos casados de cara no primeiro uso.
+**Próximo passo necessário.** O cliente nos passar mais planilhas de pregões
+anteriores no mesmo formato da `MATRIZ`, priorizando as que contenham códigos
+do fornecedor **Dantas**. Idealmente cobrindo categorias variadas: construção,
+hidráulico, elétrico.
+
+**Impacto.** Quanto maior a cobertura de código (sobretudo Dantas), mais itens
+são resolvidos por busca determinística por código, sem disputa de relevância
+textual.
 
 ---
 
@@ -335,7 +380,7 @@ mapeamento manual cobre os 2 restantes com aprendizado para reuso.
 
 ---
 
-### Q6. Heurísticas de extração de PDF — refatoração concluída (2026-05-27)
+### Q6. Heurísticas de extração de PDF — ✅ RESOLVIDA (refatoração concluída, 2026-05-27)
 
 **Histórico.** Versão inicial do `extrator.py` foi calibrada na amostra
 única do edital Araruna 06/2026 com 3 heurísticas pontuais. Testes com
@@ -384,14 +429,67 @@ manual disponível. Calibração futura conforme mais editais aparecerem.
 
 ## Bloco 3 — Questões para validar com o contador do cliente (fase 3, não bloqueia MVP)
 
-### Q3. Tributação por NF-e
+### Q3. Tributação por NF-e — ⏳ ABERTA (nunca foi ao contador)
 
-Quando entrarmos na fase 3 (inteligência tributária), validar com o contador:
+A inteligência tributária via NF-e (importador de XML com `lxml`, extração de
+NCM/CFOP/CST/alíquotas, preenchimento das colunas %ST/%IPI/%Frete pela fórmula
+do contador) **ficou fora do escopo entregue por decisão do cliente**. O que
+entrou da "Fase 4" foi apenas o **markup por ST** (ver decisões abaixo). Se um
+dia retomarmos a tributação por NF-e, validar com o contador:
 - Como interpretar diferentes CST/CSOSN para identificar "imposto já pago na origem"
 - Se variação por estado de origem/destino exige tabela de equivalência
 - Limites legais de re-classificação tributária do mesmo NCM
 
-### Q4. Margem mínima do edital
+**Status.** ABERTA. Estas perguntas **nunca foram formalmente ao contador**.
 
-A coluna `AA = F × 0.5` no template assume valor mínimo aceitável = 50% da referência.
-Confirmar com o cliente se essa regra é universal ou varia por tipo de pregão.
+### Q4. Margem mínima do edital — ⏳ ABERTA (default virou permanente sem confirmação)
+
+A coluna `AA = F × 0.5` no template assume valor mínimo aceitável = 50% da
+referência. Confirmar com o cliente se essa regra é universal ou varia por
+tipo de pregão.
+
+**Status.** ABERTA. O fator `0.5` virou **default permanente** no código
+(`config.VALOR_MINIMO_FATOR = 0.5`) **sem confirmação do cliente** — segue
+valendo até alguém revisar com ele.
+
+---
+
+## Bloco 4 — Decisões da Fase 4 (markup por ST) — APLICADAS, pendentes de aval do contador
+
+> A "Fase 4" entregue cobre **só o markup por Substituição Tributária**
+> (1,30 vs 1,45, por item). As duas decisões abaixo já estão em produção, mas
+> dependem de uma confirmação formal do contador do cliente para "dirigir
+> preço real" com segurança. O cliente **decidiu prosseguir sem essa validação
+> por ora** (validação adiada).
+
+### Q13. Markup de Substituição Tributária (ST)
+
+**Decisão.** Itens cujo NCM consta na lista de ST do estado (Anexo 05 do
+RICMS/PB) usam markup **1,30**; os demais, **1,45** — **POR ITEM**, editável
+por pregão na UI (painel "Markup deste pregão").
+
+**Origem.** Instrução do usuário humano repassando a regra do contador do
+cliente (2026-06).
+
+**Status.** ✅ APLICADO em produção (`config.MARKUP_ST = 1.30`,
+`config.MARKUP_NORMAL = 1.45`; aplicado item a item por `pregoes/tributacao.py`
++ `pregoes/exportador.py`).
+
+**O que falta.** Confirmação **FORMAL do contador** sobre o valor **1,30**.
+Default em uso até lá: 1,30 (ST) / 1,45 (normal).
+
+### Q14. Lista de NCMs com ST (`pregoes/dados/ncm_st.json`)
+
+**Decisão.** A classificação ST se baseia em uma lista de **389 NCMs**
+extraídos automaticamente (extração semântica multi-agente) do **Anexo 05 do
+RICMS/PB**, bundlada como dado de referência. `eh_st` casa hierarquicamente por
+prefixo (NCM completo → 6 dígitos → 4 dígitos), porque o Anexo usa posições
+(`'3917'` cobre `'3917.40.90'`). Cobertura: **502/509 CESTs** (7 gaps em
+pneumáticos/alimentícios, fora do domínio do cliente).
+
+**Status.** ✅ EM USO. Arquivo versionado no repositório.
+
+**O que falta.** O **contador do cliente REVISAR/ASSINAR** a lista antes de
+ela dirigir preço real. O cliente **DECIDIU prosseguir sem isso por ora**
+(validação adiada). Atualização quando o Anexo 05 mudar = **re-extrair** a
+lista (procedimento futuro, ainda não automatizado).

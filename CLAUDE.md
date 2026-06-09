@@ -87,7 +87,7 @@ significa que você está num clone parcial ou no diretório errado.
 
 ---
 
-## 5. Estado atual do código (abril/2026)
+## 5. Estado atual do código (junho/2026)
 
 ### Fases entregues
 - **Fase 0 — Fundação:** estrutura de pastas, schema SQLite, configuração
@@ -105,14 +105,28 @@ significa que você está num clone parcial ou no diretório errado.
   históricas — enquanto Q2 não for confirmada, o catálogo começa do zero
   e essa camada fica inerte.
 
-### Fases NÃO entregues (próximas)
-- **Fase 4 — Inteligência tributária via NF-e** (TBD, valida com contador)
+- **Fase 4 (parcial) — Markup por Substituição Tributária:** entregue e
+  em uso. O sistema aplica markup **por item** (`MARKUP_ST=1.30` para item
+  com ST, `MARKUP_NORMAL=1.45` caso contrário) decidido pelo NCM. Peças:
+  `pregoes/tributacao.py` (`eh_st` hierárquico por prefixo de 4/6/8 dígitos,
+  `markup_para`, `classificar_markups`, `ncm_de_texto`, `ncm_de_card`),
+  `pregoes/dados/ncm_st.json` (389 NCMs de ST extraídos do **Anexo 05 do
+  RICMS/PB** — dado de referência bundlado, não NF-e), `exportador.py`
+  (param `markups` + `_aplicar_markup_em_linha`), `scraper.py` (captura a
+  URL do produto; `consultar_ncms()` busca o NCM na página de **detalhe**,
+  porque o card não traz NCM) e o painel "Markup deste pregão" + botão
+  "Identificar NCM" na UI. Testes em `tests/test_tributacao.py` e
+  `tests/test_fase4_exportador.py`.
+  **Ressalva de escopo:** o que foi entregue é **só o markup por ST**. A
+  Fase 4 completa (importador de NF-e via `lxml`; preencher as colunas
+  % ST / % IPI / % Frete pela fórmula do contador) ficou **fora de escopo
+  por decisão do cliente** — ver Seção 12.
 
 ### Status de testes
 A suíte completa passa — rode `python -m pytest tests/ -v` antes e depois
-de mexer. (Retrato atual: 325 testes coletados, sendo 45 em
-`tests/test_mvp.py`; 2 são pulados quando o SDK `google-genai` não está
-no venv.)
+de mexer. (Retrato atual: ~349 testes coletados; 2 são pulados quando o
+SDK `google-genai` não está no venv. O número cresce com o tempo; o que
+importa é estar verde.)
 
 ```bash
 cd pregoes_app
@@ -151,7 +165,11 @@ Abre em `http://localhost:8501`.
 **Bibliotecas reservadas para próximas fases (não instalar agora):**
 | Lib | Quando |
 |---|---|
-| `lxml` | Fase 4 — parser de XML NF-e |
+| `lxml` | Fase 4 **completa** (NF-e) — fora de escopo por ora |
+
+> Nota: o markup por ST já entregue (Fase 4 parcial) **não usa `lxml`** —
+> a fonte tributária é o Anexo 05 do RICMS/PB (`pregoes/dados/ncm_st.json`),
+> não XML de NF-e.
 
 **Onde roda:** Local na máquina Windows do cliente. Sem servidor, sem
 cloud, sem API externa, sem Docker.
@@ -183,6 +201,7 @@ PDF do edital
 | Servidor de UI | Streamlit em localhost:8501 | Confirmado |
 | Banco | SQLite em arquivo | Princípio 1 (simplicidade) |
 | Markup | Variável por pregão, indicado pelo usuário antes de gerar a planilha (default 1.45) | Q7 — Resp 2026-05-12 |
+| Markup por ST | Por item via NCM: `1.30` para item com ST (consta no Anexo 05 do RICMS/PB), `1.45` caso contrário | Fase 4 (markup) — entregue |
 | Variação de nome no scraper | Amarelo (avisa, não bloqueia) | Q1 — Resp 2026-05-12 |
 | Tipo de PDF dos editais | Textuais. Sem necessidade de OCR | Q5 — Resp 2026-05-12 |
 | Credenciais de fornecedores | `data/credenciais.json` (gitignored), editável pela tela "Configurações" da UI. Só email + senha por fornecedor | Q8 — Resp 2026-05-15 |
@@ -240,7 +259,9 @@ adicionadas a `QUESTOES_PENDENTES.md`** com:
 - ❌ **Não crie microserviços, fila distribuída, worker em background,
   Celery, Redis.** É um operador único usando localmente.
 - ❌ **Não introduza Docker, Kubernetes, ou qualquer coisa que exija
-  setup técnico.** O cliente roda dois cliques de `.bat`.
+  setup técnico.** O cliente roda dois cliques de `.bat` — e há também o
+  empacotamento `.exe` (P1.1) já entregue e testado no Windows pelo
+  cliente (`run_app.py`, `pregoes.spec`, `build_exe.bat`; ver `BUILD.md`).
 - ❌ **Não troque SQLite por PostgreSQL "para escalabilidade".** SQLite
   aguenta de sobra esse volume.
 - ❌ **Não troque Streamlit por React/Next.js/Flask sem motivo concreto.**
@@ -416,13 +437,21 @@ inevitavelmente cega a abreviações, sinônimos, ordem).
    - Gráfico de variação % de preço
    - Top 20 produtos com maior aumento
 
-### Fase 4 — Inteligência tributária via NF-e (futuro distante)
+### Fase 4 — Tributação
 
-**Pré-requisitos:**
-- Validação com contador do cliente sobre as regras de re-classificação
-  tributária (Q3 e Q4 do `QUESTOES_PENDENTES.md`).
+**Parte entregue — markup por Substituição Tributária (✅ concluída).**
+Em vez de re-classificar tributos via NF-e, o sistema decide o **markup
+por item** a partir do NCM: `MARKUP_ST=1.30` quando o NCM consta no Anexo
+05 do RICMS/PB (item com ST), `MARKUP_NORMAL=1.45` caso contrário. Ver
+detalhes e arquivos na Seção 5. Isso entrega a precificação mais agressiva
+e segura sem depender de XMLs de NF-e do cliente.
 
-**Tarefas (esboço):**
+**Parte fora de escopo — inteligência tributária via NF-e (decisão do
+cliente).** A reclassificação completa abaixo **não será feita por ora**;
+fica registrada como roadmap distante. Pré-requisito caso reabra:
+validação com contador do cliente (Q3 e Q4 do `QUESTOES_PENDENTES.md`).
+
+**Tarefas (esboço — fora de escopo):**
 
 1. Importador de XMLs de NF-e (`lxml`).
 2. Extração de NCM, CFOP, CST, alíquotas efetivas por item.
@@ -532,10 +561,12 @@ Construir, em fases, um sistema local que substitui horas de trabalho
 manual de um pequeno operador de licitações. O sistema deve:
 1. Ler PDF de edital → planilha matriz com itens preenchidos (✅ feito)
 2. Buscar preços nos dois fornecedores parceiros e completar a matriz
-   (próximo)
+   (✅ feito)
 3. Usar histórico para acelerar e ficar mais inteligente a cada uso
-4. Aplicar regras tributárias do contador para precificação agressiva
-   e segura
+   (✅ feito)
+4. Precificação tributária agressiva e segura — markup por ST via NCM
+   (1,30 com ST / 1,45 normal) entregue (✅ feito); a reclassificação
+   completa via NF-e (% ST / % IPI / % Frete) ficou fora de escopo
 
 Em todo passo: simples, reutilizável, sem suposições.
 
