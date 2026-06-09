@@ -48,6 +48,7 @@ class SelecaoFornecedor:
     codigo_fornecedor: str
     marca: str
     ncm: str | None = None   # Fase 4: NCM do produto escolhido → markup por ST
+    url: str | None = None   # Fase 4: link da página de detalhe (p/ buscar o NCM)
 
 
 # Faixa de linhas que o template já tem prontas

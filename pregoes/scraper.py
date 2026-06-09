@@ -79,7 +79,8 @@ class ResultadoBusca:
     codigo_fornecedor: str
     confianca: str   # 'exato' | 'variacao'
     fornecedor: str  # 'almeida' | 'dantas'
-    ncm: Optional[str] = None  # Fase 4: NCM p/ classificação de ST; None se não capturado
+    ncm: Optional[str] = None  # Fase 4: NCM (preenchido sob demanda da pág. de detalhe)
+    url: Optional[str] = None  # Fase 4: link da página de detalhe (onde mora o NCM)
 
 
 class Fornecedor(Protocol):
@@ -226,7 +227,7 @@ def _parse_card_attributes(attrs: dict, confianca: str) -> Optional[ResultadoBus
         codigo_fornecedor=codigo,
         confianca=confianca,
         fornecedor="almeida",
-        ncm=tributacao.ncm_de_card(attrs.get("data-ncm")),
+        url=attrs.get("url"),
     )
 
 
@@ -446,13 +447,17 @@ class AlmeidaDistribuidor:
                 const cards = document.querySelectorAll(
                     '.product-card__info[data-codigo-produto]'
                 );
-                return Array.from(cards).slice(0, %d).map(el => ({
-                    'data-codigo-produto': el.getAttribute('data-codigo-produto'),
-                    'data-nome':           el.getAttribute('data-nome'),
-                    'data-preco':          el.getAttribute('data-preco'),
-                    'data-marca':          el.getAttribute('data-marca'),
-                    'data-ncm':            el.getAttribute('data-ncm'),
-                }));
+                return Array.from(cards).slice(0, %d).map(el => {
+                    const wrap = el.closest('.product-card') || el.parentElement;
+                    const a = wrap ? wrap.querySelector('a[href]') : null;
+                    return {
+                        'data-codigo-produto': el.getAttribute('data-codigo-produto'),
+                        'data-nome':           el.getAttribute('data-nome'),
+                        'data-preco':          el.getAttribute('data-preco'),
+                        'data-marca':          el.getAttribute('data-marca'),
+                        'url':                 a ? a.href : null,
+                    };
+                });
             }
         """ % _MAX_RESULTADOS_POR_QUERY)
 
@@ -507,7 +512,7 @@ def _parse_card_dantas(attrs: dict, confianca: str) -> Optional[ResultadoBusca]:
         codigo_fornecedor=codigo,
         confianca=confianca,
         fornecedor="dantas",
-        ncm=tributacao.ncm_de_card(attrs.get("data-ncm")),
+        url=attrs.get("url"),
     )
 
 
@@ -659,13 +664,17 @@ class DantasDistribuidora:
                 const cards = document.querySelectorAll(
                     '.product-card__info[data-codigo-produto]'
                 );
-                return Array.from(cards).slice(0, %d).map(el => ({
-                    'data-codigo-produto': el.getAttribute('data-codigo-produto'),
-                    'data-nome':           el.getAttribute('data-nome'),
-                    'data-preco':          el.getAttribute('data-preco'),
-                    'data-marca':          el.getAttribute('data-marca'),
-                    'data-ncm':            el.getAttribute('data-ncm'),
-                }));
+                return Array.from(cards).slice(0, %d).map(el => {
+                    const wrap = el.closest('.product-card') || el.parentElement;
+                    const a = wrap ? wrap.querySelector('a[href]') : null;
+                    return {
+                        'data-codigo-produto': el.getAttribute('data-codigo-produto'),
+                        'data-nome':           el.getAttribute('data-nome'),
+                        'data-preco':          el.getAttribute('data-preco'),
+                        'data-marca':          el.getAttribute('data-marca'),
+                        'url':                 a ? a.href : null,
+                    };
+                });
             }
         """ % _MAX_RESULTADOS_POR_QUERY)
 
@@ -1146,3 +1155,58 @@ def _aplicar_llm_judge(
         return None
     # Reordena conforme o LLM e marca como 'variacao' (operador confere)
     return [bag[i] for i in indices if 0 <= i < len(bag)]
+
+
+# === Fase 4: NCM sob demanda (o NCM mora só na página de DETALHE) ===
+
+def consultar_ncms(pedidos, *, progresso=None) -> dict:
+    """Busca o NCM dos produtos ESCOLHIDOS, visitando a página de detalhe.
+
+    O card de busca não traz o NCM (confirmado em Almeida e Dantas) — ele está
+    só na página do produto (``Código NCM: ...``). Aqui, para os itens que o
+    operador escolheu, agrupamos por fornecedor, logamos UMA vez em cada e
+    visitamos a URL de cada produto, extraindo o NCM com
+    ``tributacao.ncm_de_texto``.
+
+    Args:
+        pedidos: lista de ``(chave, fornecedor, url)`` dos produtos escolhidos.
+        progresso: callback opcional ``(feitos, total)`` para barra na UI.
+
+    Retorna ``{chave: ncm|None}``. Degrada seguro: falha de login/rede num
+    fornecedor deixa os itens dele sem NCM (operador decide na UI).
+    """
+    from collections import defaultdict
+
+    por_forn = defaultdict(list)
+    for chave, forn, url in pedidos:
+        if url:
+            por_forn[forn].append((chave, url))
+
+    classes = {"almeida": AlmeidaDistribuidor, "dantas": DantasDistribuidora}
+    total = sum(len(v) for v in por_forn.values())
+    feitos = 0
+    out: dict = {}
+    for forn, lista in por_forn.items():
+        cred = credenciais.carregar(forn)
+        cls = classes.get(forn)
+        if not cred or not cls:
+            continue
+        try:
+            with cls(cred["email"], cred["senha"]) as scraper:
+                for chave, url in lista:
+                    try:
+                        scraper._page.goto(url, wait_until="networkidle",
+                                           timeout=30_000)
+                        scraper._page.wait_for_timeout(500)
+                        txt = scraper._page.evaluate("() => document.body.innerText")
+                        out[chave] = tributacao.ncm_de_texto(txt)
+                    except Exception:
+                        out[chave] = None
+                    feitos += 1
+                    if progresso:
+                        progresso(feitos, total)
+        except Exception:
+            # Login/inicialização falhou para este fornecedor — segue.
+            for chave, _ in lista:
+                out.setdefault(chave, None)
+    return out

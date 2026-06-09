@@ -1191,6 +1191,51 @@ def _dedup_opcoes(opcoes: list) -> list:
     return unicas
 
 
+def _identificar_ncm(selecoes: dict, offsets: list) -> None:
+    """Busca o NCM dos produtos escolhidos (que ainda não têm) na página de
+    DETALHE do fornecedor — é lá que o NCM mora, não no card de busca. Cacheia
+    por URL e atualiza as seleções (SelecaoFornecedor é frozen → recria)."""
+    from dataclasses import replace
+    from pregoes.scraper import consultar_ncms
+
+    cache = st.session_state.setdefault("ncm_cache", {})
+    pedidos = []
+    for off in offsets:
+        sel = selecoes.get(off)
+        url = getattr(sel, "url", None)
+        if not url:
+            continue
+        if url in cache:                       # já consultado neste pregão
+            selecoes[off] = replace(sel, ncm=cache[url])
+            continue
+        forn = ("almeida" if "almeidadistribuidor" in url
+                else "dantas" if "dantasdistribuidora" in url else None)
+        if forn:
+            pedidos.append((off, forn, url))
+    if not pedidos:
+        return
+
+    barra = st.progress(0.0, text="Consultando NCM dos produtos escolhidos…")
+
+    def _cb(feitos, total):
+        barra.progress(feitos / max(total, 1),
+                       text=f"Consultando NCM… {feitos}/{total}")
+
+    try:
+        resultado = consultar_ncms(pedidos, progresso=_cb)
+    except Exception as exc:
+        barra.empty()
+        _log.exception("falha ao consultar NCM")
+        style.bloco_aviso(erros.mensagem_amigavel(exc, "consultar o NCM"),
+                          tipo="warning")
+        return
+    barra.empty()
+    for off, _forn, url in pedidos:
+        ncm = resultado.get(off)
+        cache[url] = ncm
+        selecoes[off] = replace(selecoes[off], ncm=ncm)
+
+
 def _painel_markup(selecoes: dict, itens: list) -> dict:
     """Painel "Markup deste pregão" (Fase 4 — Substituição Tributária).
 
@@ -1222,6 +1267,16 @@ def _painel_markup(selecoes: dict, itens: list) -> dict:
     st.caption(
         f"✅ {resumo['normal']} normais  ·  🟦 {resumo['st']} com ST  ·  "
         f"⚠️ {resumo['sem_ncm']} sem NCM identificado")
+
+    # O NCM mora na página de detalhe do fornecedor (não no card). Este botão
+    # visita os produtos ESCOLHIDOS sem NCM e os classifica (cache por pregão).
+    fetchaveis = [off for off in sem_ncm if getattr(selecoes.get(off), "url", None)]
+    if fetchaveis:
+        if st.button(
+                f"🔎 Identificar NCM de {len(fetchaveis)} item(ns) e classificar ST",
+                key="btn_ncm"):
+            _identificar_ncm(selecoes, fetchaveis)
+            st.rerun()
 
     # Exceções: itens SEM NCM — o operador decide (default = normal).
     if sem_ncm:
@@ -1277,6 +1332,7 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
                     codigo_fornecedor=melhor.codigo_fornecedor,
                     marca=melhor.marca,
                     ncm=getattr(melhor, "ncm", None),
+                    url=getattr(melhor, "url", None),
                 )
 
     # Resumo
@@ -1413,7 +1469,8 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
                     on_escolher=lambda o=o: st.session_state.selecoes.__setitem__(
                         idx, SelecaoFornecedor(
                             preco=o.preco, codigo_fornecedor=o.codigo_fornecedor,
-                            marca=o.marca, ncm=getattr(o, "ncm", None))),
+                            marca=o.marca, ncm=getattr(o, "ncm", None),
+                            url=getattr(o, "url", None))),
                 )
 
             # Opção de não usar este item
