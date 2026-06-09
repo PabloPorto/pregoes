@@ -1172,6 +1172,25 @@ def _card_opcao(idx: int, pos: int, opcao, *, badge_html: str,
                 st.rerun()
 
 
+def _dedup_opcoes(opcoes: list) -> list:
+    """Remove candidatos DUPLICADOS, preservando a ordem.
+
+    O pipeline de busca às vezes traz o MESMO produto mais de uma vez (queries
+    ou camadas diferentes que casam o mesmo card). Mostrar o duplicado confunde
+    o operador e — como a seleção casa por VALOR (fornecedor+código+marca+preço)
+    — faz DOIS cards idênticos aparecerem "escolhido". A chave de dedup é
+    exatamente essa identidade de seleção, garantindo no máximo um card marcado.
+    """
+    vistos: set = set()
+    unicas: list = []
+    for o in opcoes:
+        chave = (o.fornecedor, o.codigo_fornecedor, o.marca, o.preco)
+        if chave not in vistos:
+            vistos.add(chave)
+            unicas.append(o)
+    return unicas
+
+
 def _painel_markup(selecoes: dict, itens: list) -> dict:
     """Painel "Markup deste pregão" (Fase 4 — Substituição Tributária).
 
@@ -1320,7 +1339,9 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
     # Lista de itens da página atual
     for idx in range(inicio, fim):
         item = itens[idx]
-        opcoes = resultados.get(idx, [])
+        # Dedup já aqui: o contador "X opções" e os cards exibidos usam a mesma
+        # lista, e nenhum produto duplicado acende dois "escolhido".
+        opcoes = _dedup_opcoes(resultados.get(idx, []))
         sel_atual = st.session_state.selecoes.get(idx)
 
         n_op = len(opcoes)

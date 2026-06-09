@@ -301,5 +301,24 @@ def test_idempotencia_path_name_estavel(tmp_path):
     assert f"import:{p1.name}" == f"import:{p2.name}"
 
 
+# === Dedup de candidatos duplicados na seleção ===
+
+def test_dedup_opcoes_remove_duplicados_preserva_ordem():
+    from types import SimpleNamespace as O
+    a = O(fornecedor="dantas", codigo_fornecedor="123", marca="NORDEPLAST", preco=27.76)
+    a_dup = O(fornecedor="dantas", codigo_fornecedor="123", marca="NORDEPLAST", preco=27.76)
+    b = O(fornecedor="dantas", codigo_fornecedor="456", marca="PLASTUBOS", preco=11.14)
+    res = app._dedup_opcoes([a, a_dup, b])
+    assert len(res) == 2          # o duplicado some
+    assert res[0] is a and res[1] is b   # mantém a 1ª ocorrência, na ordem
+
+
+def test_dedup_opcoes_mantem_precos_diferentes():
+    from types import SimpleNamespace as O
+    p25 = O(fornecedor="dantas", codigo_fornecedor="1", marca="X", preco=12.73)
+    p32 = O(fornecedor="dantas", codigo_fornecedor="2", marca="X", preco=27.76)
+    assert len(app._dedup_opcoes([p25, p32])) == 2   # produtos distintos ficam
+
+
 if __name__ == "__main__":  # pragma: no cover
     sys.exit(pytest.main([__file__, "-v"]))
