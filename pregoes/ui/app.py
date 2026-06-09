@@ -229,6 +229,7 @@ def _renderizar_sidebar():
         tela_atual = st.session_state.tela
         nav_items = [
             ("home",          "Início"),
+            ("historico",     "Histórico"),
             ("upload",        "Novo pregão"),
             ("configuracoes", "Configurações"),
         ]
@@ -289,8 +290,13 @@ def tela_home():
     # Atalho principal — sidebar tem o mesmo, mas o CTA principal aqui ajuda
     # quem chega na tela home e quer começar imediatamente.
     st.write("")
-    if st.button("Iniciar novo pregão", type="primary"):
-        _novo_pregao()
+    col_novo, col_hist = st.columns(2)
+    with col_novo:
+        if st.button("Iniciar novo pregão", type="primary", width="stretch"):
+            _novo_pregao()
+    with col_hist:
+        if st.button("Ver pregões processados", width="stretch"):
+            ir_para("historico")
 
 
 # === Tela: UPLOAD ===
@@ -308,13 +314,24 @@ def tela_upload():
 
     col1, col2 = st.columns(2)
     with col1:
-        orgao = st.text_input("Órgão (opcional)",
+        orgao = st.text_input("Órgão",
                               placeholder="Ex: Prefeitura Municipal de Araruna")
     with col2:
-        numero = st.text_input("Número do pregão (opcional)",
+        numero = st.text_input("Número do pregão",
                                placeholder="Ex: 00006/2026")
 
     if arquivo and st.button("Extrair itens do PDF", type="primary"):
+        # Órgão + número são OBRIGATÓRIOS (decisão do cliente): garantem que
+        # cada pregão tem identidade desde o início — base do histórico e da
+        # dedup por re-geração. Barrar aqui (antes da extração) pega o caso
+        # comum cedo; a geração revalida (a revisão deixa editar/limpar).
+        if not (orgao or "").strip() or not (numero or "").strip():
+            style.bloco_aviso(
+                "Informe o órgão e o número do pregão para continuar.",
+                tipo="danger",
+            )
+            return
+
         with st.spinner("Lendo PDF e detectando tabelas..."):
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf",
                                               dir=str(config.EDITAIS_DIR))
@@ -380,6 +397,21 @@ def tela_revisao():
         "Revisão dos itens extraídos",
         "Confira o que foi lido do PDF, edite o que precisar e marque o que entra na planilha.",
     )
+
+    # Órgão + número continuam EDITÁVEIS aqui (já foram exigidos no upload):
+    # o operador pode corrigir antes de gerar a planilha. Reescreve no
+    # session_state a cada render para o exportador/persistência usarem o
+    # valor atual. Se o operador limpar um deles, _gerar_excel revalida e
+    # barra a geração — a identidade nunca chega vazia ao histórico.
+    col_org, col_num = st.columns(2)
+    with col_org:
+        st.session_state.orgao = st.text_input(
+            "Órgão", value=st.session_state.get("orgao", ""),
+            key="rev_orgao")
+    with col_num:
+        st.session_state.numero = st.text_input(
+            "Número do pregão", value=st.session_state.get("numero", ""),
+            key="rev_numero")
 
     # Badge de confiança da extração — semáforo para o operador entender
     # rapidamente se pode confiar no resultado ou precisa revisar com lupa.
@@ -584,6 +616,20 @@ def _gerar_excel(itens: list, markup: float, selecoes: dict,
         style.bloco_aviso("Nenhum item marcado como OK — nada para exportar.", tipo="danger")
         return
 
+    # Órgão + número são OBRIGATÓRIOS (decisão do cliente): identificam o pregão
+    # no histórico e são a chave da dedup por re-geração. Revalidamos AQUI — não
+    # só no upload — porque a tela de revisão deixa o operador editar/limpar
+    # esses campos. Como os 3 botões de geração ("Gerar sem buscar", "Gerar com
+    # preços", etc.) passam por _gerar_excel, este é o ponto ÚNICO que garante a
+    # regra: sem identidade, não gera (e não cai no INSERT-sem-identidade).
+    if not (st.session_state.get("orgao") or "").strip() or \
+       not (st.session_state.get("numero") or "").strip():
+        style.bloco_aviso(
+            "Informe o órgão e o número do pregão antes de gerar a planilha — "
+            "eles identificam o pregão no histórico. Volte e preencha os dois campos.",
+            tipo="danger")
+        return
+
     with st.spinner("Gerando planilha matriz a partir do template..."):
         try:
             destino = exportar(
@@ -600,8 +646,9 @@ def _gerar_excel(itens: list, markup: float, selecoes: dict,
                               tipo="danger")
             return
 
-        # Persistir edital + itens no banco (Fase 2: itens vinculados às seleções)
-        _persistir_edital(itens, selecoes)
+        # Persistir edital + itens + histórico da planilha (mesma transação).
+        # `destino`/`markup` vão para a tabela exports_log (rastreio/rebaixar).
+        _persistir_edital(itens, selecoes, destino, markup)
 
     style.bloco_aviso(f"Planilha gerada: <code>{destino.name}</code>", tipo="success")
     if selecoes:
@@ -617,21 +664,66 @@ def _gerar_excel(itens: list, markup: float, selecoes: dict,
         )
 
 
-def _persistir_edital(itens: list, selecoes: dict) -> None:
-    """Grava 1 linha em `editais` + N linhas em `edital_itens`. Idempotência
-    não é necessária porque cada geração é considerada um novo registro
-    (status = rascunho)."""
+def _persistir_edital(itens: list, selecoes: dict, destino, markup) -> None:
+    """Grava o edital + seus itens + 1 linha de histórico da planilha gerada,
+    tudo na MESMA transação (rollback descarta os três juntos).
+
+    UPSERT por identidade `(orgao, numero_pregao)` NORMALIZADA (trim + lower):
+    re-gerar o MESMO pregão (mesmo órgão+número) ATUALIZA o registro anterior
+    em vez de criar um duplicado — reusa o `edital_id`, atualiza status/PDF e
+    troca os itens (DELETE + reinsere; CASCADE garante que nada fica órfão).
+    Como órgão+número são obrigatórios no fluxo, a identidade está sempre
+    presente; ainda assim, se ambos vierem vazios, cai no INSERT-novo (segurança
+    — não fundir pregões sem identidade).
+
+    `destino` é o Path do .xlsx gerado; gravamos SÓ o basename (`destino.name`)
+    no histórico, e `markup` (global do pregão) para auditoria.
+    """
+    orgao = (st.session_state.get("orgao") or "").strip()
+    numero = (st.session_state.get("numero") or "").strip()
+    pdf_path = st.session_state.get("pdf_path") or ""
+    status = "precificado" if selecoes else "rascunho"
+
     with get_conn() as conn:
-        cursor = conn.execute("""
-            INSERT INTO editais (orgao, numero_pregao, arquivo_pdf, status)
-            VALUES (?, ?, ?, ?)
-        """, (
-            st.session_state.get("orgao") or "",
-            st.session_state.get("numero") or "",
-            st.session_state.get("pdf_path") or "",
-            "precificado" if selecoes else "rascunho",
-        ))
-        edital_id = cursor.lastrowid
+        edital_id = None
+        # Identidade presente → procura um edital já existente para atualizar.
+        # Match normalizado (trim + lower) tolera "00006/2026" vs " 00006/2026 "
+        # e diferenças de caixa no nome do órgão.
+        if orgao and numero:
+            row = conn.execute(
+                """
+                SELECT id FROM editais
+                WHERE lower(trim(orgao)) = lower(trim(?))
+                  AND lower(trim(numero_pregao)) = lower(trim(?))
+                ORDER BY id DESC LIMIT 1
+                """,
+                (orgao, numero),
+            ).fetchone()
+            if row is not None:
+                edital_id = row[0]
+
+        if edital_id is not None:
+            # Reaproveita o edital: atualiza metadados e substitui os itens.
+            conn.execute(
+                """
+                UPDATE editais
+                SET status = ?, arquivo_pdf = ?, atualizado_em = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (status, pdf_path, edital_id),
+            )
+            conn.execute(
+                "DELETE FROM edital_itens WHERE edital_id = ?", (edital_id,)
+            )
+        else:
+            cursor = conn.execute(
+                """
+                INSERT INTO editais (orgao, numero_pregao, arquivo_pdf, status)
+                VALUES (?, ?, ?, ?)
+                """,
+                (orgao, numero, pdf_path, status),
+            )
+            edital_id = cursor.lastrowid
 
         for idx, item in enumerate(itens):
             sel = selecoes.get(idx)
@@ -651,6 +743,148 @@ def _persistir_edital(itens: list, selecoes: dict) -> None:
                 "manual" if sel else None,
                 1,
             ))
+
+        # Histórico da planilha gerada — mesma transação (nasce junto do
+        # edital; rollback descarta ambos). Guarda só o basename.
+        _db.export_log_gravar(
+            conn, edital_id, destino.name,
+            len(itens), len(selecoes or {}), markup,
+        )
+
+
+# === Tela: HISTÓRICO ===
+def _data_amigavel(criado_em: str | None) -> str:
+    """Converte o timestamp do banco ('AAAA-MM-DD HH:MM:SS') para 'DD/MM HH:MM'.
+
+    Tolerante: se o formato não bater (banco antigo, valor nulo), devolve o
+    texto cru — nunca estoura exceção na cara do operador.
+    """
+    if not criado_em:
+        return "data desconhecida"
+    try:
+        from datetime import datetime as _dt
+        return _dt.strptime(criado_em[:19], "%Y-%m-%d %H:%M:%S").strftime("%d/%m %H:%M")
+    except (ValueError, TypeError):
+        return str(criado_em)
+
+
+def _rotulo_pregao(orgao: str | None, numero: str | None, status: str | None,
+                   criado_em: str | None) -> str:
+    """Rótulo amigável em PT para um pregão na lista do histórico.
+
+    Ex.: 'Pregão 00006/2026 — Prefeitura de Araruna — precificado em 09/06 14:30'.
+    Sem órgão/número (registros pré-obrigatoriedade), cai num rótulo neutro
+    com a data, para nunca exibir linha em branco.
+    """
+    orgao = (orgao or "").strip()
+    numero = (numero or "").strip()
+    quando = _data_amigavel(criado_em)
+    if not orgao and not numero:
+        return f"Pregão sem identificação (de {quando})"
+    partes = []
+    if numero:
+        partes.append(f"Pregão {numero}")
+    if orgao:
+        partes.append(orgao)
+    cabeca = " — ".join(partes)
+    rotulo_status = (status or "rascunho").strip()
+    return f"{cabeca} — {rotulo_status} em {quando}"
+
+
+def tela_historico():
+    """Lista os pregões processados e permite rebaixar as planilhas geradas.
+
+    Rebaixar = reler os BYTES do .xlsx salvo no disco (NUNCA re-exportar): o
+    arquivo é o artefato final que o operador validou. O caminho é reconstruído
+    a cada render como `config.EXPORTS_DIR / arquivo` (só o basename é
+    persistido), imune a mover a pasta portável. Arquivo ausente → aviso, sem
+    botão (Path.exists() em runtime; nada é persistido sobre existência).
+
+    Tela de LEITURA (não edita pregão): só consulta o banco e serve arquivos.
+    """
+    style.header_pagina(
+        "Histórico de pregões",
+        "Pregões já processados e as planilhas geradas. Você pode baixar de novo "
+        "qualquer planilha que ainda esteja na pasta do programa.",
+    )
+
+    with get_conn() as conn:
+        editais = conn.execute(
+            """
+            SELECT e.id, e.orgao, e.numero_pregao, e.status, e.criado_em,
+                   COUNT(x.id) AS n_planilhas
+            FROM editais e
+            LEFT JOIN exports_log x ON x.edital_id = e.id
+            GROUP BY e.id
+            ORDER BY e.criado_em DESC
+            """
+        ).fetchall()
+
+    if not editais:
+        style.bloco_aviso(
+            "Nenhum pregão processado ainda. Comece em <b>Novo pregão</b>.",
+            tipo="info",
+        )
+        return
+
+    _MIME_XLSX = (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+    for ed in editais:
+        rotulo = _rotulo_pregao(ed["orgao"], ed["numero_pregao"],
+                                ed["status"], ed["criado_em"])
+        n_planilhas = ed["n_planilhas"] or 0
+        sufixo = (f" · {n_planilhas} planilha"
+                  + ("s" if n_planilhas != 1 else ""))
+        with st.expander(rotulo + sufixo, expanded=False):
+            if n_planilhas == 0:
+                style.bloco_aviso(
+                    "Nenhuma planilha registrada — gere novamente para "
+                    "rebaixar.",
+                    tipo="warning",
+                )
+                continue
+
+            # Planilhas deste pregão, mais recente no topo (índice cobre isto).
+            with get_conn() as conn:
+                planilhas = conn.execute(
+                    """
+                    SELECT arquivo, n_itens, n_selecoes, criado_em
+                    FROM exports_log
+                    WHERE edital_id = ?
+                    ORDER BY criado_em DESC, id DESC
+                    """,
+                    (ed["id"],),
+                ).fetchall()
+
+            for i, pl in enumerate(planilhas):
+                arquivo = pl["arquivo"]
+                quando = _data_amigavel(pl["criado_em"])
+                st.caption(
+                    f"Gerada em {quando} · {pl['n_itens']} itens · "
+                    f"{pl['n_selecoes']} com preço/marca"
+                )
+                # Reconstrói o caminho AGORA (frozen-aware): nunca confiar num
+                # path absoluto gravado, que quebraria ao mover a pasta portável.
+                caminho = config.EXPORTS_DIR / arquivo
+                if caminho.exists():
+                    with open(caminho, "rb") as f:
+                        st.download_button(
+                            "Baixar planilha",
+                            data=f.read(),
+                            file_name=arquivo,
+                            mime=_MIME_XLSX,
+                            key=f"dl_{ed['id']}_{i}",
+                            width="stretch",
+                        )
+                else:
+                    style.bloco_aviso(
+                        "Esta planilha não está mais na pasta do programa "
+                        "(pode ter sido movida ou apagada). Gere de novo a "
+                        "partir do pregão.",
+                        tipo="warning",
+                    )
 
 
 # === Tela: CONFIGURAÇÕES ===
@@ -1935,6 +2169,7 @@ def _aba_catalogo():
 # === Roteador ===
 TELAS = {
     "home": tela_home,
+    "historico": tela_historico,
     "upload": tela_upload,
     "revisao": tela_revisao,
     "mapeamento": tela_mapeamento,

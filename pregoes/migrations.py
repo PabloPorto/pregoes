@@ -28,15 +28,41 @@ from . import config, db
 # O schema base atual corresponde à versão 1.
 BASELINE_VERSION = 1
 
+
+# --- v2: exports_log (histórico de planilhas geradas) ---
+# Mesma DDL espelhada em `db.SCHEMA` (bancos novos nascem com a tabela); aqui
+# ela leva bancos JÁ existentes da v1 para a v2. Aditivo puro (IF NOT EXISTS):
+# zero risco aos dados de produtos/editais/preços.
+_DDL_EXPORTS_LOG = """
+CREATE TABLE IF NOT EXISTS exports_log (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    edital_id     INTEGER NOT NULL REFERENCES editais(id) ON DELETE CASCADE,
+    arquivo       TEXT NOT NULL,        -- SÓ o basename; caminho = EXPORTS_DIR/arquivo
+    n_itens       INTEGER DEFAULT 0,
+    n_selecoes    INTEGER DEFAULT 0,    -- itens com preço/marca (len(selecoes))
+    markup_global REAL,                 -- markup do pregão (auditoria)
+    status        TEXT NOT NULL DEFAULT 'gerado',
+    criado_em     TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_exports_edital ON exports_log(edital_id, criado_em DESC);
+"""
+
+
+def _v2_exports_log(conn: sqlite3.Connection) -> None:
+    conn.executescript(_DDL_EXPORTS_LOG)   # CREATE TABLE/INDEX IF NOT EXISTS
+
+
 # Migrations futuras: (versao, descricao, funcao(conn)).
 # A função recebe a conexão e aplica o ALTER/CREATE necessário. NÃO precisa
 # abrir transação — `migrate()` já envolve cada uma numa.
 #
 # Exemplo de migration futura:
-#   def _v2_add_peso(conn):
+#   def _v3_add_peso(conn):
 #       conn.execute("ALTER TABLE produtos ADD COLUMN peso REAL")
-#   MIGRATIONS = [(2, "produtos.peso", _v2_add_peso)]
-MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = []
+#   MIGRATIONS = [..., (3, "produtos.peso", _v3_add_peso)]
+MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
+    (2, "exports_log (historico de planilhas geradas)", _v2_exports_log),
+]
 
 
 def _versao_atual(conn: sqlite3.Connection) -> int:

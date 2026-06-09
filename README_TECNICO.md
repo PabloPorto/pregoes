@@ -145,6 +145,7 @@ pregoes_app/
 │       └── app.py             # Streamlit — telas: início, upload, revisão,
 │                              # mapeamento manual, busca de preços (com painel
 │                              # "Markup deste pregão" + "Identificar NCM"),
+│                              # histórico (rebaixar planilhas geradas),
 │                              # configurações (aba Catálogo histórico)
 ├── data/
 │   ├── pregoes.db             # SQLite (criado em runtime, gitignored)
@@ -178,7 +179,7 @@ instalado no ambiente.
 
 ## Schema SQLite
 
-12 tabelas no total:
+13 tabelas no total:
 
 ```
 schema_version            — versão da migration aplicada (MAX(version) = atual)
@@ -196,7 +197,48 @@ cache_llm_judge           — Camada 3: cache TTL infinito por SHA256(desc + có
 mapeamentos_aprendidos    — Camada 4: descrição_norm → código escolhido pelo operador
 imports_log               — rastreabilidade da importação transacional (1 linha por
                             planilha importada: arquivo, n_produtos, n_precos, status)
+exports_log               — histórico de cada planilha .xlsx GERADA (append-only;
+                            espelho de imports_log). 1 linha por geração: SÓ o
+                            basename do arquivo (caminho = EXPORTS_DIR/arquivo,
+                            reconstruído no uso — imune a mover a pasta portável),
+                            n_itens, n_selecoes, markup_global (auditoria), status.
+                            FK edital_id → editais (ON DELETE CASCADE). Criada pela
+                            migration v2 (aditiva, CREATE IF NOT EXISTS)
 ```
+
+### Histórico de planilhas geradas (exports_log + tela "Histórico")
+
+Antes, depois de gerar a planilha o programa perdia a referência ao `.xlsx`:
+o `download_button` só existia naquele render. Agora cada geração grava 1 linha
+em `exports_log` (append-only, na MESMA transação de `_persistir_edital` — o
+rollback descarta edital e log juntos) e há a tela **"Histórico"** (item na
+sidebar, entre "Início" e "Novo pregão"):
+
+- **Ver:** lista os pregões processados (`editais LEFT JOIN exports_log`,
+  `ORDER BY criado_em DESC`), com rótulo amigável em PT. Cada pregão num
+  `expander` revela suas planilhas (mais recente no topo).
+- **Rebaixar = reler o arquivo do disco, NUNCA re-exportar.** O `.xlsx` é o
+  artefato final que o operador validou (preço/marca/markup/fórmulas embutidos);
+  re-rodar `exportar()` seria *lossy* (os itens não guardam marca/código/NCM/
+  markup). O caminho é reconstruído a cada render como `config.EXPORTS_DIR /
+  arquivo` (só o basename é persistido). Arquivo ausente (movido/apagado):
+  `Path.exists()` em runtime → aviso amarelo, sem botão; nunca estoura erro.
+
+Mudanças de schema/lógica que acompanham:
+
+- **`_persistir_edital` deixou de ser INSERT-cego → virou UPSERT por
+  `(orgao, numero_pregao)` NORMALIZADO** (trim + lower, tolera `00006/2026`
+  vs ` 00006/2026 ` e caixa do órgão): re-gerar o MESMO pregão ATUALIZA o
+  registro anterior (reusa `edital_id`, atualiza status/PDF, `DELETE`+reinsere
+  os itens — CASCADE evita órfãos) em vez de duplicar. Sem identidade, cai no
+  INSERT-novo (não funde pregões).
+- **Órgão + número do pregão agora são OBRIGATÓRIOS** na UI: o fluxo não chega
+  à geração da planilha sem ambos preenchidos (mensagem clara em PT). Isso
+  garante que a identidade do UPSERT está sempre presente.
+- **Sem backfill:** planilhas geradas ANTES desta mudança não aparecem no
+  histórico (`exports_log` nasce vazio para editais pré-migração). Adivinhar
+  arquivos por `glob` foi descartado — associar a planilha errada ao pregão
+  errado é erro financeiro. O histórico vale a partir da adoção.
 
 ## Próximas fases (em ordem)
 

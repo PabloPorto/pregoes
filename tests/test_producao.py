@@ -17,8 +17,11 @@ class TestMigration:
         monkeypatch.setattr(config, "DATA_DIR", tmp_path)
         monkeypatch.setattr(config, "DB_PATH", tmp_path / "t.db")
         db.init_db(tmp_path / "t.db")
+        # init_db aplica as migrations pendentes; o banco fica no HEAD atual
+        # (>= baseline). Com a v2 (exports_log) presente, o head é 2.
+        head = max([migrations.BASELINE_VERSION] + [m[0] for m in migrations.MIGRATIONS])
         with db.conectar(tmp_path / "t.db") as c:
-            assert migrations._versao_atual(c) == migrations.BASELINE_VERSION
+            assert migrations._versao_atual(c) == head
 
     def test_migration_adiciona_coluna_sem_perder_dados(self, tmp_path, monkeypatch):
         monkeypatch.setattr(config, "DATA_DIR", tmp_path)
@@ -29,11 +32,16 @@ class TestMigration:
             c.execute("INSERT INTO produtos (descricao_canonica) VALUES ('x')")
             c.commit()
 
-        def _v2(conn):
-            conn.execute("ALTER TABLE produtos ADD COLUMN peso REAL")
-        monkeypatch.setattr(migrations, "MIGRATIONS", [(2, "peso", _v2)])
+        # Versão acima do head real para que esta migration-fake de fato aplique
+        # (init_db já avançou o banco até as MIGRATIONS reais).
+        nova = max([migrations.BASELINE_VERSION] + [m[0] for m in migrations.MIGRATIONS]) + 1
 
-        assert migrations.migrate(dbp) == 2
+        def _add_peso(conn):
+            conn.execute("ALTER TABLE produtos ADD COLUMN peso REAL")
+        monkeypatch.setattr(migrations, "MIGRATIONS",
+                            list(migrations.MIGRATIONS) + [(nova, "peso", _add_peso)])
+
+        assert migrations.migrate(dbp) == nova
         with db.conectar(dbp) as c:
             cols = [r[1] for r in c.execute("PRAGMA table_info(produtos)")]
             assert "peso" in cols
@@ -44,11 +52,12 @@ class TestMigration:
         monkeypatch.setattr(config, "DB_PATH", tmp_path / "t.db")
         dbp = tmp_path / "t.db"
         db.init_db(dbp)
+        nova = max([migrations.BASELINE_VERSION] + [m[0] for m in migrations.MIGRATIONS]) + 1
         monkeypatch.setattr(migrations, "MIGRATIONS",
-                            [(2, "idx", lambda c: c.execute(
+                            list(migrations.MIGRATIONS) + [(nova, "idx", lambda c: c.execute(
                                 "CREATE INDEX IF NOT EXISTS ix ON produtos(marca)"))])
-        assert migrations.migrate(dbp) == 2
-        assert migrations.migrate(dbp) == 2   # 2ª vez não reaplica
+        assert migrations.migrate(dbp) == nova
+        assert migrations.migrate(dbp) == nova   # 2ª vez não reaplica
 
     def test_banco_preexistente_adotado_como_baseline(self, tmp_path, monkeypatch):
         """Banco com dados mas sem schema_version (cliente atual) é adotado
@@ -62,8 +71,9 @@ class TestMigration:
             c.execute("INSERT INTO produtos (descricao_canonica) VALUES ('legado')")
             c.execute("DELETE FROM schema_version")
             c.commit()
-        # Re-migrate adota como baseline, dado intacto
-        assert migrations.migrate(dbp) == migrations.BASELINE_VERSION
+        # Re-migrate adota como baseline e aplica as pendentes até o head, dado intacto
+        head = max([migrations.BASELINE_VERSION] + [m[0] for m in migrations.MIGRATIONS])
+        assert migrations.migrate(dbp) == head
         with db.conectar(dbp) as c:
             assert c.execute("SELECT COUNT(*) FROM produtos").fetchone()[0] == 1
 
@@ -101,7 +111,10 @@ class TestBackup:
         # 5 backups, manter 3
         for i in range(5):
             db.backup(f"b{i}", path=dbp, manter=3)
-        restantes = list((tmp_path / "backups").glob("pregoes_*.db"))
+        # A rotação só conta backups ROTACIONÁVEIS; protegidos (ex.: o
+        # 'pre-migration' criado por init_db ao aplicar a v2) ficam de fora.
+        restantes = [p for p in (tmp_path / "backups").glob("pregoes_*.db")
+                     if not db._eh_backup_protegido(p)]
         assert len(restantes) <= 3
 
 

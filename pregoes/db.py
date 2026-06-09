@@ -4,7 +4,7 @@ Banco SQLite — schema mínimo, suficiente para o MVP.
 Filosofia: começar com poucas tabelas e adicionar quando houver dor real.
 Nada de criar tabelas "porque pode precisar".
 
-Tabelas (11 no total):
+Tabelas (13 no total):
 - schema_version:          versão da migration aplicada (MAX(version) = atual)
 - produtos:                catálogo canônico do cliente (cresce com uso)
 - precos_historico:        preços de planilhas históricas do cliente. Hoje só o
@@ -19,6 +19,9 @@ Tabelas (11 no total):
 - produtos_canonico:       formas canônicas dos produtos (Fase B / matching)
 - cache_llm_judge:         cache (TTL infinito) do judge semântico da busca (Camada 3)
 - mapeamentos_aprendidos:  feedback do operador reaproveitado em buscas futuras (Camada 4)
+- imports_log:             rastreabilidade de cada planilha histórica importada
+- exports_log:             histórico de cada planilha .xlsx GERADA (append-only;
+                           guarda só o basename, FK edital_id) — permite rebaixar
 """
 import sqlite3
 from contextlib import contextmanager
@@ -178,6 +181,24 @@ CREATE TABLE IF NOT EXISTS imports_log (
     erro          TEXT,
     criado_em     TEXT DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Histórico de cada planilha .xlsx GERADA (rastreabilidade da saída, append-only).
+-- Espelho de imports_log para a entrega; guarda SÓ o basename do arquivo
+-- (caminho reconstruído como EXPORTS_DIR/arquivo no uso), porque EXPORTS_DIR é
+-- recomputado a cada boot (frozen-aware) e mover a pasta portável quebraria um
+-- path absoluto gravado. DDL espelhada em migrations._DDL_EXPORTS_LOG (v2), para
+-- bancos JÁ existentes ganharem a tabela via migration.
+CREATE TABLE IF NOT EXISTS exports_log (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    edital_id     INTEGER NOT NULL REFERENCES editais(id) ON DELETE CASCADE,
+    arquivo       TEXT NOT NULL,        -- SÓ o basename; caminho = EXPORTS_DIR/arquivo
+    n_itens       INTEGER DEFAULT 0,
+    n_selecoes    INTEGER DEFAULT 0,    -- itens com preço/marca (len(selecoes))
+    markup_global REAL,                 -- markup do pregão (auditoria)
+    status        TEXT NOT NULL DEFAULT 'gerado',
+    criado_em     TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_exports_edital ON exports_log(edital_id, criado_em DESC);
 """
 
 
@@ -579,6 +600,33 @@ def import_log_gravar(
         VALUES (?, ?, ?, ?, ?)
         """,
         (arquivo, n_produtos, n_precos, status, erro),
+    )
+
+
+def export_log_gravar(
+    conn: sqlite3.Connection,
+    edital_id: int,
+    arquivo: str,
+    n_itens: int,
+    n_selecoes: int,
+    markup_global: float | None,
+    status: str = "gerado",
+) -> None:
+    """Registra UMA planilha .xlsx gerada para um edital (rastreabilidade da saída).
+
+    `arquivo` é SÓ o basename (`destino.name`) — o caminho é reconstruído como
+    `config.EXPORTS_DIR / arquivo` no uso, imune a mover a pasta portável.
+
+    NÃO faz commit — o chamador (`_persistir_edital`) controla a transação para
+    gravar a linha junto do edital (mesmo lastrowid); rollback descarta ambos.
+    """
+    conn.execute(
+        """
+        INSERT INTO exports_log
+            (edital_id, arquivo, n_itens, n_selecoes, markup_global, status)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (edital_id, arquivo, n_itens, n_selecoes, markup_global, status),
     )
 
 

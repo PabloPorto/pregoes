@@ -493,3 +493,56 @@ pneumáticos/alimentícios, fora do domínio do cliente).
 ela dirigir preço real. O cliente **DECIDIU prosseguir sem isso por ora**
 (validação adiada). Atualização quando o Anexo 05 mudar = **re-extrair** a
 lista (procedimento futuro, ainda não automatizado).
+
+---
+
+## Bloco 5 — Histórico de planilhas geradas (exports_log + tela "Histórico")
+
+> Recurso entregue (jun/2026): cada planilha `.xlsx` gerada passa a ser
+> registrada (`exports_log`, append-only) e há tela "Histórico" para
+> rebaixá-la. Rebaixar = reler o arquivo do disco (NUNCA re-exportar).
+> Design completo em `DESIGN_historico_planilhas.md`.
+
+### Q15. Identidade do pregão e dedup na re-geração — ✅ RESOLVIDA (decisão do cliente)
+
+**Decisão tomada (cliente, jun/2026).**
+
+(a) **Órgão + número do pregão são OBRIGATÓRIOS.** A UI impede chegar à geração
+da planilha sem ambos preenchidos (mensagem clara em PT). Garante que a
+identidade do pregão está sempre presente.
+
+(b) **Reenvio do mesmo edital (mesmo órgão+número) ATUALIZA o registro anterior
+(UPSERT)**, não cria outro. `_persistir_edital` deixou de ser INSERT-cego: a
+chave de match é normalizada (trim + lower — tolera `00006/2026` vs
+` 00006/2026 ` e diferenças de caixa), exibindo o valor original; reusa o
+`edital_id`, atualiza status/PDF e troca os itens (DELETE + reinsere, CASCADE
+evita órfãos). Cada geração sempre acrescenta 1 linha em `exports_log`.
+
+**Status.** ✅ APLICADO. Como órgão+número são obrigatórios, a identidade está
+sempre presente; ainda assim, se ambos vierem vazios, cai no INSERT-novo
+(segurança — não fundir pregões sem identidade).
+
+**O que falta.** Nada — questão encerrada. (Originalmente era um default
+provisório de "dedup forte só quando órgão E número preenchidos"; o cliente
+confirmou ambas as perguntas.)
+
+### Q16. Planilhas geradas ANTES desta mudança não aparecem no histórico — 🟢 ABERTA, aceita
+
+**Nota.** `exports_log` nasce vazio para editais pré-migração: não havia vínculo
+persistido entre o pregão e o `.xlsx`, e `data/exports` pode ter sido limpo.
+**Sem backfill.** Adivinhar arquivos por `glob` foi descartado — associar a
+planilha errada ao pregão errado é **erro financeiro**. O histórico vale **a
+partir da adoção**. A tela mostra "Nenhuma planilha registrada — gere
+novamente para rebaixar".
+
+**Status.** Aceita. Comunicar ao cliente que o histórico começa do zero agora.
+
+### Q17. Acúmulo de arquivos em `data/exports` (sem rotação) — 🟢 ABERTA, aceita
+
+**Nota.** Os `.xlsx` gerados acumulam em `data/exports` sem rotação. É
+**proposital** — são as versões reaveis pela tela "Histórico"; no volume alvo
+(~10 pregões/mês) o acúmulo é irrelevante por anos. Se o cliente reclamar de
+espaço, avaliar rotação opcional (manter N últimos por pregão) — futuro, fora
+deste escopo.
+
+**Status.** Aceita. Sem ação por ora.
