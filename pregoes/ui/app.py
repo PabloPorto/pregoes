@@ -464,22 +464,8 @@ def tela_revisao():
 
     st.divider()
 
-    # Markup em linha própria — antes ficava espremido na mesma linha
-    # dos botões e o componente "- + 1,45" ficava maior que os botões,
-    # quebrando o alinhamento (reportado pelo operador, 2026-05-27).
-    markup = st.number_input(
-        "Markup deste pregão",
-        min_value=1.00,
-        max_value=3.00,
-        value=float(config.MARKUP_DEFAULT),
-        step=0.05,
-        help=(
-            "Multiplicador sobre o custo de aquisição. "
-            f"Padrão {config.MARKUP_DEFAULT}; reduza para 1.30 em "
-            "pregões com concorrência apertada."
-        ),
-    )
-    st.session_state.markup = markup
+    # O markup é definido só na tela de Buscar preços (por item, via
+    # Substituição Tributária). Aqui é só revisão/extração.
     st.session_state.itens_revisados = _df_para_itens(edited)
 
     # Botões em linha própria, com proporções iguais.
@@ -502,7 +488,8 @@ def tela_revisao():
     with col_btn2:
         if st.button("Gerar sem buscar", width="stretch",
                      help="Gera a planilha matriz com colunas L/T/U vazias (preço, código, marca em branco)."):
-            _gerar_excel(_df_para_itens(edited), markup=markup, selecoes={})
+            _gerar_excel(_df_para_itens(edited), markup=config.MARKUP_DEFAULT,
+                         selecoes={})
 
 
 def _df_para_itens(df: pd.DataFrame) -> list:
@@ -1265,30 +1252,34 @@ def _painel_markup(selecoes: dict, itens: list) -> dict:
         ncms, m_st, m_normal, overrides)
 
     st.caption(
-        f"✅ {resumo['normal']} normais  ·  🟦 {resumo['st']} com ST  ·  "
-        f"⚠️ {resumo['sem_ncm']} sem NCM identificado")
+        f":green[{resumo['normal']} normais]  ·  "
+        f":blue[{resumo['st']} com Substituição Tributária]  ·  "
+        f":orange[{resumo['sem_ncm']} sem NCM identificado]")
 
     # O NCM mora na página de detalhe do fornecedor (não no card). Este botão
     # visita os produtos ESCOLHIDOS sem NCM e os classifica (cache por pregão).
     fetchaveis = [off for off in sem_ncm if getattr(selecoes.get(off), "url", None)]
     if fetchaveis:
         if st.button(
-                f"🔎 Identificar NCM de {len(fetchaveis)} item(ns) e classificar ST",
-                key="btn_ncm"):
+                f"Identificar NCM de {len(fetchaveis)} item(ns) e classificar "
+                "Substituição Tributária", key="btn_ncm"):
             _identificar_ncm(selecoes, fetchaveis)
             st.rerun()
 
     # Exceções: itens SEM NCM — o operador decide (default = normal).
     if sem_ncm:
-        with st.expander(f"⚠️ {len(sem_ncm)} itens sem NCM — confira o markup"):
+        with st.expander(f"{len(sem_ncm)} itens sem NCM — confira o markup",
+                         icon=":material/warning:"):
             for off in sem_ncm:
                 item = itens[off] if 0 <= off < len(itens) else None
                 desc = (getattr(item, "descricao", None) or f"Item {off + 1}")[:54]
                 escolha = st.radio(
-                    desc, ("Normal", "Com ST"), horizontal=True,
+                    desc, ("Normal", "Com Substituição Tributária"),
+                    horizontal=True,
                     index=1 if overrides.get(off) == m_st else 0,
                     key=f"ov_markup_{off}")
-                overrides[off] = m_st if escolha == "Com ST" else m_normal
+                overrides[off] = (m_st if escolha == "Com Substituição Tributária"
+                                  else m_normal)
         markups, _, _ = tributacao.classificar_markups(
             ncms, m_st, m_normal, overrides)
     return markups
