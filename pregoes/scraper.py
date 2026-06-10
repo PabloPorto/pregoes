@@ -812,6 +812,10 @@ def _payload_to_resultados(
     out: list[ResultadoBusca] = []
     for d in data:
         try:
+            # Reconstrói TODOS os campos: o cache grava via asdict (11 campos);
+            # reconstruir só 6 fazia ncm/url e o reconhecimento por código
+            # (no_catalogo/produto_catalogo_id/descricao_catalogo) sumirem em
+            # cache hit — o badge "no seu catálogo" desaparecia na re-busca.
             out.append(ResultadoBusca(
                 descricao_encontrada=d["descricao_encontrada"],
                 marca=d.get("marca", ""),
@@ -819,6 +823,11 @@ def _payload_to_resultados(
                 codigo_fornecedor=d["codigo_fornecedor"],
                 confianca=d.get("confianca", "exato"),
                 fornecedor=d.get("fornecedor", fornecedor),
+                ncm=d.get("ncm"),
+                url=d.get("url"),
+                no_catalogo=d.get("no_catalogo", False),
+                produto_catalogo_id=d.get("produto_catalogo_id"),
+                descricao_catalogo=d.get("descricao_catalogo"),
             ))
         except (KeyError, TypeError, ValueError):
             continue

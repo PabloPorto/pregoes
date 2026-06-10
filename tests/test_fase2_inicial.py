@@ -706,3 +706,20 @@ def test_ultima_cotacao_ignora_ttl(tmp_path):
         assert preco_em_cache(conn, pid, "almeida") is None       # velho → fora do TTL
         row = ultima_cotacao(conn, pid, "almeida")                # sem TTL → retorna
         assert row is not None and row["preco"] == 12.34
+
+
+def test_cache_roundtrip_preserva_todos_os_campos():
+    """O cache grava via asdict (11 campos); _payload_to_resultados deve
+    reconstruir TODOS — senão o reconhecimento por código (no_catalogo),
+    produto_catalogo_id, descricao_catalogo, ncm e url somem em cache hit."""
+    from dataclasses import asdict
+    import json as _json
+    from pregoes.scraper import ResultadoBusca, _payload_to_resultados
+    r = ResultadoBusca(
+        descricao_encontrada="TUBO PVC 75", marca="PLASTUBOS", preco=51.44,
+        codigo_fornecedor="8811", confianca="exato", fornecedor="dantas",
+        ncm="39172300", url="http://x/p", no_catalogo=True,
+        produto_catalogo_id=42, descricao_catalogo="tubo pvc 75mm")
+    payload = _json.dumps([asdict(r)], ensure_ascii=False)
+    back = _payload_to_resultados(payload, "dantas")
+    assert len(back) == 1 and back[0] == r   # round-trip completo (frozen __eq__)
