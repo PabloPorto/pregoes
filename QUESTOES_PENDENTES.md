@@ -23,6 +23,15 @@
   `BUILD.md`; `config.py` ciente de execução *frozen* (dados ao lado do
   `.exe`). Pendências de robustez seguem abertas (P1.4 validar template,
   P1.6 cancelar busca em andamento).
+- **DÉBITO TÉCNICO — auto-seed do banco na instalação (implementar após mais
+  testes).** Hoje, para levar os dados acumulados (catálogo, aprendizado,
+  preços) à máquina do cliente, copia-se manualmente o arquivo
+  `data/pregoes_seed.db` → `<pasta do .exe>/data/pregoes.db`. O auto-seed
+  embutiria esse seed no `.exe` (via `pregoes.spec`, como já é feito com o
+  template MATRIZ) e o `config.py` o copiaria no 1º boot **se não existir**
+  `pregoes.db` — zero cópia manual, à prova de erro. NÃO sobrescrever banco
+  existente (preserva o que o cliente acumulou). Adiado de propósito até
+  estabilizar com mais testes de campo.
 - **Fase 4 (markup por Substituição Tributária): ENTREGUE e funcionando.**
   Itens cujo NCM consta na lista de ST do estado usam markup 1,30; os demais,
   1,45 — POR ITEM, editável por pregão na UI. Componentes:
