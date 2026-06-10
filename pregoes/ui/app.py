@@ -1683,7 +1683,7 @@ def _busca_catalogo_item(idx: int, item) -> None:
                     if not (codigo and str(codigo).strip()):
                         continue
                     codigo = str(codigo).strip()
-                    cot = _db.ultima_cotacao(conn, pid, forn)
+                    cot = _db.ultima_cotacao(conn, p.produto_id, forn)
                     preco = float(cot["preco"]) if cot else 0.0
                     if cot:
                         preco_txt = f"R$ {preco:.2f} (últ. {cot['consultado_em'][:10]})"
@@ -1700,14 +1700,14 @@ def _busca_catalogo_item(idx: int, item) -> None:
                             f"{preco_txt}</span>",
                             unsafe_allow_html=True)
                     with c2:
-                        if st.button("Usar", key=f"usecat_{idx}_{pid}_{forn}",
+                        if st.button("Usar", key=f"usecat_{idx}_{p.produto_id}_{forn}",
                                      width="stretch"):
                             novo = ResultadoBusca(
                                 descricao_encontrada=p.descricao_canonica or "",
                                 marca=p.marca or "", preco=preco,
                                 codigo_fornecedor=codigo,
                                 confianca="exato", fornecedor=forn,
-                                no_catalogo=True, produto_catalogo_id=pid,
+                                no_catalogo=True, produto_catalogo_id=p.produto_id,
                                 descricao_catalogo=p.descricao_canonica)
                             st.session_state.resultados_busca.setdefault(
                                 idx, []).append(novo)
