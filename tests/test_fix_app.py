@@ -377,3 +377,27 @@ def test_limpar_pregao_remove_chaves_do_pregao_e_preserva_navegacao():
 
 if __name__ == "__main__":  # pragma: no cover
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+# === Busca no catálogo interno: palavras (AND) + código + fallback ===
+
+def test_buscar_no_catalogo_palavras_codigo_fallback():
+    from pregoes.matcher import ProdutoCatalogo as PC
+    cat = [
+        PC(produto_id=1, descricao_canonica="tubo de pvc soldavel esgoto 75mm 6m",
+           codigo_almeida=None, codigo_dantas="8811", marca="PLASTUBOS", unidade_padrao="un"),
+        PC(produto_id=2, descricao_canonica="tubo de pvc soldavel agua fria 25mm 6m",
+           codigo_almeida="1661", codigo_dantas=None, marca="NORDESTE", unidade_padrao="un"),
+        PC(produto_id=3, descricao_canonica="valvula plastica para lavatorio",
+           codigo_almeida="39013", codigo_dantas=None, marca="SOCEL", unidade_padrao="un"),
+    ]
+    # 1 palavra acha todos os tubos (antes: token_sort exigia desc quase exata)
+    assert {p.produto_id for p in app._buscar_no_catalogo(cat, "Tubo")} == {1, 2}
+    # palavras AND: 'tubo 75' acha só o 75mm ('75' bate em '75mm')
+    assert [p.produto_id for p in app._buscar_no_catalogo(cat, "tubo 75")] == [1]
+    # código exato e por prefixo
+    assert [p.produto_id for p in app._buscar_no_catalogo(cat, "8811")] == [1]
+    assert 3 in {p.produto_id for p in app._buscar_no_catalogo(cat, "39")}
+    # vazios
+    assert app._buscar_no_catalogo(cat, "") == []
+    assert app._buscar_no_catalogo([], "tubo") == []

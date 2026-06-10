@@ -1598,18 +1598,61 @@ def _carregar_catalogo_sessao():
     return st.session_state.catalogo_lista
 
 
+def _buscar_no_catalogo(catalogo: list, consulta: str, limite: int = 6) -> list:
+    """Busca um termo no catálogo do cliente. Retorna ProdutoCatalogo ordenados.
+
+    Estilo de busca de loja (pedido do cliente — antes exigia a descrição quase
+    exata):
+    - CÓDIGO: consulta só com dígitos → casa codigo_almeida/dantas (exato ou
+      prefixo). Ex.: "8811".
+    - PALAVRAS: acha descrições que contêm TODAS as palavras (substring), assim
+      "tubo" acha tubos e "tubo pvc 75" acha o de 75mm (o '75' bate em '75mm').
+      Ordena por proximidade (token_set_ratio) e tamanho.
+    - FALLBACK: se nenhuma descrição contém todas as palavras (typo/variação),
+      cai num fuzzy tolerante (token_set_ratio) para ainda sugerir algo.
+    """
+    from rapidfuzz import process, fuzz
+    from pregoes.normalizador import normalizar_descricao
+    q = (consulta or "").strip()
+    if not q or not catalogo:
+        return []
+    # 1) Busca por CÓDIGO.
+    so_digitos = q.replace(" ", "")
+    if so_digitos.isdigit() and len(so_digitos) >= 2:
+        return [
+            p for p in catalogo
+            if any((c or "").strip() == so_digitos
+                   or (c or "").strip().startswith(so_digitos)
+                   for c in (p.codigo_almeida, p.codigo_dantas))
+        ][:limite]
+    # 2) Busca por PALAVRAS — descrição contém TODAS (AND por substring).
+    alvo = normalizar_descricao(q)
+    palavras = [w for w in alvo.split() if len(w) >= 2]
+    escolhas = {p.produto_id: (p.descricao_canonica or "") for p in catalogo}
+    por_id = {p.produto_id: p for p in catalogo}
+    if palavras:
+        contendo = [(pid, d) for pid, d in escolhas.items()
+                    if all(w in d for w in palavras)]
+        if contendo:
+            contendo.sort(key=lambda x: (-fuzz.token_set_ratio(alvo, x[1]),
+                                         len(x[1])))
+            return [por_id[pid] for pid, _ in contendo[:limite]]
+    # 3) Fallback fuzzy (typo/variação).
+    r = process.extract(alvo, escolhas, scorer=fuzz.token_set_ratio,
+                        limit=limite, score_cutoff=60)
+    return [por_id[pid] for _, _, pid in r]
+
+
 def _busca_catalogo_item(idx: int, item) -> None:
     """Busca MANUAL no catálogo interno do cliente, por item (rede de segurança
     quando a busca automática nos fornecedores não satisfaz — pedido do cliente).
 
-    Procura, por descrição (fuzzy), produtos que o cliente JÁ TEM; mostra marca,
+    Procura produtos que o cliente JÁ TEM (por palavras OU código); mostra marca,
     código do fornecedor e a última cotação conhecida; e permite escolher um
     como opção do item (entra com o badge 'no seu catálogo' e já pré-selecionado).
     """
     from pregoes.scraper import ResultadoBusca
     from pregoes.exportador import SelecaoFornecedor
-    from pregoes.normalizador import normalizar_descricao
-    from rapidfuzz import process, fuzz
 
     catalogo = _carregar_catalogo_sessao()
     with st.expander("🔍 Buscar no meu catálogo (produtos que já tenho)"):
@@ -1618,28 +1661,23 @@ def _busca_catalogo_item(idx: int, item) -> None:
                        "históricas em Configurações para usar esta busca.")
             return
         consulta = st.text_input(
-            "Procurar no meu catálogo", value="", key=f"catq_{idx}",
-            placeholder=(item.descricao or "")[:60],
-            help="Busca por descrição nos produtos que você já comprou.",
+            "Procurar por palavras ou código", value="", key=f"catq_{idx}",
+            placeholder="ex.: tubo pvc 75  ·  válvula lavatório  ·  8811",
+            help="Busque por palavras (acha quem contém todas) ou pelo código "
+                 "do fornecedor. Nos produtos que você já comprou.",
         )
         if not consulta.strip():
-            st.caption(f"Digite parte da descrição para procurar nos seus "
-                       f"{len(catalogo)} produtos.")
+            st.caption(f"Digite palavras (ex.: 'tubo pvc 75') ou um código para "
+                       f"procurar nos seus {len(catalogo)} produtos.")
             return
 
-        alvo = normalizar_descricao(consulta)
-        escolhas = {p.produto_id: (p.descricao_canonica or "") for p in catalogo}
-        # Corte 58: acima disso ficam os parecidos de verdade; abaixo entrava
-        # ruído (ex.: "brita"/"piso" casando 50-53 numa busca de "sifão").
-        ranked = process.extract(alvo, escolhas, scorer=fuzz.token_sort_ratio,
-                                 limit=6, score_cutoff=58)
-        if not ranked:
-            st.caption("Nenhum produto parecido no seu catálogo.")
+        achados = _buscar_no_catalogo(catalogo, consulta)
+        if not achados:
+            st.caption("Nenhum produto encontrado no seu catálogo. Tente outras "
+                       "palavras ou o código do fornecedor.")
             return
-        por_id = {p.produto_id: p for p in catalogo}
         with get_conn() as conn:
-            for _desc, _score, pid in ranked:
-                p = por_id[pid]
+            for p in achados:
                 for forn, codigo in (("almeida", p.codigo_almeida),
                                      ("dantas", p.codigo_dantas)):
                     if not (codigo and str(codigo).strip()):
