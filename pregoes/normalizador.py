@@ -385,6 +385,16 @@ _RE_MM2 = re.compile(r"\b(\d+(?:\.\d+)?)\s*mm2\b")
 # (diâmetro): seção é tratada por _RE_MM2.
 _RE_MM = re.compile(r"\b(\d+(?:\.\d+)?)\s*mm(?![0-9])\b")
 _RE_CM = re.compile(r"\b(\d+(?:\.\d+)?)\s*cm\b")
+# Diâmetro nominal escrito SEM unidade colada: "DIÂMETRO 75", "DIÂMETRO DE 75",
+# "DIÂMETRO NOMINAL 75", "DN 75", "DN75", "Ø 75", "⌀ 75". Mapeado para o eixo
+# "mm" (em tubos/conexões PVC, mm É o diâmetro nominal — o catálogo guarda
+# "75MM"), para casar "DIÂMETRO 75" do edital com "TUBO 75MM" do fornecedor.
+# ÂNCORA OBRIGATÓRIA (a palavra/sinal antes do número) — um "75" solto NÃO vira
+# diâmetro. O lookahead (?![\\d./]) cede a fração ao eixo "pol" ("DIÂMETRO 7/8"
+# → pol) e não conflita com "DIÂMETRO 75MM" (o _RE_MM pega; duplo é inócuo no set).
+_RE_DIAM_NOMINAL = re.compile(
+    r"(?:\bdiametros?(?:\s+nominal)?|\bdn|ø|⌀)\s*(?:de\s+)?(\d+(?:\.\d+)?)(?![\d./])"
+)
 
 
 def _converter_numerais_extenso(texto: str) -> str:
@@ -410,6 +420,19 @@ def extrair_dimensoes(texto: str | None) -> set[tuple[str, str]]:
     [('mm2', '2.5'), ('v', '750')]
     >>> sorted(extrair_dimensoes("CABO 4MM2 750V"))
     [('mm2', '4'), ('v', '750')]
+    >>> # Diâmetro nominal sem "mm" colado → eixo mm (casa "75MM" do catálogo)
+    >>> sorted(extrair_dimensoes("TUBO PVC RÍGIDO DIÂMETRO 75 SOLDÁVEL"))
+    [('mm', '75')]
+    >>> sorted(extrair_dimensoes("Joelho DN 25"))
+    [('mm', '25')]
+    >>> sorted(extrair_dimensoes("Conexão DIÂMETRO DE 50"))
+    [('mm', '50')]
+    >>> # Âncora obrigatória: número solto NÃO vira diâmetro
+    >>> sorted(extrair_dimensoes("PARAFUSO 75 ITEM 30"))
+    []
+    >>> # Fração cede ao eixo polegada (não vira mm)
+    >>> sorted(extrair_dimensoes("VÁLVULA DIÂMETRO 7/8"))
+    [('pol', '7/8')]
     """
     if not texto:
         return set()
@@ -435,6 +458,9 @@ def extrair_dimensoes(texto: str | None) -> set[tuple[str, str]]:
     for v in _RE_MM2.findall(t):
         dims.add(("mm2", v))
     for v in _RE_MM.findall(t):
+        dims.add(("mm", v))
+    # Diâmetro nominal sem "mm" colado ("DIÂMETRO 75", "DN 25") → eixo mm.
+    for v in _RE_DIAM_NOMINAL.findall(t):
         dims.add(("mm", v))
     for v in _RE_CM.findall(t):
         dims.add(("cm", v))

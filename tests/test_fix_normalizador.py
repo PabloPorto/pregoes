@@ -127,3 +127,52 @@ def test_relevancia_conexao_diametro_diferente_abaixo_de_um():
     # Regressão: 20mm vs 25mm de conexão segue divergindo (não casa 1.0).
     r = relevancia("JOELHO 20MM PVC SOLDAVEL", "JOELHO 25MM PVC SOLDAVEL")
     assert r < 1.0
+
+
+# === Diâmetro nominal sem unidade colada (DIÂMETRO 75 / DN 75 / Ø 75) ===
+# Feedback do cliente: "TUBO ... DIÂMETRO 75" trazia tubo de 25/32mm porque o
+# "75" solto não virava medida. Agora vira eixo mm (como o catálogo guarda 75MM).
+
+def test_diametro_nominal_vira_eixo_mm():
+    assert ("mm", "75") in extrair_dimensoes("TUBO PVC DIÂMETRO 75 SOLDÁVEL")
+    assert ("mm", "25") in extrair_dimensoes("JOELHO DN 25")
+    assert ("mm", "50") in extrair_dimensoes("DN50 ESGOTO")
+    assert ("mm", "75") in extrair_dimensoes("DIÂMETRO NOMINAL 75")
+    assert ("mm", "60") in extrair_dimensoes("CONEXÃO DIÂMETRO DE 60")   # 'de' opcional
+    assert ("mm", "32") in extrair_dimensoes("Ø 32 BRANCO")              # sinal de diâmetro
+
+
+def test_diametro_nominal_exige_ancora():
+    # Número solto SEM âncora não vira diâmetro (não mis-fira).
+    assert extrair_dimensoes("PARAFUSO 75 ITEM 30") == set()
+    assert ("mm", "75") not in extrair_dimensoes("CÓDIGO 75 BRANCO")
+
+
+def test_diametro_fracao_cede_a_polegada():
+    d = extrair_dimensoes("VÁLVULA DIÂMETRO 7/8")
+    assert ("pol", "7/8") in d and ("mm", "7") not in d
+
+
+def test_diametro_75mm_colado_nao_quebra():
+    assert extrair_dimensoes("TUBO DIÂMETRO 75MM") == {("mm", "75")}
+
+
+def test_cabo_mm2_intacto_com_eixo_diametro():
+    # Regressão: o eixo de diâmetro nominal não afeta a seção mm².
+    assert extrair_dimensoes("CABO FLEXIVEL 2.5MM2 750V") == {("mm2", "2.5"), ("v", "750")}
+
+
+def test_diametro_quebra_empate_de_relevancia():
+    """Caso REAL do cliente: edital DIÂMETRO 75 (+ COMPRIMENTO 6M). Antes os 3
+    diâmetros empatavam; agora 75mm passa e 25/32mm caem abaixo de 0.35. E o
+    produto CERTO vendido em barra de tamanho diferente NÃO é punido — porque
+    NÃO criamos eixo de metros (decisão da revisão adversarial)."""
+    ed = ("TUBO HIDRAULICO MATERIAL PVC RIGIDO DIAMETRO 75 SOLDAVEL "
+          "COMPRIMENTO 6M")
+    r75 = relevancia(ed, "TUBO PVC SOLDAVEL 75MM 6M")
+    r25 = relevancia(ed, "TUBO PVC SOLDAVEL 25MM 6M")
+    rbarra = relevancia(ed, "TUBO PVC 75MM BARRA 3M")
+    assert r75 >= 0.35                  # diâmetro certo passa
+    assert r25 < 0.35                   # diâmetro errado é rejeitado
+    assert r75 - r25 >= 0.25            # gap claro (antes era 0 — empate)
+    assert rbarra >= 0.35              # barra de 3m (≠ 6M do edital) NÃO punida
