@@ -638,3 +638,52 @@ def test_top_n_dedup_remove_repetidos_e_surface_distintos():
     # (sem regressão no topo — o dedup só remove repetição, não reordena por mérito).
     assert relevancia(desc, res[0].descricao_encontrada) == max(
         relevancia(desc, r.descricao_encontrada) for r in res)
+
+
+# === Reconhecimento por código (produto já no catálogo do cliente) ===
+
+def test_indice_por_codigo_mapeia_fornecedor_e_codigo():
+    from pregoes.matcher import ProdutoCatalogo, indice_por_codigo
+    cat = [
+        ProdutoCatalogo(produto_id=1, descricao_canonica="abracadeira nylon 30cm",
+                        codigo_almeida="52468", codigo_dantas=None, marca="X", unidade_padrao="pct"),
+        ProdutoCatalogo(produto_id=2, descricao_canonica="cabo flexivel 2.5mm",
+                        codigo_almeida=None, codigo_dantas="5004", marca="Y", unidade_padrao="m"),
+    ]
+    idx = indice_por_codigo(cat)
+    assert idx[("almeida", "52468")].produto_id == 1
+    assert idx[("dantas", "5004")].produto_id == 2
+    assert ("dantas", "52468") not in idx   # código é POR fornecedor
+
+
+def test_top_n_prioriza_e_marca_conhecido_por_codigo():
+    """Candidato cujo código já está no catálogo do cliente é MARCADO
+    (no_catalogo) e vai para o TOPO mesmo com relevância textual baixa — sinal
+    forte (o cliente já compra esse produto). Resp 7: continua sendo opção, não
+    decisão automática de marca."""
+    from pregoes.scraper import _top_n_por_relevancia
+    from pregoes.matcher import ProdutoCatalogo, indice_por_codigo
+    desc = "VALVULA PARA LAVATORIO SEM LADRAO"
+    cands = [
+        _r("VALVULA P/ LAVATORIO SEM LADRAO BRANCO", "ASTRA", 9.0, codigo="111", fornecedor="almeida"),
+        # REBOUÇAS: relevância textual baixa (sem 'ladrao', plástico) MAS já no catálogo.
+        _r("VALVULA P/ LAVATORIO REBOUCAS PLASTICO PRETO", "REBOUCAS", 7.0, codigo="999", fornecedor="almeida"),
+    ]
+    cat = [ProdutoCatalogo(produto_id=42, descricao_canonica="valvula lavatorio reboucas",
+                           codigo_almeida="999", codigo_dantas=None, marca="REBOUCAS", unidade_padrao="un")]
+    res = _top_n_por_relevancia(desc, cands, 5, idx_codigo=indice_por_codigo(cat))
+    assert res[0].marca == "REBOUCAS"               # conhecido em 1º
+    assert res[0].no_catalogo is True
+    assert res[0].produto_catalogo_id == 42
+    assert res[0].descricao_catalogo == "valvula lavatorio reboucas"
+    assert any(r.marca == "ASTRA" and not r.no_catalogo for r in res)  # não-conhecido fica
+
+
+def test_top_n_sem_idx_codigo_nao_marca_nada():
+    """Sem catálogo (idx vazio), comportamento idêntico ao anterior: ninguém
+    marcado, ordenação por relevância normal."""
+    from pregoes.scraper import _top_n_por_relevancia
+    desc = "VALVULA PARA LAVATORIO SEM LADRAO"
+    cands = [_r("VALVULA P/ LAVATORIO SEM LADRAO", "ASTRA", 9.0, codigo="111", fornecedor="almeida")]
+    res = _top_n_por_relevancia(desc, cands, 5)
+    assert res[0].no_catalogo is False

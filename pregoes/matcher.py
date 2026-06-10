@@ -115,6 +115,27 @@ def carregar_catalogo(conn: sqlite3.Connection) -> list[ProdutoCatalogo]:
     ]
 
 
+def indice_por_codigo(
+    catalogo: list[ProdutoCatalogo],
+) -> dict[tuple[str, str], ProdutoCatalogo]:
+    """Índice reverso `(fornecedor, codigo) -> produto` do catálogo.
+
+    Usado para reconhecer, entre os candidatos que a busca devolve, quais já
+    estão no catálogo do cliente PELO CÓDIGO do fornecedor (feedback do cliente:
+    "queremos saber se já temos aquele produto"). É o inverso da Camada 0 (que
+    vai descrição→catálogo→código): aqui vamos resultado→código→catálogo.
+
+    Construído uma vez por lote a partir do catálogo já carregado em memória.
+    """
+    idx: dict[tuple[str, str], ProdutoCatalogo] = {}
+    for p in catalogo:
+        if p.codigo_almeida and p.codigo_almeida.strip():
+            idx[("almeida", p.codigo_almeida.strip())] = p
+        if p.codigo_dantas and p.codigo_dantas.strip():
+            idx[("dantas", p.codigo_dantas.strip())] = p
+    return idx
+
+
 def melhor_match(
     descricao: str,
     catalogo: list[ProdutoCatalogo],

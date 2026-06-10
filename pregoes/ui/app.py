@@ -1594,10 +1594,13 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
     from pregoes.normalizador import relevancia as _relev
 
     def _chave_default(item_desc: str, o):
-        """Ordena candidatos para o DEFAULT: 1º quem casa código forte do
-        edital, 2º relevância, 3º menor preço. Sem código casado, o 1º termo
-        é 0 para todos → idêntico ao critério anterior (relevância, preço)."""
-        return (-_bonus_codigo(item_desc, o.descricao_encontrada),
+        """Ordena candidatos para o DEFAULT e para o topo da lista:
+        1º o que JÁ ESTÁ no catálogo do cliente por código (feedback do
+        cliente — ele já compra esse produto), 2º código forte do edital,
+        3º relevância, 4º menor preço. Sem nada disso, idêntico ao critério
+        anterior (relevância, preço)."""
+        return (-int(getattr(o, "no_catalogo", False)),
+                -_bonus_codigo(item_desc, o.descricao_encontrada),
                 -_relev(item_desc, o.descricao_encontrada), o.preco)
 
     def _melhor(item_desc: str, opcoes: list):
@@ -1741,7 +1744,12 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
             st.caption("Escolha a marca e o preço (sugerimos o melhor match):")
             for pos, o in enumerate(opcoes_ordenadas):
                 escolhido = _esta_selecionado(o)
-                if pos == 0:
+                # "Já no seu catálogo" tem prioridade sobre os demais badges —
+                # é o sinal mais forte para o operador (produto que ele já compra,
+                # casado pelo código do fornecedor).
+                if getattr(o, "no_catalogo", False):
+                    badge_html = style.pill("✓ no seu catálogo", "catalogo")
+                elif pos == 0:
                     badge_html = style.pill("Melhor match", "match")
                 elif o.preco == preco_min:
                     badge_html = style.pill("Mais barato", "barato")

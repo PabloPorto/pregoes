@@ -43,7 +43,7 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from typing import Callable, Optional, Protocol
 from urllib.parse import quote_plus
 
@@ -55,7 +55,9 @@ from .diagnostico import (
     LogQueryInterna,
 )
 from .extrator import ItemExtraido
-from .matcher import ProdutoCatalogo, carregar_catalogo, melhor_match
+from .matcher import (
+    ProdutoCatalogo, carregar_catalogo, indice_por_codigo, melhor_match,
+)
 from .normalizador import (
     keywords,
     keywords_distintivas,
@@ -81,6 +83,13 @@ class ResultadoBusca:
     fornecedor: str  # 'almeida' | 'dantas'
     ncm: Optional[str] = None  # Fase 4: NCM (preenchido sob demanda da pág. de detalhe)
     url: Optional[str] = None  # Fase 4: link da página de detalhe (onde mora o NCM)
+    # Reconhecimento por código (feedback do cliente): preenchidos quando o
+    # `codigo_fornecedor` deste candidato bate com um produto já no catálogo do
+    # cliente. `no_catalogo=True` aciona o badge "já no seu catálogo", a
+    # priorização no ranking e a pré-seleção na UI.
+    no_catalogo: bool = False
+    produto_catalogo_id: Optional[int] = None
+    descricao_catalogo: Optional[str] = None  # descrição interna, para conferência
 
 
 class Fornecedor(Protocol):
@@ -167,28 +176,53 @@ def _montar_camadas(descricao: str) -> list[tuple[str, str]]:
     return camadas
 
 
+def _marcar_conhecidos(
+    candidatos: list["ResultadoBusca"],
+    idx_codigo: Optional[dict] = None,
+) -> list["ResultadoBusca"]:
+    """Marca (via `replace`, pois é frozen) os candidatos cujo `codigo_fornecedor`
+    já está no catálogo do cliente. Sem `idx_codigo`, devolve a lista intacta."""
+    if not idx_codigo:
+        return candidatos
+    marcados = []
+    for c in candidatos:
+        p = idx_codigo.get((c.fornecedor, (c.codigo_fornecedor or "").strip()))
+        if p is not None:
+            marcados.append(replace(
+                c, no_catalogo=True, produto_catalogo_id=p.produto_id,
+                descricao_catalogo=p.descricao_canonica))
+        else:
+            marcados.append(c)
+    return marcados
+
+
 def _top_n_por_relevancia(
     descricao_original: str,
     candidatos: list["ResultadoBusca"],
     n: int,
+    idx_codigo: Optional[dict] = None,
 ) -> list["ResultadoBusca"]:
-    """Ordena candidatos por relevância (desc) e preço (asc), mantém top-N.
+    """Ordena candidatos e mantém top-N.
 
-    Os candidatos já passaram pelo filtro de threshold, mas em itens
-    populares no catálogo do fornecedor podem ser dezenas. Acima do
-    top-N a probabilidade do operador realmente escolher cai drasticamente
-    — viram ruído visual.
+    Ordem (Q-feedback do cliente + Resp 7): primeiro os que JÁ ESTÃO no catálogo
+    do cliente por código (sinal forte — ele já comprou), depois por relevância
+    (desc) e preço (asc). Os candidatos já passaram pelo filtro de threshold (ou
+    foram mantidos por serem conhecidos), mas podem ser dezenas; acima do top-N
+    viram ruído visual.
 
-    Mesmo quando `len(candidatos) <= n`, ordenamos: a UI mostra o melhor
-    match primeiro independente do limite (o `n` só corta o cauda).
+    Mesmo quando `len(candidatos) <= n`, ordenamos: a UI mostra o melhor match
+    (ou o conhecido) primeiro independente do limite (o `n` só corta a cauda).
     """
     if not candidatos:
         return []
+    candidatos = _marcar_conhecidos(candidatos, idx_codigo)
     pontuados = [
-        (relevancia(descricao_original, c.descricao_encontrada), c.preco, c)
+        (c.no_catalogo, relevancia(descricao_original, c.descricao_encontrada),
+         c.preco, c)
         for c in candidatos
     ]
-    pontuados.sort(key=lambda x: (-x[0], x[1]))
+    # Conhecido-primeiro (not True == False ordena antes), depois relevância e preço.
+    pontuados.sort(key=lambda x: (not x[0], -x[1], x[2]))
     # Dedup ANTES do corte: o site repete cards (visto ao vivo: L.R.METAIS×2,
     # LUCONI×2 no mesmo resultado). Sem deduplicar aqui, as repetições gastam
     # slots do top-N e o operador vê MENOS produtos distintos para escolher.
@@ -196,7 +230,7 @@ def _top_n_por_relevancia(
     # fornecedor (código+marca+descrição+preço).
     vistos: set = set()
     unicos: list[ResultadoBusca] = []
-    for _rel, _preco, c in pontuados:
+    for _conh, _rel, _preco, c in pontuados:
         chave = (
             (c.codigo_fornecedor or "").strip(),
             (c.marca or "").strip().lower(),
@@ -382,7 +416,8 @@ class AlmeidaDistribuidor:
             )
 
     def buscar(self, descricao: str,
-               _log: Optional["LogItemFornecedor"] = None) -> list[ResultadoBusca]:
+               _log: Optional["LogItemFornecedor"] = None,
+               idx_codigo: Optional[dict] = None) -> list[ResultadoBusca]:
         """Tenta as camadas de busca em ordem. Para na primeira que
         produzir resultados relevantes. Aplica rate limit antes de cada
         busca real para respeitar o site parceiro.
@@ -408,7 +443,12 @@ class AlmeidaDistribuidor:
                 rel = relevancia(descricao, r.descricao_encontrada)
                 if rel > melhor_rel:
                     melhor_rel = rel
-                if rel >= _RELEVANCIA_MINIMA:
+                # Mantém o candidato se passa no threshold OU se já está no
+                # catálogo do cliente por código (sinal forte — não descartar
+                # um produto que ele já compra só por relevância textual baixa).
+                conhecido = bool(idx_codigo) and (
+                    r.fornecedor, (r.codigo_fornecedor or "").strip()) in idx_codigo
+                if rel >= _RELEVANCIA_MINIMA or conhecido:
                     relevantes.append(r)
             if _log is not None:
                 _log.queries_textuais.append(LogQueryInterna(
@@ -422,6 +462,7 @@ class AlmeidaDistribuidor:
                 return _top_n_por_relevancia(
                     descricao, relevantes,
                     config.SCRAPER_MAX_CANDIDATOS_POR_FORNECEDOR,
+                    idx_codigo=idx_codigo,
                 )
 
         # Sem candidatos acima do threshold: retorna lista vazia.
@@ -635,7 +676,8 @@ class DantasDistribuidora:
             )
 
     def buscar(self, descricao: str,
-               _log: Optional["LogItemFornecedor"] = None) -> list[ResultadoBusca]:
+               _log: Optional["LogItemFornecedor"] = None,
+               idx_codigo: Optional[dict] = None) -> list[ResultadoBusca]:
         if not descricao or not descricao.strip():
             return []
 
@@ -652,7 +694,12 @@ class DantasDistribuidora:
                 rel = relevancia(descricao, r.descricao_encontrada)
                 if rel > melhor_rel:
                     melhor_rel = rel
-                if rel >= _RELEVANCIA_MINIMA:
+                # Mantém o candidato se passa no threshold OU se já está no
+                # catálogo do cliente por código (sinal forte — não descartar
+                # um produto que ele já compra só por relevância textual baixa).
+                conhecido = bool(idx_codigo) and (
+                    r.fornecedor, (r.codigo_fornecedor or "").strip()) in idx_codigo
+                if rel >= _RELEVANCIA_MINIMA or conhecido:
                     relevantes.append(r)
             if _log is not None:
                 _log.queries_textuais.append(LogQueryInterna(
@@ -666,6 +713,7 @@ class DantasDistribuidora:
                 return _top_n_por_relevancia(
                     descricao, relevantes,
                     config.SCRAPER_MAX_CANDIDATOS_POR_FORNECEDOR,
+                    idx_codigo=idx_codigo,
                 )
 
         # Mesma decisão do Almeida: sem candidatos acima do threshold,
@@ -861,6 +909,11 @@ def buscar_precos_para_itens(
             # Banco sem schema, corrompido etc — não impede o caminho atual.
             catalogo = []
 
+    # Índice reverso (fornecedor, código) → produto do catálogo: reconhece, entre
+    # os candidatos que a busca devolve, quais o cliente JÁ TEM pelo código
+    # (feedback do cliente). Vazio quando o catálogo não está populado.
+    idx_codigo = indice_por_codigo(catalogo) if catalogo else {}
+
     # Fase B: canoniza as descrições do edital em LOTE (1-N chamadas LLM por
     # edital, cacheadas) para casar com o canônico do catálogo. Só vale a
     # pena se o catálogo foi normalizado (tem `canonico`) e há chave Gemini.
@@ -882,6 +935,10 @@ def buscar_precos_para_itens(
     import inspect
     suporta_log = {
         f.nome: "_log" in inspect.signature(f.buscar).parameters
+        for f in fornecedores
+    }
+    suporta_idx = {
+        f.nome: "idx_codigo" in inspect.signature(f.buscar).parameters
         for f in fornecedores
     }
 
@@ -1007,10 +1064,12 @@ def buscar_precos_para_itens(
                 # internas do scraper).
                 if not encontrados:
                     try:
+                        _kw = {}
                         if suporta_log.get(forn.nome) and log_forn is not None:
-                            encontrados = forn.buscar(item.descricao, _log=log_forn)
-                        else:
-                            encontrados = forn.buscar(item.descricao)
+                            _kw["_log"] = log_forn
+                        if suporta_idx.get(forn.nome) and idx_codigo:
+                            _kw["idx_codigo"] = idx_codigo
+                        encontrados = forn.buscar(item.descricao, **_kw)
                     except Exception as exc:
                         erros.append(ErroBusca(
                             indice_item=idx,
