@@ -1402,17 +1402,19 @@ def _card_opcao(idx: int, pos: int, opcao, *, badge_html: str,
     """Renderiza uma opção de marca/preço como card selecionável.
 
     Layout decidido com o cliente (2026-06): o que decide a compra fica em
-    destaque — **marca** e **preço**; a descrição encontrada e o fornecedor
-    ficam secundários (cinza, menores) para conferência. O código do
-    fornecedor e a relevância do algoritmo (`rel=`) NÃO aparecem: o primeiro
-    é preenchido sozinho na planilha, o segundo é métrica interna — ambos só
-    poluíam a decisão do operador leigo.
+    destaque — **marca** e **preço**; a descrição encontrada, o fornecedor e o
+    **código do fornecedor** ficam secundários (cinza, menores) para
+    conferência. O código passou a aparecer por FEEDBACK DO CLIENTE
+    (2026-06-09): ele precisa vê-lo para diferenciar produtos parecidos e
+    cruzar com as tabelas internas. A relevância do algoritmo (`rel=`) continua
+    oculta (métrica interna).
 
     O card escolhido recebe um `key` `ppoptsel-*` para o CSS destacá-lo
     (fundo + acento). ``badge_html`` é uma pílula de ``style.pill`` (ou "").
     """
     marca = (opcao.marca or "Sem marca").strip()
     fornecedor = (opcao.fornecedor or "").capitalize()
+    codigo = (opcao.codigo_fornecedor or "").strip()
     desc = (opcao.descricao_encontrada or "").strip()
     if len(desc) > 72:
         desc = desc[:72].rstrip() + "…"
@@ -1425,7 +1427,13 @@ def _card_opcao(idx: int, pos: int, opcao, *, badge_html: str,
             [5.2, 1.8, 1.6], vertical_alignment="center")
         with c_info:
             sufixo = f" {badge_html}" if badge_html else ""
-            sub = desc + (f" · {fornecedor}" if fornecedor else "")
+            # Linha secundária: descrição · fornecedor · código (o código entra
+            # por feedback do cliente, para diferenciar produtos e cruzar com as
+            # tabelas internas). O código vai em destaque leve (monoespaçado).
+            meta = " · ".join(p for p in [fornecedor] if p)
+            cod_html = (f" · <code style='color:#475569;font-size:0.8rem'>"
+                        f"cód. {html.escape(codigo)}</code>") if codigo else ""
+            sub = desc + (f" · {meta}" if meta else "") + cod_html
             st.markdown(
                 f"<span style='font-weight:600;font-size:1.02rem'>{marca}</span>"
                 f"{sufixo}<br>"
