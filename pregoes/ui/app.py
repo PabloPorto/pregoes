@@ -1585,6 +1585,101 @@ def _painel_markup(selecoes: dict, itens: list) -> dict:
     return markups
 
 
+def _carregar_catalogo_sessao():
+    """Carrega o catálogo do cliente (produtos) UMA vez por sessão para a
+    busca manual. Lista vazia se o catálogo não foi populado."""
+    if "catalogo_lista" not in st.session_state:
+        from pregoes.matcher import carregar_catalogo
+        try:
+            with get_conn() as conn:
+                st.session_state.catalogo_lista = carregar_catalogo(conn)
+        except Exception:
+            st.session_state.catalogo_lista = []
+    return st.session_state.catalogo_lista
+
+
+def _busca_catalogo_item(idx: int, item) -> None:
+    """Busca MANUAL no catálogo interno do cliente, por item (rede de segurança
+    quando a busca automática nos fornecedores não satisfaz — pedido do cliente).
+
+    Procura, por descrição (fuzzy), produtos que o cliente JÁ TEM; mostra marca,
+    código do fornecedor e a última cotação conhecida; e permite escolher um
+    como opção do item (entra com o badge 'no seu catálogo' e já pré-selecionado).
+    """
+    from pregoes.scraper import ResultadoBusca
+    from pregoes.exportador import SelecaoFornecedor
+    from pregoes.normalizador import normalizar_descricao
+    from rapidfuzz import process, fuzz
+
+    catalogo = _carregar_catalogo_sessao()
+    with st.expander("🔍 Buscar no meu catálogo (produtos que já tenho)"):
+        if not catalogo:
+            st.caption("Catálogo interno vazio — importe suas planilhas "
+                       "históricas em Configurações para usar esta busca.")
+            return
+        consulta = st.text_input(
+            "Procurar no meu catálogo", value="", key=f"catq_{idx}",
+            placeholder=(item.descricao or "")[:60],
+            help="Busca por descrição nos produtos que você já comprou.",
+        )
+        if not consulta.strip():
+            st.caption(f"Digite parte da descrição para procurar nos seus "
+                       f"{len(catalogo)} produtos.")
+            return
+
+        alvo = normalizar_descricao(consulta)
+        escolhas = {p.produto_id: (p.descricao_canonica or "") for p in catalogo}
+        # Corte 58: acima disso ficam os parecidos de verdade; abaixo entrava
+        # ruído (ex.: "brita"/"piso" casando 50-53 numa busca de "sifão").
+        ranked = process.extract(alvo, escolhas, scorer=fuzz.token_sort_ratio,
+                                 limit=6, score_cutoff=58)
+        if not ranked:
+            st.caption("Nenhum produto parecido no seu catálogo.")
+            return
+        por_id = {p.produto_id: p for p in catalogo}
+        with get_conn() as conn:
+            for _desc, _score, pid in ranked:
+                p = por_id[pid]
+                for forn, codigo in (("almeida", p.codigo_almeida),
+                                     ("dantas", p.codigo_dantas)):
+                    if not (codigo and str(codigo).strip()):
+                        continue
+                    codigo = str(codigo).strip()
+                    cot = _db.ultima_cotacao(conn, pid, forn)
+                    preco = float(cot["preco"]) if cot else 0.0
+                    if cot:
+                        preco_txt = f"R$ {preco:.2f} (últ. {cot['consultado_em'][:10]})"
+                    else:
+                        preco_txt = "sem cotação — confira o preço na planilha"
+                    c1, c2 = st.columns([5, 1.4], vertical_alignment="center")
+                    with c1:
+                        st.markdown(
+                            f"**{html.escape(p.marca or 'Sem marca')}** · "
+                            f"{html.escape((p.descricao_canonica or '')[:58])}<br>"
+                            f"<span style='color:#64748b;font-size:0.82rem'>"
+                            f"{forn.capitalize()} · "
+                            f"<code>cód. {html.escape(codigo)}</code> · "
+                            f"{preco_txt}</span>",
+                            unsafe_allow_html=True)
+                    with c2:
+                        if st.button("Usar", key=f"usecat_{idx}_{pid}_{forn}",
+                                     width="stretch"):
+                            novo = ResultadoBusca(
+                                descricao_encontrada=p.descricao_canonica or "",
+                                marca=p.marca or "", preco=preco,
+                                codigo_fornecedor=codigo,
+                                confianca="exato", fornecedor=forn,
+                                no_catalogo=True, produto_catalogo_id=pid,
+                                descricao_catalogo=p.descricao_canonica)
+                            st.session_state.resultados_busca.setdefault(
+                                idx, []).append(novo)
+                            st.session_state.selecoes[idx] = SelecaoFornecedor(
+                                preco=novo.preco,
+                                codigo_fornecedor=novo.codigo_fornecedor,
+                                marca=novo.marca)
+                            st.rerun()
+
+
 def _mostrar_selecao(itens: list, resultados: dict) -> None:
     """Lista paginada de itens; cada candidato vira um card. Operador escolhe.
 
@@ -1771,6 +1866,10 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
                             marca=o.marca, ncm=getattr(o, "ncm", None),
                             url=getattr(o, "url", None))),
                 )
+
+            # Rede de segurança: buscar no catálogo interno do cliente quando a
+            # busca automática não satisfez (pedido do cliente 2026-06-09).
+            _busca_catalogo_item(idx, item)
 
             # Opção de não usar este item
             sem_sel = sel_atual is None

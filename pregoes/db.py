@@ -378,6 +378,32 @@ def preco_em_cache(
     return cursor.fetchone()
 
 
+def ultima_cotacao(
+    conn: sqlite3.Connection,
+    produto_id: int,
+    fornecedor: str,
+) -> Optional[sqlite3.Row]:
+    """Cotação mais recente de `precos_historico` para `(produto_id, fornecedor)`,
+    SEM filtro de TTL.
+
+    Diferente de `preco_em_cache` (que só serve dentro da janela de 2 dias para
+    o scraper): aqui queremos o ÚLTIMO preço conhecido — venha ele da planilha
+    histórica importada ou de uma busca anterior — para a busca manual no
+    catálogo mostrar uma referência de preço ao operador, com a data.
+    """
+    cursor = conn.execute(
+        """
+        SELECT preco, unidade, consultado_em, fonte
+        FROM precos_historico
+        WHERE produto_id = ? AND fornecedor = ?
+        ORDER BY consultado_em DESC
+        LIMIT 1
+        """,
+        (produto_id, fornecedor),
+    )
+    return cursor.fetchone()
+
+
 def gravar_preco(
     conn: sqlite3.Connection,
     produto_id: int,

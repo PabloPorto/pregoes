@@ -687,3 +687,22 @@ def test_top_n_sem_idx_codigo_nao_marca_nada():
     cands = [_r("VALVULA P/ LAVATORIO SEM LADRAO", "ASTRA", 9.0, codigo="111", fornecedor="almeida")]
     res = _top_n_por_relevancia(desc, cands, 5)
     assert res[0].no_catalogo is False
+
+
+def test_ultima_cotacao_ignora_ttl(tmp_path):
+    """ultima_cotacao retorna o último preço conhecido SEM TTL (para a busca
+    manual no catálogo), ao contrário de preco_em_cache (janela de 2 dias)."""
+    from pregoes import db as _db
+    from pregoes.db import init_db, get_conn, ultima_cotacao, preco_em_cache
+    dbp = tmp_path / "t.db"
+    init_db(dbp)
+    velho = (datetime.utcnow() - timedelta(days=30)).isoformat(sep=" ")
+    with get_conn(dbp) as conn:
+        pid = _setup_produto(conn)
+        conn.execute(
+            "INSERT INTO precos_historico (produto_id, fornecedor, preco, consultado_em) "
+            "VALUES (?,?,?,?)", (pid, "almeida", 12.34, velho))
+        conn.commit()
+        assert preco_em_cache(conn, pid, "almeida") is None       # velho → fora do TTL
+        row = ultima_cotacao(conn, pid, "almeida")                # sem TTL → retorna
+        assert row is not None and row["preco"] == 12.34
