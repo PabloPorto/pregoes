@@ -176,3 +176,31 @@ def test_diametro_quebra_empate_de_relevancia():
     assert r25 < 0.35                   # diâmetro errado é rejeitado
     assert r75 - r25 >= 0.25            # gap claro (antes era 0 — empate)
     assert rbarra >= 0.35              # barra de 3m (≠ 6M do edital) NÃO punida
+
+
+# === Fase 2: diâmetro na query (diametro_para_query + _montar_camadas) ===
+
+def test_diametro_para_query():
+    from pregoes.normalizador import diametro_para_query
+    assert diametro_para_query("TUBO PVC DIAMETRO 75 SOLDAVEL") == "75mm"
+    assert diametro_para_query("JOELHO DN 25") == "25mm"
+    assert diametro_para_query("CABO FLEXIVEL 2.5MM2") is None   # seção (mm²), não diâmetro
+    assert diametro_para_query("VALVULA DIAMETRO 7/8") is None   # fração → polegada
+    assert diametro_para_query("PARAFUSO 75") is None            # sem âncora
+    assert diametro_para_query("DIAMETRO 5") is None             # bitola <10mm (conservador)
+
+
+def test_montar_camadas_anexa_diametro_com_fallback():
+    """Fase 2: a query com diâmetro vem ANTES da sem (mais precisa primeiro);
+    a sem-diâmetro fica como fallback → só adiciona precisão, nunca regride.
+    Item SEM diâmetro fica inalterado."""
+    from pregoes.scraper import _montar_camadas
+    qs = [q for _, q in _montar_camadas(
+        "TUBO HIDRAULICO MATERIAL PVC RIGIDO DIAMETRO 75 SOLDAVEL COMPRIMENTO 6M")]
+    assert "tubo hidraulico material pvc 75mm" in qs          # 1a: com diâmetro
+    assert "tubo hidraulico material pvc" in qs               # 1b: fallback sem diâmetro
+    assert qs.index("tubo hidraulico material pvc 75mm") < \
+           qs.index("tubo hidraulico material pvc")           # com diâmetro PRIMEIRO
+    # Item sem diâmetro: nenhuma camada extra
+    qs2 = [q for _, q in _montar_camadas("ABRACADEIRA DE NYLON 100 PCT C/100")]
+    assert all("mm" not in q.split() for q in qs2)

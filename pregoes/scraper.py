@@ -59,6 +59,7 @@ from .matcher import (
     ProdutoCatalogo, carregar_catalogo, indice_por_codigo, melhor_match,
 )
 from .normalizador import (
+    diametro_para_query,
     keywords,
     keywords_distintivas,
     normalizar_descricao,
@@ -139,7 +140,7 @@ _RELEVANCIA_SALVAGUARDA_CODIGO = 0.30
 # cache (`precos_cache_descricao`) quando o número aqui difere do salvo
 # em `data/.busca_versao`. Evita que resultados de versões antigas do
 # algoritmo "vazem" para o operador via cache TTL 2d.
-BUSCA_VERSAO = "2026-06-09.9-diametro-nominal"
+BUSCA_VERSAO = "2026-06-09.10-diametro-query"
 
 
 def _montar_camadas(descricao: str) -> list[tuple[str, str]]:
@@ -164,9 +165,18 @@ def _montar_camadas(descricao: str) -> list[tuple[str, str]]:
             camadas.append((confianca, q))
 
     distintivas = keywords_distintivas(descricao, 4)
-    # 1. Query distintiva (3-4 keywords) — a melhor para o site
+    diam = diametro_para_query(descricao)   # Fase 2: "75mm" se houver diâmetro nominal
     if distintivas:
-        _add("exato", " ".join(distintivas))
+        base = " ".join(distintivas)
+        # 1a. Distintiva + DIÂMETRO (mais precisa) — tentada PRIMEIRO. O '75' de
+        # "DIÂMETRO 75" sumia da query e o site trazia qualquer diâmetro; anexar
+        # "75mm" traz o certo. Se esta query não achar nada relevante, o
+        # buscar() cai na 1b (sem diâmetro) — a Fase 2 só ADICIONA precisão,
+        # nunca regride (a camada de fallback garante).
+        if diam and diam not in base:
+            _add("exato", f"{base} {diam}")
+        # 1b. Query distintiva (3-4 keywords) — comportamento atual
+        _add("exato", base)
     # 2. Núcleo curto (categoria — 2 primeiras distintivas)
     if len(distintivas) >= 2:
         _add("variacao", " ".join(distintivas[:2]))

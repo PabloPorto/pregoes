@@ -402,6 +402,26 @@ def _converter_numerais_extenso(texto: str) -> str:
     return " ".join(_NUMERAL_MAP.get(p, p) for p in texto.split())
 
 
+def diametro_para_query(descricao: str | None) -> str | None:
+    """Token de diâmetro para enriquecer a query de busca, ou None.
+
+    "TUBO ... DIÂMETRO 75 ..." → "75mm" (Fase 2): o '75' some da query distintiva
+    (número solto), então o site devolve qualquer diâmetro. Anexar "75mm" faz o
+    site trazer o diâmetro certo. Só dispara com UM diâmetro nominal claro no
+    eixo mm (>= 10mm, para não confundir bitola de cabo 2.5/4/6mm com diâmetro
+    de tubo). Fração (polegada) não entra aqui — já sobrevive na descrição.
+    """
+    mm = sorted({v for eixo, v in extrair_dimensoes(descricao) if eixo == "mm"})
+    if len(mm) != 1:
+        return None
+    try:
+        if float(mm[0]) < 10:      # bitola de cabo, não diâmetro de tubo/conexão
+            return None
+    except ValueError:
+        return None
+    return f"{mm[0]}mm"
+
+
 def extrair_dimensoes(texto: str | None) -> set[tuple[str, str]]:
     """Extrai dimensões/medidas-chave como pares `(eixo, valor)`.
 
