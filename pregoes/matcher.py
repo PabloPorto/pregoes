@@ -235,6 +235,46 @@ def _dimensao_diverge(texto_a: str, texto_b: str) -> bool:
     return False
 
 
+# Reuso FUZZY do aprendizado bypassa a busca textual inteira (vai direto no
+# código), então o threshold é mais ALTO que o catálogo (90): só reusa quando a
+# descrição é bem parecida. O gate de dimensão é a 2ª salvaguarda.
+THRESHOLD_APRENDIDO_FUZZY = 92
+
+
+def melhor_aprendido_fuzzy(
+    descricao_edital: str,
+    fornecedor: str,
+    aprendidos: list,
+    threshold: int = THRESHOLD_APRENDIDO_FUZZY,
+):
+    """Camada 4 plena: reusa um mapeamento aprendido cuja descrição é PARECIDA
+    com a do edital (token_sort_ratio >= threshold) no MESMO fornecedor — desde
+    que as DIMENSÕES não divirjam (não reusa 'válvula 7/8' para 'válvula 1.1/4').
+
+    `aprendidos` são linhas de `db.aprendidos_carregar` (acesso por chave:
+    descricao_normalizada, fornecedor, codigo_fornecedor, marca, preco). Retorna
+    o registro aprendido casado, ou None.
+    """
+    if not descricao_edital or not aprendidos:
+        return None
+    alvo = normalizar_descricao(descricao_edital)
+    if not alvo:
+        return None
+    cands = [a for a in aprendidos if a["fornecedor"] == fornecedor]
+    if not cands:
+        return None
+    escolhas = {i: a["descricao_normalizada"] for i, a in enumerate(cands)}
+    achou = process.extractOne(
+        alvo, escolhas, scorer=fuzz.token_sort_ratio, score_cutoff=threshold)
+    if achou is None:
+        return None
+    _desc, _score, idx = achou
+    cand = cands[idx]
+    if _dimensao_diverge(descricao_edital, cand["descricao_normalizada"]):
+        return None   # nome parecido mas medida diferente → não reusa
+    return cand
+
+
 def buscar_produto(
     conn: sqlite3.Connection,
     descricao: str,

@@ -56,7 +56,8 @@ from .diagnostico import (
 )
 from .extrator import ItemExtraido
 from .matcher import (
-    ProdutoCatalogo, carregar_catalogo, indice_por_codigo, melhor_match,
+    ProdutoCatalogo, carregar_catalogo, indice_por_codigo,
+    melhor_aprendido_fuzzy, melhor_match,
 )
 from .normalizador import (
     diametro_para_query,
@@ -933,6 +934,16 @@ def buscar_precos_para_itens(
     # (feedback do cliente). Vazio quando o catálogo não está populado.
     idx_codigo = indice_por_codigo(catalogo) if catalogo else {}
 
+    # Mapeamentos aprendidos (escolhas anteriores do operador) em memória, para
+    # o reuso FUZZY da Camada 4 plena: descrição nova parecida com uma já
+    # ensinada → reusa o código direto. Carrega uma vez por lote.
+    aprendidos_lista: list = []
+    if conn is not None:
+        try:
+            aprendidos_lista = db.aprendidos_carregar(conn)
+        except Exception:
+            aprendidos_lista = []
+
     # Fase B: canoniza as descrições do edital em LOTE (1-N chamadas LLM por
     # edital, cacheadas) para casar com o canônico do catálogo. Só vale a
     # pena se o catálogo foi normalizado (tem `canonico`) e há chave Gemini.
@@ -1022,6 +1033,11 @@ def buscar_precos_para_itens(
                 if conn is not None and desc_norm:
                     try:
                         aprendido = db.aprendido_buscar(conn, desc_norm, forn.nome)
+                        # Camada 4 plena: se não houve match EXATO, tenta reuso
+                        # FUZZY (descrição parecida + dimensão compatível).
+                        if aprendido is None and aprendidos_lista:
+                            aprendido = melhor_aprendido_fuzzy(
+                                item.descricao, forn.nome, aprendidos_lista)
                         if aprendido is not None:
                             codigo_aprendido = aprendido["codigo_fornecedor"]
                     except Exception:

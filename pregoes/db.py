@@ -666,8 +666,9 @@ def aprendido_buscar(
 ) -> Optional[sqlite3.Row]:
     """Procura mapeamento previamente aprendido para esta descrição+fornecedor.
 
-    Match exato — quem chama pode adicionalmente fazer busca fuzzy >= 95
-    via matcher para reuso em descrições próximas (TODO Camada 4 plena).
+    Match EXATO (rápido, indexado). O reuso FUZZY ("nomes parecidos" — Camada 4
+    plena) é feito pelo orquestrador via `aprendidos_carregar` +
+    `matcher.melhor_aprendido_fuzzy`.
     """
     if not descricao_normalizada or not fornecedor:
         return None
@@ -680,6 +681,22 @@ def aprendido_buscar(
         (descricao_normalizada, fornecedor),
     ).fetchone()
     return row
+
+
+def aprendidos_carregar(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Todos os mapeamentos aprendidos, em memória, para o reuso FUZZY da
+    Camada 4 plena (descrição nova ≈ descrição já ensinada → reusa o produto).
+
+    O volume é o histórico de escolhas do operador (centenas), então carregar
+    tudo uma vez por lote e casar com rapidfuzz é barato — evita um SELECT
+    fuzzy por item × fornecedor.
+    """
+    return conn.execute(
+        """
+        SELECT descricao_normalizada, fornecedor, codigo_fornecedor, marca, preco
+        FROM mapeamentos_aprendidos
+        """
+    ).fetchall()
 
 
 def aprendido_gravar(
