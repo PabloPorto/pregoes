@@ -543,13 +543,15 @@ def confianca_para_badge(conf: float) -> tuple[str, TipoBadge]:
 
 
 def sidebar_marca() -> None:
-    """Logo + nome do app no topo da sidebar."""
+    """Logo + nome do app no topo da sidebar (com a versão, para suporte)."""
+    from pregoes import config
     st.markdown(
         '<div class="pp-brand">'
         '<div class="pp-brand-logo">P</div>'
         '<div class="pp-brand-text">'
         '<div class="pp-brand-name">Pregões</div>'
-        '<div class="pp-brand-tagline">Automação de formação de preços</div>'
+        '<div class="pp-brand-tagline">Automação de formação de preços '
+        f'· v{config.VERSAO_APP}</div>'
         '</div>'
         '</div>',
         unsafe_allow_html=True,

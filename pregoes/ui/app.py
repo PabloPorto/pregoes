@@ -46,6 +46,9 @@ style.aplicar_estilo()
 from pregoes import logconf, db as _db
 logconf.configurar()
 _log = logconf.get_logger("ui")
+# Primeira linha de todo log: a versão. O suporte remoto lê o pregoes.log
+# do cliente e precisa saber QUAL build gerou cada rastro.
+_log.info("Pregões v%s iniciado", config.VERSAO_APP)
 
 # Inicializa/migra o banco no primeiro load
 init_db()

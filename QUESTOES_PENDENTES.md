@@ -32,6 +32,10 @@
   `pregoes.db` — zero cópia manual, à prova de erro. NÃO sobrescrever banco
   existente (preserva o que o cliente acumulou). Adiado de propósito até
   estabilizar com mais testes de campo.
+  *Mitigação enquanto isso (2026-06-11):* o processo manual está documentado
+  passo a passo em `INSTALACAO.md` (instalação nova vs atualização vs
+  restauração) e o seed é gerado por `python scripts/gerar_seed.py` (cópia
+  consistente via API de backup + limpeza do volátil), não mais à mão.
 - **Fase 4 (markup por Substituição Tributária): ENTREGUE e funcionando.**
   Itens cujo NCM consta na lista de ST do estado usam markup 1,30; os demais,
   1,45 — POR ITEM, editável por pregão na UI. Componentes:
