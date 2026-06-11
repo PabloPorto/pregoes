@@ -6,6 +6,8 @@ Rodar: python scripts/gerar_apresentacao.py
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from reportlab.lib import colors
@@ -13,10 +15,12 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT
 from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak,
-    ListFlowable, ListItem, HRFlowable, KeepTogether,
+    ListFlowable, ListItem, HRFlowable, KeepTogether, Image as RLImage,
 )
 
 SAIDA = "Apresentacao_Sistema_Pregoes.pdf"
+# Telas capturadas (geradas por scripts/_capturar.py) ficam ao lado deste script
+GUIA = Path(__file__).resolve().parent / "assets" / "guia"
 
 # Paleta (mesma do app)
 AZUL = colors.HexColor("#1E40AF")
@@ -80,6 +84,29 @@ def tabela(linhas, larguras, cabecalho=True):
                    ("LINEBELOW", (0, 0), (-1, 0), 0, colors.white)]
     t.setStyle(TableStyle(estilo))
     return t
+
+
+def tela(nome, largura_mm):
+    """Screenshot de uma tela do app, com moldura cinza fina, centralizado."""
+    img = RLImage(str(GUIA / nome))
+    # Ler as dimensões naturais ANTES de fixar o tamanho: o acesso a
+    # imageWidth/imageHeight dispara o lazy-load do reportlab, que reseta
+    # drawWidth/drawHeight. Lendo primeiro, as atribuições abaixo não são
+    # sobrescritas (senão a largura volta ao natural e a imagem vaza).
+    iw, ih = img.imageWidth, img.imageHeight
+    w = largura_mm * mm
+    img.drawWidth = w
+    img.drawHeight = w * ih / iw
+    moldura = Table([[img]], colWidths=[w])
+    moldura.setStyle(TableStyle([
+        ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#CBD5E1")),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+    ]))
+    moldura.hAlign = "CENTER"
+    return moldura
 
 
 def rodape(canvas, doc):
@@ -344,7 +371,68 @@ def build():
         "tributária por Substituição também é conservadora: aplica o desconto de imposto apenas onde a "
         "lista oficial do estado confirma."))
 
-    # ---- 9. RESUMO ----
+    # ---- 9. GUIA DO USUÁRIO (com telas reais) ----
+    story.append(PageBreak())
+    story.append(P("9. Guia do usuário — passo a passo na tela", "h1"))
+    story.append(P(
+        "As telas abaixo mostram o sistema em uso, na ordem em que você as encontra ao "
+        "preparar um pregão. À esquerda fica sempre o menu (Início, Histórico, Novo pregão, "
+        "Configurações) e o status das conexões. À direita, a etapa atual."))
+
+    # 9.1 — Configurações (uma vez)
+    story.append(P("9.1 Configuração inicial (só na primeira vez)", "h2"))
+    story.append(P(
+        "Antes do primeiro uso, abra <b>Configurações</b> e informe o e-mail e a senha de cada "
+        "distribuidor e a chave da inteligência artificial. Tudo fica guardado apenas na sua máquina "
+        "(arquivo local), sem envio para fora. O selo verde confirma cada conexão ativa."))
+    story.append(Spacer(1, 4))
+    story.append(tela("configuracoes.png", 150))
+
+    # 9.2 — Novo pregão (upload)
+    story.append(PageBreak())
+    story.append(P("9.2 Enviar o edital", "h2"))
+    story.append(P(
+        "Em <b>Novo pregão</b>, arraste o PDF do edital (ou clique para escolher) e informe o "
+        "<b>órgão</b> e o <b>número do pregão</b> — esses dois campos identificam o pregão no histórico "
+        "e são obrigatórios. Em seguida o sistema lê o documento e extrai os itens automaticamente."))
+    story.append(Spacer(1, 4))
+    story.append(tela("upload.png", 150))
+
+    # 9.3 — Revisão
+    story.append(PageBreak())
+    story.append(P("9.3 Revisar os itens lidos", "h2"))
+    story.append(P(
+        "O sistema mostra os itens que leu do edital, com um <b>semáforo de confiança</b> (no exemplo, "
+        "97% — alta). Você confere e edita qualquer célula clicando nela, e marca quais itens entram na "
+        "planilha (a coluna “OK?”). Linhas que merecem atenção aparecem destacadas. Quando estiver "
+        "satisfeito, clique em <b>Buscar preços</b>."))
+    story.append(Spacer(1, 4))
+    story.append(tela("revisao.png", 138))
+
+    # 9.4 — Busca de preços (a mais importante)
+    story.append(PageBreak())
+    story.append(P("9.4 Escolher marca e preço (a tela principal)", "h2"))
+    story.append(P(
+        "Para cada item, o sistema lista as opções de marca e preço encontradas nos distribuidores. "
+        "Esta é a tela onde você decide. Repare nos destaques que o sistema oferece para acelerar a "
+        "escolha — sem nunca decidir por você:"))
+    story.append(bullets([
+        "<b>Selo “no seu catálogo”</b> (roxo): essa opção tem o mesmo código de um produto que você já "
+        "comprou — ela sobe para o topo e já vem pré-selecionada.",
+        "<b>Código do fornecedor</b> em cada opção (ex.: “cód. 52763”), para bater com as suas tabelas.",
+        "<b>Melhor casamento</b> sugerido e a opção <b>“escolhido”</b> destacada em azul.",
+        "<b>Buscar no meu catálogo</b>: se a busca automática não satisfez, procure por palavra ou "
+        "código nos produtos que você já tem.",
+    ]))
+    story.append(Spacer(1, 4))
+    story.append(tela("busca_precos.png", 132))
+    story.append(P(
+        "Ao final, o sistema aplica o markup por item (com ou sem Substituição Tributária) e gera a sua "
+        "planilha MATRIZ preenchida, pronta para download — e registrada no histórico para segunda via.",
+        "caption"))
+
+    # ---- 10. RESUMO ----
+    story.append(PageBreak())
     story.append(HRFlowable(width="100%", color=AZUL_CLARO, thickness=1, spaceBefore=6, spaceAfter=8))
     story.append(P("Em resumo — o que o sistema entrega", "h1"))
     story.append(bullets([
