@@ -37,9 +37,18 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt || (echo [ERRO] pip install. & pause & exit /b 1)
 python -m pip install pyinstaller
 
-REM 3. Chromium do Playwright (sera empacotado no .exe pelo pregoes.spec)
+REM 3. Chromium do Playwright (sera empacotado no .exe pelo pregoes.spec).
+REM    SEM ele a busca de precos do .exe nasce morta e o operador leigo nao
+REM    tem como consertar — por isso o build ABORTA se o download falhar
+REM    (auditoria 2026-06).
 echo Baixando o Chromium do Playwright (uma vez)...
-python -m playwright install chromium
+python -m playwright install chromium || (
+    echo.
+    echo [ERRO] Download do Chromium falhou — sem ele a busca de precos
+    echo        nao funciona no .exe. Verifique a internet/proxy e rode
+    echo        este build de novo. NADA foi gerado.
+    pause & exit /b 1
+)
 
 REM 4. Build
 pyinstaller pregoes.spec --noconfirm --clean || (echo [ERRO] PyInstaller falhou. & pause & exit /b 1)

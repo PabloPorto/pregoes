@@ -134,3 +134,30 @@ def test_sem_cabecalho_valido_mantem_contrato_vazio():
 
 def test_tabela_vazia_retorna_contrato_vazio():
     assert _identifica_cabecalho_multilinha([]) == ({}, 0)
+
+
+# --- Achado alto nº 2 (auditoria 2026-06): célula multi-linha/mesclada ------
+# '10\n20' (dois números numa célula, comum quando o pdfplumber não separa
+# linhas mescladas) virava 1020.0 — quantidade errada em ordens de grandeza,
+# com cara de válida (passa no score). Agora devolve None: a linha perde
+# score, vira 'duvidoso' e força revisão humana.
+
+def test_dois_numeros_na_celula_quebra_de_linha_rejeitado():
+    assert _para_numero("10\n20") is None
+
+
+def test_dois_numeros_na_celula_espaco_rejeitado():
+    assert _para_numero("10 20") is None
+
+
+def test_moeda_com_espaco_apos_cifrao_segue_valida():
+    assert _para_numero("R$ 1.234,56") == pytest.approx(1234.56)
+
+
+def test_numero_unico_com_espacos_nas_pontas_segue_valido():
+    assert _para_numero("  15  ") == 15.0
+
+
+def test_para_int_tambem_rejeita_celula_com_dois_numeros():
+    from pregoes.extrator import _para_int
+    assert _para_int("10\n20") is None

@@ -401,3 +401,66 @@ def test_buscar_no_catalogo_palavras_codigo_fallback():
     # vazios
     assert app._buscar_no_catalogo(cat, "") == []
     assert app._buscar_no_catalogo([], "tubo") == []
+
+
+# --- Fixes da auditoria 2026-06 (bloco 1) -----------------------------------
+
+def test_chaves_pregao_incluem_markup_overrides():
+    """Achado alto nº 6: markup_overrides é keyed por OFFSET do item (0..n).
+    Se sobreviver ao 'Novo pregão', o override de ST do item N do pregão
+    anterior contamina o item N do pregão novo — planilha ~10% mais barata
+    em silêncio. Tem que estar no estado descartado por _limpar_pregao."""
+    assert "markup_overrides" in app.CHAVES_PREGAO
+
+
+def test_tentar_mapa_aprendido_aplica_em_lote_nas_fatias(tmp_path):
+    """Achado alto nº 1: o reuso automático de mapa aprendido aplicava o mapa
+    a UMA fatia da tabela multi-página e descartava as demais — 2º edital do
+    mesmo órgão entregava só os itens da 1ª página com banner de sucesso.
+    Agora usa aplicar_mapa_em_lote: itens de TODAS as fatias entram."""
+    from pregoes.db import init_db as init_real, get_conn as conn_real
+    from pregoes import mapeamento_manual as mm
+    from pregoes.extrator import ResultadoExtracao
+
+    cab = ["Item", "Descrição", "Unid.", "Quant.", "Valor Unitário"]
+    pag1 = [list(cab),
+            ["1", "CIMENTO PORTLAND CP II 50KG", "SC", "100", "38,50"],
+            ["2", "AREIA MEDIA LAVADA M3", "M3", "12", "95,00"]]
+    pag2 = [list(cab),  # cabeçalho repetido na página seguinte
+            ["3", "BRITA 1 GRANITICA M3", "M3", "8", "110,00"],
+            ["4", "VERGALHAO CA-50 10MM BARRA 12M", "BR", "50", "42,90"]]
+    mapa = {"codigo_orgao": 0, "descricao": 1, "unidade": 2,
+            "quantidade": 3, "valor_referencia": 4}
+
+    db = tmp_path / "t.db"
+    init_real(db)
+    fraco = ResultadoExtracao(arquivo="e.pdf", itens=[],
+                              tabelas_brutas=[pag1, pag2],
+                              mapa_colunas_detectado={}, avisos=[],
+                              confianca_global=0.0)
+    with conn_real(db) as conn:
+        mm.salvar_mapa(conn, mm.assinatura_cabecalho(cab), mapa)
+        melhor = app._tentar_mapa_aprendido(fraco, conn, "e.pdf")
+
+    assert melhor is not fraco
+    assert melhor.total_itens == 4, "itens das DUAS páginas devem entrar"
+    descrs = [i.descricao for i in melhor.itens]
+    assert any("BRITA" in d for d in descrs), "item da 2ª fatia presente"
+    assert melhor.tabelas_brutas == [pag1, pag2], "tabelas brutas preservadas"
+    assert any("Mapa aprendido" in a for a in melhor.avisos)
+
+
+def test_tentar_mapa_aprendido_sem_mapa_salvo_devolve_original(tmp_path):
+    """Sem mapa aprendido com aquela assinatura, a extração original volta
+    intocada (mesmo objeto) — nenhum banner falso de reuso."""
+    from pregoes.db import init_db as init_real, get_conn as conn_real
+    from pregoes.extrator import ResultadoExtracao
+
+    db = tmp_path / "t.db"
+    init_real(db)
+    fraco = ResultadoExtracao(
+        arquivo="e.pdf", itens=[],
+        tabelas_brutas=[[["Item", "Descrição"], ["1", "X"]]],
+        mapa_colunas_detectado={}, avisos=[], confianca_global=0.3)
+    with conn_real(db) as conn:
+        assert app._tentar_mapa_aprendido(fraco, conn, "e.pdf") is fraco

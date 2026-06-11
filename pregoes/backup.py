@@ -14,7 +14,13 @@ from . import db
 def main(argv: list[str] | None = None) -> int:
     motivo = (argv or sys.argv[1:])
     motivo = motivo[0] if motivo else "manual"
-    destino = db.backup(motivo)
+    try:
+        destino = db.backup(motivo)
+    except RuntimeError as exc:
+        # Banco corrompido (porteiro de integridade): mensagem limpa em
+        # português, sem stacktrace cru para o operador (CLAUDE.md §10).
+        print(f"ERRO: {exc}")
+        return 2
     if destino is None:
         print("Banco ainda não existe — nada a salvar.")
         return 1

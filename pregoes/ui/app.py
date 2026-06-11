@@ -157,9 +157,13 @@ def ir_para(tela: str):
 
 # Estado de sessão pertencente ao pregão em andamento (extração, revisão,
 # busca, seleções). "Novo pregão" descarta tudo isto.
+# markup_overrides é keyed por OFFSET do item (0..n) — vazar para o pregão
+# seguinte aplicaria o markup ST do item de mesmo offset do pregão anterior,
+# em silêncio (auditoria 2026-06, achado alto nº 6).
 CHAVES_PREGAO = ("extracao", "df_editavel", "resultados_busca",
                  "selecoes", "pagina_busca", "itens_revisados",
-                 "usando_tabelas_docling", "mapeamento_tabela_idx")
+                 "usando_tabelas_docling", "mapeamento_tabela_idx",
+                 "markup_overrides")
 
 
 def _limpar_pregao() -> None:
@@ -299,6 +303,35 @@ def tela_home():
             ir_para("historico")
 
 
+def _tentar_mapa_aprendido(resultado, conn, arquivo: str):
+    """Tenta melhorar uma extração fraca com mapas aprendidos (assinatura de
+    cabeçalho já vista). Aplica em LOTE — a tabela casada + as fatias-
+    continuação das outras páginas. Aplicar numa fatia única descartava as
+    demais páginas da tabela multi-página, entregando p.ex. 30 de 500 itens
+    com banner de sucesso (auditoria 2026-06, achado alto nº 1).
+
+    Retorna o melhor ResultadoExtracao (o original, se nenhum mapa ganhar).
+    """
+    for idx, tab in enumerate(resultado.tabelas_brutas):
+        if not tab or not tab[0]:
+            continue
+        sig = mapeamento_manual.assinatura_cabecalho(tab[0])
+        mapa_salvo = mapeamento_manual.carregar_mapa(conn, sig)
+        if not mapa_salvo:
+            continue
+        novo = mapeamento_manual.aplicar_mapa_em_lote(
+            resultado.tabelas_brutas, idx, mapa_salvo, arquivo=arquivo)
+        if novo.confianca_global > resultado.confianca_global:
+            novo.tabelas_brutas = resultado.tabelas_brutas
+            novo.avisos.insert(
+                0,
+                f"✨ Mapa aprendido reusado (tabela #{idx + 1} e "
+                f"continuações, cabeçalho conhecido)."
+            )
+            return novo
+    return resultado
+
+
 # === Tela: UPLOAD ===
 def tela_upload():
     style.header_pagina(
@@ -351,35 +384,16 @@ def tela_upload():
         # de PDFs anteriores com a mesma assinatura de cabeçalho.
         if resultado.confianca_global < 0.95 and resultado.tabelas_brutas:
             with get_conn() as conn:
-                for idx, tab in enumerate(resultado.tabelas_brutas):
-                    if not tab or not tab[0]:
-                        continue
-                    sig = mapeamento_manual.assinatura_cabecalho(tab[0])
-                    mapa_salvo = mapeamento_manual.carregar_mapa(conn, sig)
-                    if not mapa_salvo:
-                        continue
-                    novo = mapeamento_manual.aplicar_mapa(
-                        tab, mapa_salvo,
-                        arquivo=str(tmp_path),
-                        pular_cabecalho=True,
-                    )
-                    if novo.confianca_global > resultado.confianca_global:
-                        novo.tabelas_brutas = resultado.tabelas_brutas
-                        novo.avisos.insert(
-                            0,
-                            f"✨ Mapa aprendido reusado (tabela #{idx + 1}, "
-                            f"cabeçalho conhecido)."
-                        )
-                        resultado = novo
-                        break
+                resultado = _tentar_mapa_aprendido(
+                    resultado, conn, str(tmp_path))
 
+        # Nenhum estado do pregão ANTERIOR pode vazar no novo (seleções,
+        # resultados de busca, overrides de markup keyed por offset...).
+        # Também reseta df_editavel: sem isto, uma extração nova reaproveita
+        # o DataFrame em cache e o usuário vê itens desatualizados na revisão.
+        _limpar_pregao()
         st.session_state.extracao = resultado
-        # Reset do df_editavel: sem isto, uma extração nova reaproveita o
-        # DataFrame em cache da extração anterior e o usuário vê itens
-        # desatualizados na revisão (o data_editor não repopula sozinho).
         st.session_state.df_editavel = None
-        st.session_state.pop("usando_tabelas_docling", None)
-        st.session_state.pop("mapeamento_tabela_idx", None)
         st.session_state.orgao = orgao
         st.session_state.numero = numero
         st.session_state.pdf_path = str(tmp_path)
@@ -1109,6 +1123,31 @@ def tela_busca_precos():
                     "Abra no Excel/LibreOffice, anote `correto`/`errado`/`aceitavel` "
                     "na coluna **Avaliação** da aba **Resumo** e devolva para calibrar."
                 )
+        # Saída pós-busca (auditoria 2026-06, achado alto nº 8): se o site
+        # falhou no meio do lote, o operador precisa de um caminho que não
+        # seja recomeçar o pregão do zero. Re-buscar é barato: o que já tem
+        # preço responde do cache (commit incremental por item) e só o que
+        # ficou vazio é consultado de novo (vazio não entra no cache).
+        with st.expander("A busca teve problemas? Re-buscar ou voltar"):
+            st.caption(
+                "Os dois caminhos descartam os resultados e as marcas já "
+                "escolhidas nesta tela — re-buscar é rápido: itens que já têm "
+                "preço respondem da memória (2 dias) e só os sem resultado "
+                "são tentados outra vez."
+            )
+            col_re, col_volta = st.columns(2)
+            # Ambos os botões DESCARTAM resultados/seleções: eles são
+            # indexados pela POSIÇÃO do item, e voltar à revisão permite
+            # remover/editar itens — manter o estado antigo pareava preço
+            # do item errado na planilha (verificação adversarial 2026-06).
+            if col_re.button("Buscar preços novamente", width="stretch"):
+                for k in ("resultados_busca", "selecoes", "pagina_busca"):
+                    st.session_state.pop(k, None)
+                st.rerun()
+            if col_volta.button("Voltar para a revisão", width="stretch"):
+                for k in ("resultados_busca", "selecoes", "pagina_busca"):
+                    st.session_state.pop(k, None)
+                ir_para("revisao")
         _mostrar_selecao(itens, st.session_state.resultados_busca)
         return
 

@@ -141,7 +141,7 @@ _RELEVANCIA_SALVAGUARDA_CODIGO = 0.30
 # cache (`precos_cache_descricao`) quando o número aqui difere do salvo
 # em `data/.busca_versao`. Evita que resultados de versões antigas do
 # algoritmo "vazem" para o operador via cache TTL 2d.
-BUSCA_VERSAO = "2026-06-09.10-diametro-query"
+BUSCA_VERSAO = "2026-06-11.11-eixos-l-kg-m"
 
 
 def _montar_camadas(descricao: str) -> list[tuple[str, str]]:
@@ -1008,13 +1008,21 @@ def buscar_precos_para_itens(
                     log_item.por_fornecedor.append(log_forn)
 
                 # 1. Tenta cache de descrição (camada mais barata).
+                # Payload VAZIO é tratado como miss: "não achei" não é
+                # distinguível de falha transitória (sessão caída, site
+                # instável) — honrar "[]" por 2 dias transformava um soluço
+                # do site em "Não encontrado" persistente, exatamente na
+                # hora do pregão (auditoria 2026-06, achado alto nº 5).
                 if conn is not None and usar_cache and desc_norm:
                     payload = db.cache_buscar(conn, desc_norm, forn.nome)
-                    if payload is not None:
+                    encontrados_cache = (
+                        _payload_to_resultados(payload, forn.nome)
+                        if payload is not None else []
+                    )
+                    if encontrados_cache:
                         cache_hits += 1
                         if log_forn is not None:
                             log_forn.cache_hit = True
-                        encontrados_cache = _payload_to_resultados(payload, forn.nome)
                         bag.extend(encontrados_cache)
                         if log_forn is not None:
                             _registrar_candidatos_finais(
@@ -1121,13 +1129,17 @@ def buscar_precos_para_itens(
                         veio_por_codigo=veio_por_codigo, aprovado_judge=False,
                     )
 
-                # 4. Grava no cache — exceto quando veio por código.
-                # Cache por descrição não casa bem com resultado por código
-                # (vários itens do edital com descrições diferentes podem
-                # apontar pro mesmo produto). Cache de descrição só guarda
-                # quem nasceu de busca textual.
+                # 4. Grava no cache — exceto quando veio por código ou
+                # quando NÃO achou nada. Cache por descrição não casa bem
+                # com resultado por código (vários itens do edital com
+                # descrições diferentes podem apontar pro mesmo produto).
+                # E resultado VAZIO nunca entra no cache: um logout/soluço
+                # do site no meio do lote viraria "Não encontrado" por 2
+                # dias (auditoria 2026-06, achado alto nº 5). O custo é
+                # re-buscar os legitimamente inexistentes a cada rodada —
+                # aceitável e mais seguro.
                 if (conn is not None and usar_cache and desc_norm
-                        and not veio_por_codigo):
+                        and encontrados and not veio_por_codigo):
                     payload = json.dumps(
                         [asdict(r) for r in encontrados], ensure_ascii=False
                     )

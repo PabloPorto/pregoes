@@ -124,3 +124,45 @@ def test_outros_motivos_nao_sao_deduplicados_por_dia(banco, tmp_path):
     autos = [p for p in _backups(tmp_path)
              if p.name.endswith("_auto-a.db") or p.name.endswith("_auto-b.db")]
     assert len(autos) == 2
+
+
+# === Auditoria 2026-06: destino deriva da ORIGEM + porteiro de integridade ===
+
+def test_backup_de_banco_fora_do_data_dir_nao_polui_producao(tmp_path, monkeypatch):
+    """Banco de teste em sandbox → backup em sandbox/backups, NUNCA na pasta
+    de produção (era a causa dos 600+ 'pre-migration' de teste protegidos
+    acumulados em data/backups/ — auditoria 2026-06)."""
+    producao = tmp_path / "producao"
+    producao.mkdir()
+    monkeypatch.setattr(config, "DATA_DIR", producao)
+    monkeypatch.setattr(config, "DB_PATH", producao / "pregoes.db")
+
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    dbp = sandbox / "t.db"
+    _criar_banco(dbp)
+
+    destino = db.backup("pre-migration", path=dbp)
+    assert destino is not None
+    assert destino.parent == sandbox / "backups"
+    pasta_prod = producao / "backups"
+    assert not pasta_prod.exists() or not list(pasta_prod.glob("pregoes_*.db"))
+
+
+def test_banco_corrompido_nao_gera_backup_e_levanta_erro(tmp_path):
+    """Arquivo que não é um SQLite válido: quick_check falha, NENHUM backup
+    é criado (não contamina a rotação) e o erro explica o que fazer."""
+    dbp = tmp_path / "c.db"
+    dbp.write_bytes(b"isto definitivamente nao e um sqlite valido " * 64)
+    with pytest.raises(RuntimeError, match="integridade"):
+        db.backup("auto", path=dbp)
+    pasta = tmp_path / "backups"
+    assert not pasta.exists() or not list(pasta.glob("pregoes_*.db"))
+
+
+def test_quick_check_aprova_banco_integro_e_backup_sai(tmp_path):
+    """Caminho feliz inalterado: banco íntegro passa no porteiro."""
+    dbp = tmp_path / "ok.db"
+    _criar_banco(dbp)
+    destino = db.backup("auto", path=dbp)
+    assert destino is not None and destino.exists()

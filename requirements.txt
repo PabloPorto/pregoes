@@ -1,32 +1,37 @@
 # Dependências do MVP — fase 0 e 1
 # Instalação: pip install -r requirements.txt
+#
+# Versões PINADAS (==): o .exe entregue ao cliente embarca exatamente o que
+# foi testado pela suíte — um rebuild meses depois não pode puxar versões
+# novas nunca testadas (auditoria 2026-06). Para atualizar uma lib: suba a
+# versão aqui, rode a suíte completa e só então faça o build.
 
 # Extração de PDF
-pdfplumber>=0.11.0
+pdfplumber==0.11.9
 
 # Manipulação Excel preservando fórmulas
-openpyxl>=3.1.0
+openpyxl==3.1.5
 
 # Análise tabular usada na UI
-pandas>=2.2.0
+pandas==3.0.2
 
 # UI web local
-streamlit>=1.40.0
+streamlit==1.57.0
 
 # Geração de PDFs sintéticos para testes
-reportlab>=4.2.0
+reportlab==4.5.0
 
 # Testes
-pytest>=8.0.0
+pytest==9.0.3
 
 # Scraping de fornecedores (Almeida, Dantas) — fase 2
 # Após pip install, rodar uma vez: python -m playwright install chromium
-playwright>=1.40.0
+playwright==1.59.0
 
 # Camada de extração via LLM (Gemini) — Camada 2 automática quando
 # pdfplumber fica < 95%, e o motor da busca (canonização + judge).
 # Billing pago aprovado (~$1-2/mês no volume alvo). Ver Q11/Q12.
-google-genai>=1.0.0
+google-genai==2.8.0
 
 # NOTA: o Docling (camada visual de extração, ~1.5GB com PyTorch) saiu do
 # requirements padrão — é opcional e fica em requirements-dev.txt. A Camada 2
@@ -36,7 +41,7 @@ google-genai>=1.0.0
 
 # Fuzzy matching de descrições — matcher do catálogo (Camada 0)
 # e componente da relevância híbrida (Camada 2). Decisão Q12.
-rapidfuzz>=3.0.0
+rapidfuzz==3.14.5
 
 # === Reservado para fase 4 (NF-e + dashboard) ===
 # lxml>=5.0.0      # parsing de XMLs de NF-e

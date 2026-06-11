@@ -236,13 +236,39 @@ def _eh_backup_protegido(p: Path) -> bool:
     return any(m in p.name for m in _MOTIVOS_PROTEGIDOS)
 
 
+def _integridade_ok(conn: sqlite3.Connection) -> bool:
+    """``PRAGMA quick_check``: detecta corrupção estrutural antes do backup.
+
+    quick_check (vs integrity_check) pula a validação de índices UNIQUE —
+    ordens de grandeza mais rápido e suficiente como porteiro. Sem ele, uma
+    corrupção silenciosa contaminaria as 10 cópias da rotação em ~10 dias e
+    não sobraria NENHUM backup íntegro para restaurar (auditoria 2026-06).
+    """
+    try:
+        linha = conn.execute("PRAGMA quick_check;").fetchone()
+        return bool(linha) and str(linha[0]).lower() == "ok"
+    except sqlite3.DatabaseError:
+        return False
+
+
 def backup(motivo: str = "auto", path: Path | None = None,
            manter: int = _BACKUP_MANTER) -> Optional[Path]:
-    """Cópia CONSISTENTE do banco em data/backups/, mesmo com WAL ativo.
+    """Cópia CONSISTENTE do banco em ``<pasta do banco>/backups/``, mesmo
+    com WAL ativo.
 
     Usa a API nativa `sqlite3.Connection.backup()` — diferente de
     `shutil.copyfile`, que pegaria um WAL parcial e geraria um backup
     corrompido. Roda online (não precisa parar a aplicação).
+
+    O destino deriva da ORIGEM (``path.parent/backups``), não de
+    ``config.DATA_DIR``: backups de bancos de teste (tmp_path) iam parar na
+    pasta de produção como 'pre-migration' protegidos — 600+ arquivos que
+    nunca rotacionavam e podiam ser restaurados no lugar do banco real
+    (auditoria 2026-06). Em produção nada muda: o banco vive em data/.
+
+    Antes de copiar, o banco passa por ``PRAGMA quick_check``; se estiver
+    corrompido, NENHUM backup é criado e a função levanta ``RuntimeError``
+    — um backup corrompido na rotação é pior que nenhum.
 
     `motivo` entra no nome do arquivo (ex: 'pre-migration', 'pre-import',
     'diario') para rastrear por que o backup foi feito. Retorna o caminho
@@ -256,7 +282,7 @@ def backup(motivo: str = "auto", path: Path | None = None,
     path = Path(path) if path else config.DB_PATH
     if not path.exists():
         return None
-    backup_dir = config.DATA_DIR / "backups"
+    backup_dir = path.parent / "backups"
     backup_dir.mkdir(parents=True, exist_ok=True)
 
     # Dedup do diário por data: evita estourar a rotação quando a UI
@@ -273,13 +299,21 @@ def backup(motivo: str = "auto", path: Path | None = None,
     destino = backup_dir / f"pregoes_{ts}_{motivo_safe}.db"
 
     origem = sqlite3.connect(path, timeout=_BUSY_TIMEOUT_S)
-    alvo = sqlite3.connect(destino)
     try:
-        with alvo:
-            origem.backup(alvo)
+        if not _integridade_ok(origem):
+            raise RuntimeError(
+                f"O banco {path.name} falhou na verificação de integridade — "
+                "backup NÃO criado para não contaminar a rotação. Restaure a "
+                "cópia íntegra mais recente de data/backups/ e procure suporte."
+            )
+        alvo = sqlite3.connect(destino)
+        try:
+            with alvo:
+                origem.backup(alvo)
+        finally:
+            alvo.close()
     finally:
         origem.close()
-        alvo.close()
 
     _rotacionar_backups(backup_dir, manter)
     return destino

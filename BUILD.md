@@ -45,16 +45,18 @@ os arquivos do programa preservando essa pasta `data\`.
 
 ## Playwright / Chromium (ponto que mais costuma precisar de ajuste)
 
-O `build_exe.bat` roda `playwright install chromium` antes do build, e o
-`pregoes.spec` empacota a pasta `ms-playwright` se ela existir. O runtime hook
+O `build_exe.bat` roda `playwright install chromium` antes do build e **aborta
+se o download falhar**; o `pregoes.spec` empacota a pasta `ms-playwright` e
+**falha o build se ela não existir** (auditoria 2026-06 — sem Chromium o .exe
+sairia com a busca de preços morta, irreparável pelo operador). O runtime hook
 aponta o `.exe` para ela. **Confirme no teste 4 acima.** Se não funcionar:
 
 - Verifique no console do build a linha `[spec] Chromium do Playwright
-  empacotado de: ...`. Se aparecer o AVISO em vez disso, o `playwright install`
-  não rodou ou foi para outro caminho — rode-o manualmente e rebuilde.
-- Alternativa (sem empacotar): deixar o Chromium fora e instalá-lo uma vez na
-  máquina do cliente — mas isso exige rodar um comando, o que foge do "leigo".
-  Empacotar é o caminho recomendado.
+  empacotado de: ...`. Se o build abortar com o ERRO do spec, o
+  `playwright install` não rodou ou foi para outro caminho — rode
+  `python -m playwright install chromium` manualmente e rebuilde.
+- Para um build de EXPERIMENTO sem o navegador (nunca para entrega):
+  `set PREGOES_BUILD_SEM_CHROMIUM=1` antes do `pyinstaller`.
 
 ## Gotchas conhecidos (PyInstaller + Streamlit)
 

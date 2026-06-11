@@ -53,3 +53,43 @@ def test_nao_reusa_descricao_diferente():
 def test_entradas_vazias():
     assert melhor_aprendido_fuzzy("QUALQUER", "almeida", []) is None
     assert melhor_aprendido_fuzzy("", "almeida", APRENDIDOS) is None
+
+
+# === Auditoria 2026-06 (achado alto nº 4): gate de medida na Camada 4 =======
+
+def test_fuzzy_nao_reusa_codigo_de_peso_errado():
+    """Cimento 50KG aprendido NÃO pode ser reusado para edital de 25KG —
+    mesmo com descrição quase idêntica (fuzzy altíssimo), o gate de
+    dimensão (eixo kg) barra o reuso."""
+    aprendidos = [{
+        "descricao_normalizada": "cimento portland cp ii saco 50kg",
+        "fornecedor": "almeida", "codigo_fornecedor": "111",
+        "marca": "POTY",
+    }]
+    assert melhor_aprendido_fuzzy(
+        "CIMENTO PORTLAND CP II SACO 25KG", "almeida", aprendidos) is None
+
+
+def test_fuzzy_continua_reusando_quando_medida_bate():
+    aprendidos = [{
+        "descricao_normalizada": "cimento portland cp ii saco 50kg",
+        "fornecedor": "almeida", "codigo_fornecedor": "111",
+        "marca": "POTY",
+    }]
+    achado = melhor_aprendido_fuzzy(
+        "CIMENTO PORTLAND CP II SC 50KG", "almeida", aprendidos)
+    assert achado is not None and achado["codigo_fornecedor"] == "111"
+
+
+def test_fuzzy_reusa_com_milhar_ptbr_no_catalogo():
+    """Verificação adversarial 2026-06: aprendizado salvo como '1.000 lt'
+    (milhar pt-BR, linha real) TEM que ser reusado para edital '1000 LITROS'
+    — o gate de dimensão compara valor numérico, não string."""
+    aprendidos = [{
+        "descricao_normalizada": "caixa dagua polietileno 1.000 lt",
+        "fornecedor": "almeida", "codigo_fornecedor": "777",
+        "marca": "FORTLEV",
+    }]
+    achado = melhor_aprendido_fuzzy(
+        "CAIXA DAGUA POLIETILENO 1000 LITROS", "almeida", aprendidos)
+    assert achado is not None and achado["codigo_fornecedor"] == "777"

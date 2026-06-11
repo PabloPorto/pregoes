@@ -395,6 +395,40 @@ _RE_CM = re.compile(r"\b(\d+(?:\.\d+)?)\s*cm\b")
 _RE_DIAM_NOMINAL = re.compile(
     r"(?:\bdiametros?(?:\s+nominal)?|\bdn|ø|⌀)\s*(?:de\s+)?(\d+(?:\.\d+)?)(?![\d./])"
 )
+# Volume (litros) e massa (kg) — eixos #1 de caixa d'água, balde, saco de
+# cimento/argamassa e adesivos: "CAIXA 500L" ≠ "CAIXA 1000L", "CIMENTO 50KG"
+# ≠ "25KG". A auditoria 2026-06 mediu subproduto de medida errada passando
+# com relevância 0.8-0.9 porque o gate não cobria esses eixos (achado alto
+# nº 3) — e a Camada 4 fuzzy propagava o código errado como 'exato' (nº 4).
+# ml/g entram no MESMO eixo convertidos (1000ml = 1l, 500g = 0.5kg), para
+# "FRASCO 1000ML" casar "FRASCO 1L".
+# O lookbehind (?<![/.]) impede o DENOMINADOR de fração de vazar para o
+# eixo: sem ele, "REGISTRO 1/2 L" viraria ('l', '2') — o \b aceita dígito
+# precedido de '/' ou '.'.
+# (?!\s*=) impede "L=" de LARGURA de virar litros ("chapa 26 l=0.70" no
+# catálogo real); 'gr' fica FORA do eixo kg porque no domínio é abreviação
+# de GRAUS ("JOELHO 90 GR") com muito mais frequência que de gramas.
+_RE_LITRO = re.compile(
+    r"\b(?<![/.])(\d+(?:\.\d+)?)\s*(?:l|lts?|litros?)\b(?!\s*=)")
+_RE_ML = re.compile(r"\b(?<![/.])(\d+(?:\.\d+)?)\s*ml\b")
+_RE_KG = re.compile(r"\b(?<![/.])(\d+(?:\.\d+)?)\s*(?:kgs?|quilos?|kilos?)\b")
+_RE_GRAMA = re.compile(r"\b(?<![/.])(\d+(?:\.\d+)?)\s*(?:g|gramas?)\b(?!\s*=)")
+# Comprimento em metros: rolo 50m, mangueira 30m, lona 8m.
+# NÃO captura "mm" nem "m2"/"m3" (sem word-boundary entre 'm' e o que segue,
+# o \b final falha). DUAS exclusões deliberadas:
+# - "BARRA 3M"/"COMPRIMENTO 6M" são removidos ANTES da extração
+#   (_RE_METRO_BARRA): comprimento de barra é unidade de VENDA de tubo, não
+#   identidade do produto — punir "TUBO 75MM BARRA 3M" contra edital
+#   "COMPRIMENTO 6M" foi a regressão apontada na revisão adversarial do
+#   cross-brand (test_diametro_quebra_empate_de_relevancia consagra isso).
+#   Para lona/mangueira/rolo, a metragem É identidade e o eixo vale.
+# - Limitação conhecida e aceita: a MARCA "3M" ("FITA 3M") entra como 3
+#   metros — inócua quando os dois lados citam o comprimento real (um valor
+#   compartilhado já evita divergência).
+_RE_METRO = re.compile(r"\b(?<![/.])(\d+(?:\.\d+)?)\s*(?:m|mts?|metros?)\b")
+_RE_METRO_BARRA = re.compile(
+    r"\b(?:barras?|comprimentos?)\s*(?:de\s+)?\d+(?:\.\d+)?\s*(?:m|mts?|metros?)\b"
+)
 
 
 def _converter_numerais_extenso(texto: str) -> str:
@@ -453,6 +487,19 @@ def extrair_dimensoes(texto: str | None) -> set[tuple[str, str]]:
     >>> # Fração cede ao eixo polegada (não vira mm)
     >>> sorted(extrair_dimensoes("VÁLVULA DIÂMETRO 7/8"))
     [('pol', '7/8')]
+    >>> # Volume e massa (auditoria 2026-06): caixa d'água, cimento, adesivo
+    >>> sorted(extrair_dimensoes("CAIXA D'AGUA POLIETILENO 500 LITROS"))
+    [('l', '500')]
+    >>> sorted(extrair_dimensoes("CIMENTO PORTLAND CP II SACO 50KG"))
+    [('kg', '50')]
+    >>> sorted(extrair_dimensoes("ADESIVO PVC FRASCO 1000ML"))  # 1000ml = 1l
+    [('l', '1')]
+    >>> # Comprimento em metros NÃO confunde com mm nem m2
+    >>> sorted(extrair_dimensoes("LONA PLASTICA PRETA ROLO 8 METROS"))
+    [('m', '8')]
+    >>> # "BARRA 3M" é unidade de venda de tubo, não identidade — fora do eixo
+    >>> sorted(extrair_dimensoes("TUBO PVC 75MM BARRA 6M"))
+    [('mm', '75')]
     """
     if not texto:
         return set()
@@ -484,6 +531,20 @@ def extrair_dimensoes(texto: str | None) -> set[tuple[str, str]]:
         dims.add(("mm", v))
     for v in _RE_CM.findall(t):
         dims.add(("cm", v))
+    # Volume (l) e massa (kg); ml/g convertem para o mesmo eixo (1000ml=1l).
+    for v in _RE_LITRO.findall(t):
+        dims.add(("l", v))
+    for v in _RE_ML.findall(t):
+        dims.add(("l", _dividir_valor_dim(v, 1000)))
+    for v in _RE_KG.findall(t):
+        dims.add(("kg", v))
+    for v in _RE_GRAMA.findall(t):
+        dims.add(("kg", _dividir_valor_dim(v, 1000)))
+    # Comprimento (m) — DEPOIS de mm/cm: "75mm"/"30cm" não chegam aqui.
+    # "BARRA 3M"/"COMPRIMENTO 6M" saem antes (unidade de venda de tubo,
+    # não identidade — ver comentário em _RE_METRO_BARRA).
+    for v in _RE_METRO.findall(_RE_METRO_BARRA.sub(" ", t)):
+        dims.add(("m", v))
     # Normaliza o valor de cada eixo para comparação: zeros à esquerda de
     # inteiros somem ('05'->'5'), senão "5 tomadas" e "05 TOMADAS" pareciam
     # eixos divergentes e rebaixavam um match verdadeiro (filtro de linha).
@@ -491,13 +552,43 @@ def extrair_dimensoes(texto: str | None) -> set[tuple[str, str]]:
     return {(eixo, _norm_valor_dim(v)) for eixo, v in dims}
 
 
-def _norm_valor_dim(v: str) -> str:
-    """Tira zeros à esquerda de valores inteiros de dimensão ('05'->'5').
+_MILHAR_DIM_RE = re.compile(r"^\d{1,3}(?:\.\d{3})+$")
 
-    Mantém decimais e frações como estão — só inteiros puros são normalizados,
-    para que '5' e '05' (mesma quantidade) não contem como eixo divergente.
+
+def _norm_valor_dim(v: str) -> str:
+    """Normaliza o valor de um eixo para comparação numérica justa.
+
+    Sem isto, valores IGUAIS divergiam como string (verificação adversarial
+    2026-06, com linhas reais do catálogo do cliente):
+    - '05' vs '5' (zeros à esquerda);
+    - '1.000 lt' vs '1000 LITROS' — milhar pt-BR (mesma heurística do
+      extrator: 1-3 dígitos + grupos de 3 → remove pontos);
+    - '2.00m' vs '2 METROS' e '1.20 mt' vs '1,2 MT' — zeros finais de
+      decimal.
+    Frações ('3/16') ficam intactas — pertencem ao eixo polegada.
     """
-    return str(int(v)) if v.isdigit() else v
+    if v.isdigit():
+        return str(int(v))
+    if _MILHAR_DIM_RE.match(v):
+        return str(int(v.replace(".", "")))
+    if re.fullmatch(r"\d+\.\d+", v):
+        s = v.rstrip("0").rstrip(".")
+        return str(int(s)) if s.isdigit() else s
+    return v
+
+
+def _dividir_valor_dim(v: str, divisor: int) -> str:
+    """Converte sub-unidade para a unidade do eixo: '500' ml → '0.5' (l),
+    '1000' ml → '1'. Formata sem zeros finais para '1000ml' e '1l' baterem
+    no mesmo valor do set ('1' == '1'). Milhar pt-BR ('1.000 ML') é mil,
+    não 1.0 — passa pela mesma heurística de _norm_valor_dim."""
+    try:
+        if _MILHAR_DIM_RE.match(v):
+            v = v.replace(".", "")
+        s = f"{float(v) / divisor:.3f}".rstrip("0").rstrip(".")
+        return s or "0"
+    except ValueError:
+        return v
 
 
 def _algum_eixo_diverge(

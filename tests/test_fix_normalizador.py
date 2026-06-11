@@ -23,6 +23,7 @@ puro, sem rede/navegador/Streamlit.
 from __future__ import annotations
 
 from pregoes.normalizador import (
+    _algum_eixo_diverge,
     extrair_dimensoes,
     normalizar_descricao,
     relevancia,
@@ -204,3 +205,101 @@ def test_montar_camadas_anexa_diametro_com_fallback():
     # Item sem diâmetro: nenhuma camada extra
     qs2 = [q for _, q in _montar_camadas("ABRACADEIRA DE NYLON 100 PCT C/100")]
     assert all("mm" not in q.split() for q in qs2)
+
+
+# === Auditoria 2026-06 (achados altos nº 3 e 4): eixos l / kg / m ===========
+# O gate de dimensão não cobria litros, quilos e metros — exatamente os eixos
+# nº 1 do domínio (caixa d'água 500/1000L, cimento 25/50KG, lona 4/8M). O
+# subproduto de medida errada passava com relevância 0.8-0.9 e a Camada 4
+# fuzzy propagava o código errado como 'exato'.
+
+def test_eixo_litros_distingue_caixa_dagua():
+    a = extrair_dimensoes("CAIXA D'AGUA POLIETILENO 500 LITROS")
+    b = extrair_dimensoes("CAIXA D'AGUA POLIETILENO 1000L")
+    assert ("l", "500") in a and ("l", "1000") in b
+    assert _algum_eixo_diverge(a, b)
+
+
+def test_eixo_kg_distingue_saco_de_cimento():
+    a = extrair_dimensoes("CIMENTO PORTLAND CP II SACO 50KG")
+    b = extrair_dimensoes("CIMENTO PORTLAND CP II SACO 25KG")
+    assert _algum_eixo_diverge(a, b)
+
+
+def test_eixo_metros_distingue_lona():
+    a = extrair_dimensoes("LONA PLASTICA PRETA 4 METROS")
+    b = extrair_dimensoes("LONA PLASTICA PRETA 8M")
+    assert _algum_eixo_diverge(a, b)
+
+
+def test_ml_converte_para_litros_e_casa():
+    """'1000ML' e '1L' são o MESMO volume — não podem divergir."""
+    a = extrair_dimensoes("ADESIVO PVC FRASCO 1000ML")
+    b = extrair_dimensoes("ADESIVO PVC FRASCO 1 LITRO")
+    assert a == {("l", "1")} and not _algum_eixo_diverge(a, b)
+
+
+def test_gramas_converte_para_kg():
+    a = extrair_dimensoes("SILICONE ACETICO 280G")
+    b = extrair_dimensoes("SILICONE ACETICO 50G")
+    assert ("kg", "0.28") in a
+    assert _algum_eixo_diverge(a, b)
+
+
+def test_metro_nao_captura_mm_nem_m2_m3():
+    """'75MM' fica no eixo mm; 'M2'/'M3' (área/volume) não viram metro."""
+    assert extrair_dimensoes("MANGUEIRA JARDIM 30M") == {("m", "30")}
+    assert extrair_dimensoes("PLACA GESSO 30 M2") == set()
+    assert extrair_dimensoes("AREIA LAVADA M3") == set()
+
+
+def test_barra_e_comprimento_ficam_fora_do_eixo_metro():
+    """Comprimento de BARRA é unidade de venda de tubo, não identidade do
+    produto: 'TUBO 75MM BARRA 3M' não pode ser punido contra edital
+    'COMPRIMENTO 6M' (regressão prevista na revisão adversarial do
+    cross-brand e consagrada em test_diametro_quebra_empate_de_relevancia)."""
+    a = extrair_dimensoes("TUBO PVC RIGIDO DIAMETRO 75 SOLDAVEL COMPRIMENTO 6M")
+    b = extrair_dimensoes("TUBO PVC 75MM BARRA 3M")
+    assert a == {("mm", "75")} and b == {("mm", "75")}
+    assert not _algum_eixo_diverge(a, b)
+
+
+def test_denominador_de_fracao_nao_vaza_para_eixo():
+    """'REGISTRO 1/2 L' — o '2' da fração não pode virar '2 litros'."""
+    assert extrair_dimensoes("REGISTRO ESFERA 1/2 L") == {("pol", "1/2")}
+
+
+# === Verificação adversarial 2026-06 dos eixos novos: valores numéricos =====
+# Os céticos demonstraram com linhas REAIS do catálogo que a comparação por
+# string quebrava pares legítimos: '1.000 lt' (milhar pt-BR) ≠ '1000 LITROS',
+# '2.00m' ≠ '2 METROS', '1.20' ≠ '1.2'. _norm_valor_dim agora normaliza.
+
+def test_milhar_ptbr_no_eixo_litros_nao_diverge():
+    a = extrair_dimensoes("CAIXA DAGUA POLIETILENO 1.000 LT")
+    b = extrair_dimensoes("CAIXA D'AGUA POLIETILENO 1000 LITROS")
+    assert a == b == {("l", "1000")}
+    assert not _algum_eixo_diverge(a, b)
+
+
+def test_zeros_finais_de_decimal_nao_divergem():
+    assert extrair_dimensoes("HASTE ATERRAMENTO COBRE 2.00M") == \
+        extrair_dimensoes("HASTE DE ATERRAMENTO EM COBRE 2 METROS")
+    assert extrair_dimensoes("HASTE DE ATERRAMENTO 1.20 MT") == \
+        extrair_dimensoes("HASTE ATERRAMENTO 1,2 MT")
+
+
+def test_compensado_duas_medidas_decimais_casam():
+    a = extrair_dimensoes("COMPENSADO NAVAL PLASTIFICADO 2.20M X 1.10M")
+    b = extrair_dimensoes("COMPENSADO NAVAL 2,2M X 1,1M")
+    assert not _algum_eixo_diverge(a, b)
+
+
+def test_largura_l_igual_nao_vira_litros():
+    """'L=' é LARGURA no catálogo real ('chapa 26 l=0.70') — não litros."""
+    dims = extrair_dimensoes("BOBINA ZINCADA CHAPA 26 L=0.70")
+    assert all(eixo != "l" for eixo, _ in dims)
+
+
+def test_gr_de_graus_nao_vira_kg():
+    """'JOELHO 90 GR' — GR é graus no domínio, não gramas."""
+    assert extrair_dimensoes("JOELHO PVC SOLDAVEL 90 GR") == set()

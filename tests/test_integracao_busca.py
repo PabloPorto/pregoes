@@ -89,3 +89,18 @@ def test_nada_relevante_retorna_vazio(monkeypatch):
 # tests/test_aprendido_fuzzy.py (melhor_aprendido_fuzzy). Um teste end-to-end
 # pelo orquestrador foi removido por fragilidade de isolamento de estado de DB
 # entre arquivos de teste — revisitar com isolamento próprio se necessário.
+
+
+def test_medida_kg_filtra_peso_errado_no_pipeline(monkeypatch):
+    """Auditoria 2026-06 (achado alto nº 3) ponta a ponta: edital pede saco
+    de 50KG; o site devolve 25KG e 50KG; a busca real NÃO pode deixar o
+    25KG passar com relevância de match pleno."""
+    cards = [
+        _card("CIMENTO PORTLAND CP II 25KG POTY", "POTY", 22.0, "251"),
+        _card("CIMENTO PORTLAND CP II 50KG POTY", "POTY", 38.5, "501"),
+    ]
+    forn = _fornecedor_mock(monkeypatch, cards)
+    bag = forn.buscar("CIMENTO PORTLAND CP II SACO 50KG")
+    descs = [c.descricao_encontrada for c in bag]
+    assert any("50KG" in d for d in descs)        # peso certo sobrevive
+    assert not any("25KG" in d for d in descs)    # peso errado filtrado

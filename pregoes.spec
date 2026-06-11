@@ -40,17 +40,28 @@ hiddenimports += collect_submodules("pregoes")
 hiddenimports += ["google.genai", "playwright", "playwright.sync_api",
                   "streamlit.runtime.scriptrunner.magic_funcs"]
 
-# Chromium do Playwright (opcional, recomendado p/ cliente leigo): se a pasta
-# ms-playwright existir na máquina de build (rode `playwright install chromium`
-# ANTES — o build_exe.bat já faz), ela é empacotada e o rthook aponta para ela.
+# Chromium do Playwright: a pasta ms-playwright da máquina de build é
+# empacotada e o rthook aponta para ela (rode `playwright install chromium`
+# ANTES — o build_exe.bat já faz e aborta se o download falhar).
+# Sem Chromium a busca de preços do .exe nasce morta e o operador leigo não
+# tem como consertar — por isso o spec FALHA em vez de avisar (auditoria
+# 2026-06). Para um build de experimento sem o navegador, exporte
+# PREGOES_BUILD_SEM_CHROMIUM=1 (uso de dev, nunca para entrega).
 _pw = os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or os.path.join(
     os.path.expanduser("~"), "AppData", "Local", "ms-playwright")
 if os.path.isdir(_pw):
     datas += [(_pw, "ms-playwright")]
     print(f"[spec] Chromium do Playwright empacotado de: {_pw}")
+elif os.environ.get("PREGOES_BUILD_SEM_CHROMIUM") == "1":
+    print("[spec] AVISO: build SEM Chromium (PREGOES_BUILD_SEM_CHROMIUM=1) — "
+          "a busca de preços NÃO funcionará neste .exe.")
 else:
-    print("[spec] AVISO: ms-playwright não encontrado — o .exe NÃO terá "
-          "Chromium. Rode 'playwright install chromium' antes do build.")
+    raise SystemExit(
+        "[spec] ERRO: ms-playwright não encontrado — o .exe sairia sem "
+        "Chromium e a busca de preços não funcionaria para o cliente. "
+        "Rode 'python -m playwright install chromium' antes do build "
+        "(ou use o build_exe.bat, que já faz isso)."
+    )
 
 a = Analysis(
     ["run_app.py"],

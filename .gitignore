@@ -16,6 +16,12 @@ data/pregoes.db-shm
 data/pregoes.db-wal
 data/exports/*.xlsx
 
+# Seed do banco para instalação nova (cópia do banco real → dados privados
+# do cliente: catálogo, preços, aprendizado — NUNCA versionar)
+data/pregoes_seed.db
+data/pregoes_seed.db-shm
+data/pregoes_seed.db-wal
+
 # Backups do banco e log de runtime (gerados na máquina do cliente)
 data/backups/
 data/pregoes.log

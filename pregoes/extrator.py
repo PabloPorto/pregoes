@@ -148,6 +148,13 @@ def _para_numero(valor) -> Optional[float]:
     if isinstance(valor, (int, float)):
         return float(valor)
     s = str(valor).strip()
+    # Dois números na MESMA célula (célula mesclada/multi-linha do pdfplumber:
+    # '10\n20' ou '10 20') não podem ser colados num só — remover o whitespace
+    # produzia 1020.0, errado em ordens de grandeza e com cara de válido.
+    # Devolver None faz a linha perder score e virar 'duvidoso' (revisão
+    # humana), alinhado ao princípio de não assumir.
+    if re.search(r"\d\s+\d", s):
+        return None
     s = re.sub(r"[R\$\s]", "", s)
     if "," in s and "." in s:
         s = s.replace(".", "").replace(",", ".")
