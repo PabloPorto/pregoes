@@ -13,6 +13,7 @@ usando openpyxl.Translator (mantém $V$4 absoluto e ajusta L504→L505 relativo)
 """
 from __future__ import annotations
 
+import math
 import os
 import re
 import shutil
@@ -21,7 +22,7 @@ from pathlib import Path
 from typing import Iterable
 
 from openpyxl import load_workbook
-from openpyxl.cell.cell import Cell
+from openpyxl.cell.cell import Cell, ILLEGAL_CHARACTERS_RE
 from openpyxl.formula.translate import Translator
 from openpyxl.utils import get_column_letter
 
@@ -236,9 +237,14 @@ def exportar(
         # Excel não interpretar o conteúdo como cálculo (ver _escrever_texto).
         _escrever_texto(ws[f"C{linha}"], item.descricao)
         _escrever_texto(ws[f"D{linha}"], item.unidade or "")
-        ws[f"E{linha}"] = item.quantidade if item.quantidade is not None else 0
-        if item.valor_referencia is not None:
-            ws[f"F{linha}"] = item.valor_referencia
+        # Quantidade/valor: nan/inf gravavam célula numérica VAZIA em silêncio
+        # (totais subnotificados) — tratamos como ausente (adversarial 2026-06).
+        qtd = item.quantidade
+        ws[f"E{linha}"] = qtd if (isinstance(qtd, (int, float))
+                                  and math.isfinite(qtd)) else 0
+        vref = item.valor_referencia
+        if isinstance(vref, (int, float)) and math.isfinite(vref):
+            ws[f"F{linha}"] = vref
 
         # Colunas vindas do scraper (Fase 2): L=preço (número), T=código, U=marca.
         # T e U são texto raspado do site do fornecedor → mesma neutralização.
@@ -300,6 +306,12 @@ def _escrever_texto(celula: "Cell", texto: object) -> None:
     Não usar em células numéricas nem de fórmula do template (G..AB): aqui só
     passam C, D, T, U e os cabeçalhos C1/C2, todos texto.
     """
+    if isinstance(texto, str):
+        # O pdfplumber emite caracteres de controle (form-feed em quebra de
+        # página) que o openpyxl REJEITA com IllegalCharacterError — 1 item
+        # ruim derrubava a planilha inteira (adversarial 2026-06). Removemos
+        # os ilegais antes de gravar, preservando a neutralização de fórmula.
+        texto = ILLEGAL_CHARACTERS_RE.sub("", texto)
     if isinstance(texto, str) and texto[:1] in _PREFIXOS_PERIGOSOS:
         celula.value = "'" + texto
     else:

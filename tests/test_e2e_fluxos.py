@@ -366,3 +366,66 @@ def test_smoke_extracao_pdf_sintetico():
     res = extrair_pdf(pdf)
     assert res.total_itens > 0
     assert all(it.descricao for it in res.itens)
+
+
+# ============ Correções da passada adversarial (2026-06) =================
+
+def test_adv_gramas_nao_viram_quilos_1000x():
+    """#1 CRÍTICO: 45g é 0.045kg, não 45kg — milhar pt-BR não pode disparar
+    sobre o resultado já dividido. 45g e 45kg DEVEM divergir."""
+    from pregoes.normalizador import extrair_dimensoes, _algum_eixo_diverge
+    assert extrair_dimensoes("CURVA 45G") == {("kg", "0.045")}
+    assert extrair_dimensoes("FRASCO 45ML") == {("l", "0.045")}
+    assert extrair_dimensoes("ADESIVO 1000ML") == {("l", "1")}      # conversão certa
+    assert extrair_dimensoes("CAIXA 1.000 LT") == {("l", "1000")}   # milhar real intacto
+    assert _algum_eixo_diverge(extrair_dimensoes("ELETRODO 45G"),
+                               extrair_dimensoes("ELETRODO 45KG"))
+
+
+def test_adv_mm2_nao_captura_denominador_de_fracao():
+    """#6: 'CABO 1/2 MM2' não cria eixo mm2 fantasma."""
+    from pregoes.normalizador import extrair_dimensoes
+    assert extrair_dimensoes("CABO 1/2 MM2") == {("pol", "1/2")}
+    assert extrair_dimensoes("CABO 2.5MM2 750V") == {("mm2", "2.5"), ("v", "750")}
+
+
+def test_adv_preco_nan_inf_rejeitado_no_parser():
+    """#4: data-preco NaN/Infinity furava o guard '<= 0' e contaminava a matriz."""
+    from pregoes.scraper import _parse_card_attributes
+    base = {"data-codigo-produto": "1", "data-nome": "X", "data-marca": "M",
+            "url": "u"}
+    assert _parse_card_attributes({**base, "data-preco": "NaN"}, "exato") is None
+    assert _parse_card_attributes({**base, "data-preco": "Infinity"}, "exato") is None
+    ok = _parse_card_attributes({**base, "data-preco": "9,90"}, "exato")
+    assert ok is not None and ok.preco == 9.90
+
+
+def test_adv_caractere_de_controle_nao_derruba_export(tmp_path):
+    """#3: form-feed do pdfplumber numa descrição não pode derrubar a planilha."""
+    itens = [_item("CANO PVC\x0c50MM", n=1), _item("TORNEIRA 1/2", n=2)]
+    destino = tmp_path / "m.xlsx"
+    exportar(itens, destino=destino)            # não pode levantar
+    ws = load_workbook(destino).active
+    assert "CANO PVC" in (ws["C5"].value or "")  # gravou, sem o char ilegal
+    assert ws["C6"].value                        # o 2º item não se perdeu
+
+
+def test_adv_quantidade_nan_inf_nao_some_em_silencio(tmp_path):
+    """#5: nan/inf em quantidade/valor viram ausente (0/vazio), não corrompem."""
+    itens = [_item("PRODUTO X", n=1, qtd=float("nan"), valor=float("inf"))]
+    destino = tmp_path / "m.xlsx"
+    exportar(itens, destino=destino)
+    ws = load_workbook(destino).active
+    assert ws["E5"].value == 0          # nan → 0 (não célula vazia silenciosa)
+    assert ws["F5"].value is None       # inf → ausente
+
+
+def test_adv_item_descricao_none_nao_derruba_lote(banco, monkeypatch):
+    """#7: item com descricao=None + callback de progresso não pode derrubar
+    o lote inteiro."""
+    site = _SiteFake([(lambda q: True, [])])
+    forn = _fornecedor(monkeypatch, site)
+    itens = [ItemExtraido(item_numero=1, descricao=None, unidade="un", quantidade=1),
+             _item("TORNEIRA 1/2", n=2)]
+    lote = _buscar(itens, forn, progresso_callback=lambda f, t, d: None)
+    assert 1 in lote.resultados        # o lote não quebrou; o 2º item foi processado

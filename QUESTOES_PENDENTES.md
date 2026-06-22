@@ -4,6 +4,18 @@
 
 ## STATUS 2026-06 — o que mudou desde o briefing
 
+- **DÉBITO (QA adversarial, 2026-06) — matcher casa subproduto errado em eixos
+  numéricos não-reconhecidos.** Broca N°10 × N°12, lixa P40 × P80, eletrodo
+  E6013 × E7018, cor RAL 5010 × 7035 casam como match "exato" da Camada 0 (e o
+  scraper busca o produto ERRADO por código → preço silenciosamente errado).
+  Correção: novos eixos em `pregoes/normalizador.extrair_dimensoes` (N/P/RAL/E),
+  que `_dimensao_diverge` (matcher) e `_algum_eixo_diverge` (scraper) já
+  consomem. **Adiada** por ser a única com risco de regressão (prefixos de 1
+  letra capturando demais) — fazer com regex ancoradas + teste contra o catálogo
+  real do cliente. As outras 6 quebras adversariais foram corrigidas (ver
+  RELATORIO_QA_E2E.md).
+
+
 - **Q11/Q12 (LLM + busca em 5 camadas): IMPLEMENTADAS e em produção.** O
   Gemini deixou de ser "fallback de extração" e virou **componente central**:
   extração (Camada 2) + canonização do catálogo (Fase B) + judge da busca.

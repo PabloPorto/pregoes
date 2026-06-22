@@ -42,6 +42,7 @@ Uso típico:
 from __future__ import annotations
 
 import json
+import math
 import time
 from dataclasses import asdict, dataclass, field, replace
 from typing import Callable, Optional, Protocol
@@ -280,8 +281,8 @@ def _parse_card_attributes(attrs: dict, confianca: str) -> Optional[ResultadoBus
         preco = float(preco_str.replace(",", "."))
     except ValueError:
         return None
-    if preco <= 0:
-        return None
+    if not math.isfinite(preco) or preco <= 0:
+        return None   # NaN/Infinity do data-preco furavam o '<= 0' (adversarial 2026-06)
 
     return ResultadoBusca(
         descricao_encontrada=nome,
@@ -584,8 +585,8 @@ def _parse_card_dantas(attrs: dict, confianca: str) -> Optional[ResultadoBusca]:
         preco = float(preco_str.replace(",", "."))
     except ValueError:
         return None
-    if preco <= 0:
-        return None
+    if not math.isfinite(preco) or preco <= 0:
+        return None   # NaN/Infinity do data-preco furavam o '<= 0' (adversarial 2026-06)
 
     return ResultadoBusca(
         descricao_encontrada=nome,
@@ -1188,7 +1189,7 @@ def buscar_precos_para_itens(
                 conn.commit()
 
             if progresso_callback is not None:
-                progresso_callback(idx + 1, total, item.descricao[:60])
+                progresso_callback(idx + 1, total, (item.descricao or "")[:60])
 
         if conn is not None:
             conn.commit()

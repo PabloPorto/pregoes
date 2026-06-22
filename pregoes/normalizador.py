@@ -378,7 +378,9 @@ _RE_CA = re.compile(r"\bca[\s-]?(\d+)\b")
 # absurdo. Deve ser testada ANTES de _RE_MM (vide ordem em
 # `extrair_dimensoes`); o lookahead negativo em _RE_MM garante a separação
 # de qualquer forma.
-_RE_MM2 = re.compile(r"\b(\d+(?:\.\d+)?)\s*mm2\b")
+# (?<![/.]) barra o denominador de fração colado: 'CABO 1/2 MM2' não pode
+# virar ('mm2','2') fantasma (adversarial 2026-06) — mesma proteção de l/kg/m.
+_RE_MM2 = re.compile(r"\b(?<![/.])(\d+(?:\.\d+)?)\s*mm2\b")
 # Milímetro/centímetro: diâmetro nominal de conexões, bitola de cabo, etc.
 # Exige a unidade colada/adjacente — "6m" (metros) NÃO casa "mm". O
 # lookahead (?![0-9]) impede que "2.5mm2" (seção) seja lido como "2.5mm"
@@ -552,7 +554,11 @@ def extrair_dimensoes(texto: str | None) -> set[tuple[str, str]]:
     return {(eixo, _norm_valor_dim(v)) for eixo, v in dims}
 
 
-_MILHAR_DIM_RE = re.compile(r"^\d{1,3}(?:\.\d{3})+$")
+# Milhar pt-BR: 1-3 dígitos + grupos de 3 (1.000 = mil). O 1º grupo NÃO pode
+# ser só zero — senão '0.045' (saída de _dividir_valor_dim p/ 45g→0.045kg)
+# casaria e viraria 45, fazendo 45g == 45kg, preço 1000x errado (adversarial
+# 2026-06). Com [1-9] no início, '0.045' cai no ramo decimal e fica '0.045'.
+_MILHAR_DIM_RE = re.compile(r"^[1-9]\d{0,2}(?:\.\d{3})+$")
 
 
 def _norm_valor_dim(v: str) -> str:

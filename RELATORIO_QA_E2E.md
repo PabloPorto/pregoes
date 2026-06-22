@@ -68,6 +68,34 @@ Arquivo: `tests/test_e2e_fluxos.py`. Roda em ~2s, offline.
    a UI aciona está coberta pelos E2E de domínio acima; o que falta é a camada
    de clique. *Médio — próximo passo de QA.*
 
+## Passada adversarial independente (2026-06)
+
+Workflow de 8 agentes (7 superfícies de ataque + triagem) que tentou **quebrar**
+os fluxos com entradas hostis, rodando código real em DBs temporários. Resultado:
+**20 candidatas → 7 quebras reais → 6 corrigidas, 1 adiada**; 13 descartadas como
+degradação graciosa / inalcançáveis no fluxo real (NCM não-conforme não chega ao
+`classificar_markups`, markup barrado pelo `number_input`, etc.).
+
+Corrigidas (com teste de regressão em `tests/test_e2e_fluxos.py`):
+
+| # | Sev | Quebra | Correção |
+|---|---|---|---|
+| 1 | **Crítico** | `45g` virava `45kg` (1000×) — milhar pt-BR disparava sobre o resultado já dividido; `relevancia()` casava 45g com 45kg em silêncio | `_MILHAR_DIM_RE` ancorado em `[1-9]` (não casa `0.045`) |
+| 3 | Alto | Caractere de controle do pdfplumber (form-feed) derrubava a **planilha inteira** | `_escrever_texto` remove ilegais (`ILLEGAL_CHARACTERS_RE`) |
+| 4 | Médio | `data-preco` `NaN`/`Infinity` furava o guard `<= 0` e contaminava a matriz | `math.isfinite` nos dois parsers |
+| 5 | Médio | `nan`/`inf` em quantidade/valor viravam célula vazia em silêncio | guard `math.isfinite` no laço de export |
+| 6 | Médio | `1/2 MM2` criava eixo `mm2` fantasma (denominador da fração) | lookbehind `(?<![/.])` em `_RE_MM2` |
+| 7 | Médio | `descricao=None` + callback derrubava o lote inteiro | `(item.descricao or "")[:60]` |
+
+Adiada (precisa de calibração com catálogo real, fora da janela de entrega):
+
+- **#2 (Alto) — matcher casa subproduto errado em eixos não-reconhecidos**
+  (broca N°10 × N°12, lixa P40 × P80, eletrodo E6013 × E7018, RAL 5010 × 7035).
+  A correção (novos eixos em `extrair_dimensoes`) é a **única com risco real de
+  regressão**: prefixos de 1 letra (N/P/E) capturando demais derrubariam matches
+  bons. Deve ser feita com regex ancoradas e testada contra o catálogo real do
+  cliente, depois da entrega. *Registrado em QUESTOES_PENDENTES.*
+
 ## Conclusão
 
 Os fluxos de **busca, catálogo, busca por código, NCM e markup** estão
