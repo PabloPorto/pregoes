@@ -334,11 +334,24 @@ def test_credenciais_remover(tmp_path, monkeypatch):
 
 def test_credenciais_arquivo_corrompido_retorna_none(tmp_path, monkeypatch):
     """Se o JSON for inválido (cliente editou na mão e estragou), o sistema
-    deve tratar como 'sem credencial' em vez de explodir."""
+    deve tratar como 'sem credencial' em vez de explodir. Grava em UTF-8
+    explícito — sem isso, o Windows usaria cp1252 e o teste viraria falso
+    positivo de UnicodeDecodeError (visto em campo)."""
     fake_path = tmp_path / "credenciais.json"
-    fake_path.write_text("isso não é json {{{")
+    fake_path.write_text("isso não é json {{{", encoding="utf-8")
     monkeypatch.setattr(credenciais, "CAMINHO", fake_path)
     assert credenciais.carregar("almeida") is None
+
+
+def test_credenciais_bytes_nao_utf8_retorna_none(tmp_path, monkeypatch):
+    """Arquivo com bytes que NÃO são UTF-8 (salvo em cp1252/Latin-1 no Windows,
+    ou corrompido) → 'sem credencial', sem UnicodeDecodeError. Reproduz o caso
+    real do Windows em qualquer SO."""
+    fake_path = tmp_path / "credenciais.json"
+    fake_path.write_bytes(b'{"almeida": "n\xe3o-utf8"}')   # 0xe3 = 'ã' cp1252
+    monkeypatch.setattr(credenciais, "CAMINHO", fake_path)
+    assert credenciais.carregar("almeida") is None
+    assert credenciais.carregar_chave_api("gemini") is None
 
 
 # === Orquestrador buscar_precos_para_itens ===

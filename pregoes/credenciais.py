@@ -37,7 +37,10 @@ def carregar(fornecedor: str) -> Optional[Credencial]:
         return None
     try:
         dados = json.loads(CAMINHO.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+        # Arquivo corrompido: JSON inválido OU bytes não-UTF-8 (cliente editou/
+        # salvou em outra codificação — visto no Windows) → trata como sem
+        # credencial em vez de derrubar o app.
         return None
     cred = dados.get(fornecedor)
     if not cred or not cred.get("email") or not cred.get("senha"):
@@ -55,7 +58,7 @@ def salvar(fornecedor: str, email: str, senha: str) -> None:
             dados = json.loads(CAMINHO.read_text(encoding="utf-8"))
             if not isinstance(dados, dict):
                 dados = {}
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError):
             dados = {}
     else:
         dados = {}
@@ -71,7 +74,7 @@ def remover(fornecedor: str) -> None:
         return
     try:
         dados = json.loads(CAMINHO.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
         return
     dados.pop(fornecedor, None)
     CAMINHO.write_text(json.dumps(dados, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -89,7 +92,7 @@ def carregar_chave_api(provider: str) -> Optional[str]:
         return None
     try:
         dados = json.loads(CAMINHO.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
         return None
     cred = dados.get(provider)
     if not cred:
@@ -106,7 +109,7 @@ def salvar_chave_api(provider: str, api_key: str) -> None:
             dados = json.loads(CAMINHO.read_text(encoding="utf-8"))
             if not isinstance(dados, dict):
                 dados = {}
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError):
             dados = {}
     else:
         dados = {}
