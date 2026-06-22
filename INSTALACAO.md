@@ -1,5 +1,9 @@
 # Checklist de instalação na máquina do cliente
 
+> **Versão enxuta.** Para o passo a passo detalhado (com comandos, o que
+> esperar em cada etapa e solução de problemas), veja
+> **`GUIA_INSTALACAO_WINDOWS.md`**. Este arquivo é só o checklist de bolso.
+>
 > Para quem instala (você, não o cliente). O processo é manual por enquanto —
 > o auto-seed está registrado como débito técnico (QUESTOES_PENDENTES.md).
 > A regra de ouro: **`data\` do cliente é sagrada** — ela acumula o catálogo,
