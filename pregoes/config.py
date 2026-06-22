@@ -81,6 +81,13 @@ VALOR_MINIMO_FATOR = 0.5            # Mínimo aceitável = 50% do valor de refer
 # === Cache de preços ===
 CACHE_PRECO_DIAS = 2                # TTL conforme decisão (resp 9)
 
+# Máximo de opções EXIBIDAS por item na tela de seleção. A busca traz até 5
+# por fornecedor (×2 = 10), o que confunde o operador (feedback do cliente
+# 2026-06). Mostramos as N mais relevantes (o ranking já põe "no seu catálogo"
+# e o melhor match no topo); para outra marca, o operador usa a "Buscar no
+# meu catálogo" por item. Ajuste aqui se quiser mostrar mais/menos.
+MAX_OPCOES_EXIBIDAS = 4
+
 # === Scraping ===
 SCRAPER_TIMEOUT_SEGUNDOS = 30
 # Máximo de candidatos retornados por (item, fornecedor). Calibrado em

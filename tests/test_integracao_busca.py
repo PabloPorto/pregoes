@@ -104,3 +104,52 @@ def test_medida_kg_filtra_peso_errado_no_pipeline(monkeypatch):
     descs = [c.descricao_encontrada for c in bag]
     assert any("50KG" in d for d in descs)        # peso certo sobrevive
     assert not any("25KG" in d for d in descs)    # peso errado filtrado
+
+
+def test_conhecido_irrelevante_nao_fura_o_filtro(monkeypatch):
+    """Feedback do cliente 2026-06: produto cujo CÓDIGO está no catálogo mas é
+    de categoria errada NÃO pode aparecer só por ser 'conhecido'. Caso real do
+    print: edital de adesivo PVC trazia mangueira de gás, cap e adesivo de
+    diesel (todos no catálogo do cliente) e pré-selecionava o errado. Agora só
+    o relevante (POLYTUBES cola PVC) sobrevive — e como é catálogo, fica no topo."""
+    edital = ("ADESIVO PLASTICO PARA TUBOS E CONEXOES DE PVC RIGIDO BISNAGA 75G "
+              "COMPOSICAO RESINA DE PVC")
+    cards = [
+        _card("MANGUEIRA GAS GLP PLASBOHN 4.2 X 100CM", "PLASBOHN", 6.11, "10175"),
+        _card("CAP SOLDAVEL PLASTUBOS DN20", "PLASTUBOS", 0.76, "10536"),
+        _card("ADESIVO PARA JUNTAS DE MOTORES-DIESEL 3M 73G", "3M", 9.96, "11662"),
+        _card("ADESIVO POLYTUBES PLAST COLA PVC 75GR", "POLYTUBES", 4.36, "26372"),
+    ]
+    # TODOS os códigos estão no catálogo do cliente (todos "conhecidos").
+    cat = [ProdutoCatalogo(produto_id=i, descricao_canonica=d,
+                           codigo_almeida=c, codigo_dantas=None,
+                           marca="X", unidade_padrao="un")
+           for i, (d, c) in enumerate([
+               ("mangueira gas glp", "10175"),
+               ("cap soldavel plastubos", "10536"),
+               ("adesivo juntas diesel", "11662"),
+               ("adesivo cola pvc", "26372")])]
+    forn = _fornecedor_mock(monkeypatch, cards)
+    bag = forn.buscar(edital, idx_codigo=indice_por_codigo(cat))
+    descs = [c.descricao_encontrada for c in bag]
+
+    assert any("POLYTUBES" in d for d in descs), "o adesivo PVC certo deve sobreviver"
+    assert not any("MANGUEIRA" in d for d in descs), "mangueira de gás some"
+    assert not any("CAP SOLDAVEL" in d for d in descs), "cap some"
+    assert not any("DIESEL" in d for d in descs), "adesivo de diesel some"
+    assert bag[0].no_catalogo is True, "o certo é de catálogo → topo + selo"
+
+
+def test_conhecido_relevante_continua_no_topo(monkeypatch):
+    """Não regrediu a feature do cliente: catálogo RELEVANTE segue marcado e
+    priorizado (mesmo abaixo de um não-catálogo mais barato)."""
+    cards = [
+        _card("ABRACADEIRA NYLON FOXLUX 100 BRANCA", "FOXLUX", 4.0, "111"),
+        _card("ABRACADEIRA NYLON FERTAK 100", "FERTAK", 9.0, "52763"),
+    ]
+    cat = [ProdutoCatalogo(produto_id=7, descricao_canonica="abracadeira nylon 100",
+                           codigo_almeida="52763", codigo_dantas=None,
+                           marca="FERTAK", unidade_padrao="pct")]
+    forn = _fornecedor_mock(monkeypatch, cards)
+    bag = forn.buscar("ABRACADEIRA DE NYLON 100", idx_codigo=indice_por_codigo(cat))
+    assert bag[0].no_catalogo is True and bag[0].codigo_fornecedor == "52763"

@@ -464,3 +464,41 @@ def test_tentar_mapa_aprendido_sem_mapa_salvo_devolve_original(tmp_path):
         mapa_colunas_detectado={}, avisos=[], confianca_global=0.3)
     with conn_real(db) as conn:
         assert app._tentar_mapa_aprendido(fraco, conn, "e.pdf") is fraco
+
+
+# === Feedback cliente 2026-06: excluir itens "não usar" + re-indexar ========
+
+def test_filtrar_selecionados_remove_nao_usados_e_reindexa():
+    """Itens 1, 3 e 5 sem seleção ("Não usar"/sem resultado) saem; os
+    escolhidos (0,2,4) viram 0,1,2 com selecoes/markups/ST realinhados."""
+    class _It:
+        def __init__(self, n): self.n = n
+    itens = [_It(i) for i in range(6)]
+    selecoes = {0: "A", 2: "C", 4: "E"}          # só 0,2,4 escolhidos
+    markups = {0: 1.30, 2: 1.45, 4: 1.30}
+    com_st = {0, 4}
+    itens_f, sel_f, mk_f, st_f = app._filtrar_selecionados(
+        itens, selecoes, markups, com_st)
+    assert [it.n for it in itens_f] == [0, 2, 4]   # ordem original preservada
+    assert sel_f == {0: "A", 1: "C", 2: "E"}       # re-indexado 0..2
+    assert mk_f == {0: 1.30, 1: 1.45, 2: 1.30}
+    assert st_f == {0, 2}                           # offsets 0(orig0) e 2(orig4)
+
+
+def test_filtrar_selecionados_sem_markup_nem_st():
+    class _It:
+        pass
+    itens = [_It(), _It()]
+    itens_f, sel_f, mk_f, st_f = app._filtrar_selecionados(
+        itens, {1: "X"}, None, None)
+    assert len(itens_f) == 1 and sel_f == {0: "X"}
+    assert mk_f is None and st_f is None
+
+
+def test_filtrar_selecionados_todos_escolhidos_inalterado():
+    class _It:
+        pass
+    itens = [_It(), _It()]
+    _, sel_f, mk_f, st_f = app._filtrar_selecionados(
+        itens, {0: "A", 1: "B"}, {0: 1.3, 1: 1.45}, {0})
+    assert sel_f == {0: "A", 1: "B"} and mk_f == {0: 1.3, 1: 1.45} and st_f == {0}

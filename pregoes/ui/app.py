@@ -615,13 +615,42 @@ def _df_para_itens(df: pd.DataFrame) -> list:
     ]
 
 
+def _filtrar_selecionados(itens: list, selecoes: dict,
+                          markups: dict | None, itens_com_st: set | None):
+    """Mantém só os itens presentes em `selecoes` (os que o operador escolheu
+    usar) e RE-INDEXA selecoes/markups/itens_com_st para 0..M-1 na ordem
+    original. Exportador e _persistir_edital usam o offset como chave, então as
+    quatro estruturas têm que ficar alinhadas. Função pura (sem Streamlit).
+
+    Retorna ``(itens_f, selecoes_f, markups_f, itens_com_st_f)``.
+    """
+    sel = selecoes or {}
+    indices = [i for i in range(len(itens)) if i in sel]
+    remap = {antigo: novo for novo, antigo in enumerate(indices)}
+    itens_f = [itens[i] for i in indices]
+    selecoes_f = {remap[i]: sel[i] for i in indices}
+    markups_f = ({remap[i]: markups[i] for i in indices if i in markups}
+                 if markups else markups)
+    com_st_f = ({remap[i] for i in indices if i in itens_com_st}
+                if itens_com_st else itens_com_st)
+    return itens_f, selecoes_f, markups_f, com_st_f
+
+
 def _gerar_excel(itens: list, markup: float, selecoes: dict,
                  markups: dict | None = None,
-                 itens_com_st: set | None = None):
+                 itens_com_st: set | None = None,
+                 apenas_selecionados: bool = False):
     """Exporta uma lista de ItemExtraido para a planilha matriz.
 
     `selecoes` é o mapa {indice_item: SelecaoFornecedor} já preparado pela
     tela de busca. Vazio = planilha sem preço (operador preenche manualmente).
+
+    `apenas_selecionados` (caminho "gerar COM preços"): exporta SÓ os itens
+    que o operador escolheu usar (presentes em `selecoes`). Itens marcados
+    "Não usar este item" (removidos de selecoes) ou sem resultado ficam de
+    fora — nada de linha em branco / #DIV/0! na planilha final (pedido do
+    cliente 2026-06). O caminho "Gerar sem buscar" usa False: exporta todos
+    com preço em branco para preenchimento manual.
 
     Aceita lista de ItemExtraido (não DataFrame). O caller é responsável
     por converter `edited` do data_editor via `_df_para_itens(edited)`.
@@ -633,6 +662,18 @@ def _gerar_excel(itens: list, markup: float, selecoes: dict,
     if not itens:
         style.bloco_aviso("Nenhum item marcado como OK — nada para exportar.", tipo="danger")
         return
+
+    # Mantém só os itens escolhidos para usar; itens "Não usar" / sem resultado
+    # ficam fora da planilha (pedido do cliente 2026-06).
+    if apenas_selecionados:
+        if not any(i in (selecoes or {}) for i in range(len(itens))):
+            style.bloco_aviso(
+                "Nenhum item foi escolhido para usar. Selecione ao menos um "
+                "produto na lista (ou use 'Gerar sem buscar' na revisão).",
+                tipo="danger")
+            return
+        itens, selecoes, markups, itens_com_st = _filtrar_selecionados(
+            itens, selecoes, markups, itens_com_st)
 
     # Órgão + número são OBRIGATÓRIOS (decisão do cliente): identificam o pregão
     # no histórico e são a chave da dedup por re-geração. Revalidamos AQUI — não
@@ -1175,14 +1216,6 @@ def tela_busca_precos():
         ("Fornecedores", fornec_str),
         ("Cache de preço", f"{config.CACHE_PRECO_DIAS} dias"),
     ])
-
-    style.bloco_aviso(
-        "Cada item é consultado em até 3 camadas: descrição completa, "
-        "depois keywords (top-3) e por fim keywords reduzidas. Para na "
-        "primeira camada que devolver resultado relevante. Itens consultados "
-        "recentemente vêm do cache local sem novo acesso ao site.",
-        tipo="info",
-    )
 
     # Controles TÉCNICOS (diagnóstico, limpar cache) só aparecem em modo de
     # desenvolvimento (env PREGOES_DEBUG). Para o operador, a UI é limpa: a
@@ -1941,7 +1974,15 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
         item = itens[idx]
         # Dedup já aqui: o contador "X opções" e os cards exibidos usam a mesma
         # lista, e nenhum produto duplicado acende dois "escolhido".
-        opcoes = _dedup_opcoes(resultados.get(idx, []))
+        opcoes_todas = _dedup_opcoes(resultados.get(idx, []))
+        # Mostra só as N mais relevantes (ordena pela MESMA chave do default —
+        # 'no seu catálogo' e melhor match no topo). Reduz o ruído de 10 opções
+        # (feedback do cliente 2026-06); para outra marca há a busca no catálogo.
+        opcoes_todas = sorted(
+            opcoes_todas, key=lambda o: _chave_default(item.descricao, o))
+        n_total = len(opcoes_todas)
+        opcoes = opcoes_todas[:config.MAX_OPCOES_EXIBIDAS]
+        n_ocultas = n_total - len(opcoes)
         sel_atual = st.session_state.selecoes.get(idx)
 
         n_op = len(opcoes)
@@ -1963,8 +2004,12 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
         icone_status = {"success": ":material/check_circle:",
                         "warning": ":material/help:",
                         "danger": ":material/cancel:"}[tipo_status]
+        # Numeração SEQUENCIAL (1..N) nesta lista — pedido do cliente: os
+        # números do edital (2, 9, 25…) pulavam e confundiam. O número do
+        # edital é preservado na planilha (coluna ITEM). idx é a posição
+        # 0-based na lista completa (contínua entre páginas).
         cabecalho = (
-            f"**Item {item.item_numero or idx + 1}** · "
+            f"**Item {idx + 1}** · "
             f"{_titulo_item(item.descricao)} · :{cor_status}[{label_status}]"
         )
         with st.expander(cabecalho, expanded=False, icon=icone_status):
@@ -1979,51 +2024,62 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
                 f"{html.escape(item.descricao or '')}</div>",
                 unsafe_allow_html=True,
             )
+            # Sem resultado dos fornecedores: NÃO pula o item (antes havia um
+            # `continue` que escondia a busca no catálogo e o "Não usar").
+            # Mostra o aviso e segue para a busca manual no catálogo (pedido do
+            # cliente 2026-06: poder buscar no catálogo igual aos demais casos).
             if not opcoes:
                 style.bloco_aviso(
-                    "Nenhum resultado nos fornecedores. Coluna L ficará em branco.",
+                    "Nenhum resultado nos fornecedores nesta busca. Use a "
+                    "<b>Buscar no meu catálogo</b> abaixo, ou deixe em branco "
+                    "(a coluna de preço fica vazia para preencher manualmente).",
                     tipo="warning",
                 )
-                continue
+            else:
+                # Mesma chave do default (_chave_default): código forte do edital,
+                # depois relevância, depois preço — para o topo da lista coincidir
+                # com a opção pré-selecionada.
+                item_desc_local = item.descricao
+                opcoes_ordenadas = sorted(
+                    opcoes, key=lambda o: _chave_default(item_desc_local, o))
+                preco_min = min(o.preco for o in opcoes_ordenadas)
 
-            # Mesma chave do default (_chave_default): código forte do edital,
-            # depois relevância, depois preço — para o topo da lista coincidir
-            # com a opção pré-selecionada.
-            item_desc_local = item.descricao
-            opcoes_ordenadas = sorted(
-                opcoes, key=lambda o: _chave_default(item_desc_local, o))
-            preco_min = min(o.preco for o in opcoes_ordenadas)
+                def _esta_selecionado(o, s=sel_atual):
+                    return (s is not None and o.preco == s.preco
+                            and o.marca == s.marca
+                            and o.codigo_fornecedor == s.codigo_fornecedor)
 
-            def _esta_selecionado(o, s=sel_atual):
-                return (s is not None and o.preco == s.preco
-                        and o.marca == s.marca
-                        and o.codigo_fornecedor == s.codigo_fornecedor)
+                st.caption("Escolha a marca e o preço (sugerimos o melhor match):")
+                if n_ocultas > 0:
+                    st.caption(
+                        f"Mostrando as {len(opcoes)} opções mais relevantes "
+                        f"(+{n_ocultas} ocultas). Precisa de outra marca? Use "
+                        "**Buscar no meu catálogo** abaixo.")
+                for pos, o in enumerate(opcoes_ordenadas):
+                    escolhido = _esta_selecionado(o)
+                    # "Já no seu catálogo" tem prioridade sobre os demais badges —
+                    # é o sinal mais forte para o operador (produto que ele já compra,
+                    # casado pelo código do fornecedor).
+                    if getattr(o, "no_catalogo", False):
+                        badge_html = style.pill("✓ no seu catálogo", "catalogo")
+                    elif pos == 0:
+                        badge_html = style.pill("Melhor match", "match")
+                    elif o.preco == preco_min:
+                        badge_html = style.pill("Mais barato", "barato")
+                    else:
+                        badge_html = ""
+                    _card_opcao(
+                        idx, pos, o, badge_html=badge_html, escolhido=escolhido,
+                        on_escolher=lambda o=o: st.session_state.selecoes.__setitem__(
+                            idx, SelecaoFornecedor(
+                                preco=o.preco, codigo_fornecedor=o.codigo_fornecedor,
+                                marca=o.marca, ncm=getattr(o, "ncm", None),
+                                url=getattr(o, "url", None))),
+                    )
 
-            st.caption("Escolha a marca e o preço (sugerimos o melhor match):")
-            for pos, o in enumerate(opcoes_ordenadas):
-                escolhido = _esta_selecionado(o)
-                # "Já no seu catálogo" tem prioridade sobre os demais badges —
-                # é o sinal mais forte para o operador (produto que ele já compra,
-                # casado pelo código do fornecedor).
-                if getattr(o, "no_catalogo", False):
-                    badge_html = style.pill("✓ no seu catálogo", "catalogo")
-                elif pos == 0:
-                    badge_html = style.pill("Melhor match", "match")
-                elif o.preco == preco_min:
-                    badge_html = style.pill("Mais barato", "barato")
-                else:
-                    badge_html = ""
-                _card_opcao(
-                    idx, pos, o, badge_html=badge_html, escolhido=escolhido,
-                    on_escolher=lambda o=o: st.session_state.selecoes.__setitem__(
-                        idx, SelecaoFornecedor(
-                            preco=o.preco, codigo_fornecedor=o.codigo_fornecedor,
-                            marca=o.marca, ncm=getattr(o, "ncm", None),
-                            url=getattr(o, "url", None))),
-                )
-
-            # Rede de segurança: buscar no catálogo interno do cliente quando a
-            # busca automática não satisfez (pedido do cliente 2026-06-09).
+            # Rede de segurança: buscar no catálogo interno do cliente — SEMPRE
+            # disponível, inclusive quando não houve resultado nos fornecedores
+            # (pedido do cliente 2026-06).
             _busca_catalogo_item(idx, item)
 
             # Opção de não usar este item
@@ -2053,7 +2109,8 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
         _registrar_aprendizado(itens, st.session_state.selecoes,
                                 st.session_state.get("resultados_busca") or {})
         _gerar_excel(itens, markup=markup, selecoes=st.session_state.selecoes,
-                     markups=markups, itens_com_st=itens_com_st)
+                     markups=markups, itens_com_st=itens_com_st,
+                     apenas_selecionados=True)
 
 
 def _registrar_aprendizado(itens: list, selecoes: dict, resultados: dict) -> None:

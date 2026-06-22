@@ -454,12 +454,17 @@ class AlmeidaDistribuidor:
                 rel = relevancia(descricao, r.descricao_encontrada)
                 if rel > melhor_rel:
                     melhor_rel = rel
-                # Mantém o candidato se passa no threshold OU se já está no
-                # catálogo do cliente por código (sinal forte — não descartar
-                # um produto que ele já compra só por relevância textual baixa).
-                conhecido = bool(idx_codigo) and (
-                    r.fornecedor, (r.codigo_fornecedor or "").strip()) in idx_codigo
-                if rel >= _RELEVANCIA_MINIMA or conhecido:
+                # Mantém o candidato só se a relevância textual passa o
+                # threshold. ANTES havia um "or conhecido" que furava o filtro:
+                # qualquer produto cujo CÓDIGO estivesse no catálogo entrava
+                # mesmo sem relação com o item (mangueira de gás 0.00, cap
+                # 0.075, adesivo de diesel 0.175 num edital de adesivo PVC) e
+                # ainda ia pro topo, pré-selecionado errado (feedback do cliente
+                # 2026-06). O reconhecimento "no seu catálogo" continua valendo
+                # como PRIORIDADE entre os RELEVANTES (em _top_n_por_relevancia);
+                # catálogo com texto pobre tem a Camada 0 (busca por código) e a
+                # busca manual no catálogo.
+                if rel >= _RELEVANCIA_MINIMA:
                     relevantes.append(r)
             if _log is not None:
                 _log.queries_textuais.append(LogQueryInterna(
@@ -705,12 +710,17 @@ class DantasDistribuidora:
                 rel = relevancia(descricao, r.descricao_encontrada)
                 if rel > melhor_rel:
                     melhor_rel = rel
-                # Mantém o candidato se passa no threshold OU se já está no
-                # catálogo do cliente por código (sinal forte — não descartar
-                # um produto que ele já compra só por relevância textual baixa).
-                conhecido = bool(idx_codigo) and (
-                    r.fornecedor, (r.codigo_fornecedor or "").strip()) in idx_codigo
-                if rel >= _RELEVANCIA_MINIMA or conhecido:
+                # Mantém o candidato só se a relevância textual passa o
+                # threshold. ANTES havia um "or conhecido" que furava o filtro:
+                # qualquer produto cujo CÓDIGO estivesse no catálogo entrava
+                # mesmo sem relação com o item (mangueira de gás 0.00, cap
+                # 0.075, adesivo de diesel 0.175 num edital de adesivo PVC) e
+                # ainda ia pro topo, pré-selecionado errado (feedback do cliente
+                # 2026-06). O reconhecimento "no seu catálogo" continua valendo
+                # como PRIORIDADE entre os RELEVANTES (em _top_n_por_relevancia);
+                # catálogo com texto pobre tem a Camada 0 (busca por código) e a
+                # busca manual no catálogo.
+                if rel >= _RELEVANCIA_MINIMA:
                     relevantes.append(r)
             if _log is not None:
                 _log.queries_textuais.append(LogQueryInterna(
