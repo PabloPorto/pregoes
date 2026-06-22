@@ -4,16 +4,16 @@
 
 ## STATUS 2026-06 — o que mudou desde o briefing
 
-- **DÉBITO (QA adversarial, 2026-06) — matcher casa subproduto errado em eixos
-  numéricos não-reconhecidos.** Broca N°10 × N°12, lixa P40 × P80, eletrodo
-  E6013 × E7018, cor RAL 5010 × 7035 casam como match "exato" da Camada 0 (e o
-  scraper busca o produto ERRADO por código → preço silenciosamente errado).
-  Correção: novos eixos em `pregoes/normalizador.extrair_dimensoes` (N/P/RAL/E),
-  que `_dimensao_diverge` (matcher) e `_algum_eixo_diverge` (scraper) já
-  consomem. **Adiada** por ser a única com risco de regressão (prefixos de 1
-  letra capturando demais) — fazer com regex ancoradas + teste contra o catálogo
-  real do cliente. As outras 6 quebras adversariais foram corrigidas (ver
-  RELATORIO_QA_E2E.md).
+- **RESOLVIDO (2026-06) — matcher casava subproduto errado em eixos numéricos.**
+  (Era o débito #2 da passada adversarial.) A mineração do catálogo real mudou
+  o quadro: RAL e grão-de-lixa **não existem** no catálogo; o caso real é
+  **bitola por "nº"** (arame nº12 ≠ nº16, bucha nº10 ≠ nº8, brita n°19 — 45
+  produtos) e **classe AWS de eletrodo** (E6013 ≠ E7018). Adicionados dois
+  eixos ancorados em `extrair_dimensoes`: `nº<num>` (símbolo º/° inequívoco,
+  EXCLUINDO faixas tipo "nº 37 a 44" de botas/EPI, que fariam o tamanho 42
+  divergir falsamente) e `e<60xx/70xx>` (classe AWS específica). Calibrado com
+  diff catálogo-wide (só arame/bucha/brita/eletrodo mudaram) e travado pela
+  rede de caracterização `tests/test_caracterizacao_busca.py`.
 
 
 - **Q11/Q12 (LLM + busca em 5 camadas): IMPLEMENTADAS e em produção.** O

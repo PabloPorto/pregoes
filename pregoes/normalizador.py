@@ -431,6 +431,18 @@ _RE_METRO = re.compile(r"\b(?<![/.])(\d+(?:\.\d+)?)\s*(?:m|mts?|metros?)\b")
 _RE_METRO_BARRA = re.compile(
     r"\b(?:barras?|comprimentos?)\s*(?:de\s+)?\d+(?:\.\d+)?\s*(?:m|mts?|metros?)\b"
 )
+# Bitola/numeração por "nº" (arame nº12 ≠ nº16, bucha nº10 ≠ nº8, brita
+# n°19 — preços diferentes). Ancorado no símbolo º/° (inequívoco = "número"),
+# NÃO no "n" solto. CALIBRADO no catálogo real: o (?!...) exclui FAIXAS
+# ("nº 37 a 44", "nº 39/44", "nº10-20" — comuns em botas/EPI) — capturar só o
+# primeiro valor de uma faixa faria o tamanho 42 divergir falsamente de uma
+# bota "37 a 44". Lista de valores ("nº18 nº16 nº14") NÃO é faixa: cada um é
+# capturado (o próximo token é "nº", não "a/-/⁄"), e a interseção cobre o match.
+_RE_NUMERO = re.compile(r"\bn[º°]\s*(\d{1,3})(?!\s*[a/\-]\s*\d)\b")
+# Classe AWS de eletrodo (E6013 ≠ E7018 — tipo/uso diferentes). Só casa
+# 60xx/70xx (4 dígitos), padrão das classes AWS — específico o bastante para
+# não pegar código aleatório (adversarial 2026-06).
+_RE_ELETRODO = re.compile(r"\be\s?((?:60|70)\d{2})\b")
 
 
 def _converter_numerais_extenso(texto: str) -> str:
@@ -502,6 +514,11 @@ def extrair_dimensoes(texto: str | None) -> set[tuple[str, str]]:
     >>> # "BARRA 3M" é unidade de venda de tubo, não identidade — fora do eixo
     >>> sorted(extrair_dimensoes("TUBO PVC 75MM BARRA 6M"))
     [('mm', '75')]
+    >>> # Bitola por nº (arame) e classe AWS de eletrodo (adversarial 2026-06)
+    >>> sorted(extrair_dimensoes("ARAME GALVANIZADO Nº 14"))
+    [('n', '14')]
+    >>> sorted(extrair_dimensoes("ELETRODO E6013 2.5MM"))
+    [('eletrodo', '6013'), ('mm', '2.5')]
     """
     if not texto:
         return set()
@@ -547,6 +564,12 @@ def extrair_dimensoes(texto: str | None) -> set[tuple[str, str]]:
     # não identidade — ver comentário em _RE_METRO_BARRA).
     for v in _RE_METRO.findall(_RE_METRO_BARRA.sub(" ", t)):
         dims.add(("m", v))
+    # Bitola por "nº" (arame) e classe AWS de eletrodo — distinguidores
+    # numéricos do domínio que escapavam do gate (adversarial 2026-06).
+    for v in _RE_NUMERO.findall(t):
+        dims.add(("n", v))
+    for v in _RE_ELETRODO.findall(t):
+        dims.add(("eletrodo", v))
     # Normaliza o valor de cada eixo para comparação: zeros à esquerda de
     # inteiros somem ('05'->'5'), senão "5 tomadas" e "05 TOMADAS" pareciam
     # eixos divergentes e rebaixavam um match verdadeiro (filtro de linha).

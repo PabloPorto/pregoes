@@ -87,14 +87,28 @@ Corrigidas (com teste de regressão em `tests/test_e2e_fluxos.py`):
 | 6 | Médio | `1/2 MM2` criava eixo `mm2` fantasma (denominador da fração) | lookbehind `(?<![/.])` em `_RE_MM2` |
 | 7 | Médio | `descricao=None` + callback derrubava o lote inteiro | `(item.descricao or "")[:60]` |
 
-Adiada (precisa de calibração com catálogo real, fora da janela de entrega):
+Resolvida depois (#2), com calibração no catálogo real:
 
-- **#2 (Alto) — matcher casa subproduto errado em eixos não-reconhecidos**
-  (broca N°10 × N°12, lixa P40 × P80, eletrodo E6013 × E7018, RAL 5010 × 7035).
-  A correção (novos eixos em `extrair_dimensoes`) é a **única com risco real de
-  regressão**: prefixos de 1 letra (N/P/E) capturando demais derrubariam matches
-  bons. Deve ser feita com regex ancoradas e testada contra o catálogo real do
-  cliente, depois da entrega. *Registrado em QUESTOES_PENDENTES.*
+- **#2 (Alto) — matcher casava subproduto errado em eixos numéricos.** A
+  mineração do catálogo (3245 produtos) mostrou que o caso real não era
+  broca/lixa/RAL (ausentes), e sim **bitola "nº"** (arame/bucha/brita) e
+  **classe AWS de eletrodo**. Dois eixos ancorados foram adicionados a
+  `extrair_dimensoes` (`nº<num>` excluindo faixas de tamanho; `e<60xx/70xx>`),
+  validados por diff catálogo-wide (só 45+2 produtos mudaram, todos legítimos)
+  e travados pela rede de caracterização. ✅
+
+## Rede de caracterização ("golden") + git hook
+
+Para garantir que mudanças futuras não quebrem o que funciona (sem ilusão de
+"prova" — 100% é indecidível, mas a rede pega o que importa):
+
+- **`tests/test_caracterizacao_busca.py`** (40 testes): snapshot das dimensões
+  de um corpus real do catálogo + pares que DEVEM casar (abreviação, valor que
+  cobre faixa, barra) + pares que NÃO PODEM casar (medida/bitola/classe errada).
+  Qualquer regex/threshold que altere esses resultados falha na hora.
+- **`scripts/git-hooks/pre-push`** (instale com `scripts/instalar_git_hooks.sh`):
+  roda a suíte antes de cada push e bloqueia push que quebre algo
+  (`git push --no-verify` pula em emergência).
 
 ## Conclusão
 
