@@ -76,3 +76,25 @@ def test_markup_por_classificacao():
     # defaults editáveis por pregão
     assert tributacao.markup_para("39174090", markup_st=1.25) == 1.25
     assert tributacao.markup_para("99999999", markup_normal=1.5) == 1.5
+
+
+def test_override_obsoleto_nao_vence_ncm_de_st():
+    """Bug 2026-06 (reproduz o log do cliente): itens começam SEM NCM → o
+    painel grava override 'Normal' (1.45) para todos. Depois o NCM é
+    identificado (39172300/39174090 = ST). O override obsoleto NÃO pode mais
+    vencer — com NCM, a classificação automática manda."""
+    ncms = {0: "39172300", 1: "39174090", 2: "84818011"}
+    overrides_obsoletos = {0: 1.45, 1: 1.45, 2: 1.45}   # do tempo em que eram sem-NCM
+    markups, resumo, _ = tributacao.classificar_markups(
+        ncms, 1.30, 1.45, overrides=overrides_obsoletos)
+    assert markups == {0: 1.30, 1: 1.30, 2: 1.30}       # todos ST, não 1.45
+    assert resumo["st"] == 3
+    assert tributacao.offsets_com_st(markups, 1.30) == {0, 1, 2}
+
+
+def test_override_ainda_vale_para_item_sem_ncm():
+    """O override continua sendo o fallback de itens SEM NCM (não regrediu)."""
+    ncms = {0: None, 1: None}
+    markups, _, _ = tributacao.classificar_markups(
+        ncms, 1.30, 1.45, overrides={0: 1.30})   # operador marcou o 0 como ST
+    assert markups == {0: 1.30, 1: 1.45}         # 0=override ST, 1=default normal

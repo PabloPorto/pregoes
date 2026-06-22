@@ -77,6 +77,25 @@ def markup_para(
     return m_st if eh_st(ncm) else m_normal
 
 
+def offsets_com_st(markups: dict[int, float] | None, markup_st: float) -> set[int]:
+    """Offsets cujo markup aplicado é o de Substituição Tributária.
+
+    Fonte da verdade para a coluna "SUBST. TRIBUTÁRIA" da planilha exportada
+    (pedido do cliente, 2026-06): o ``markups`` produzido por
+    ``classificar_markups`` já vale ``markup_st`` exatamente nos itens com ST
+    (auto por NCM OU override "Com ST" do operador), então comparar com
+    ``markup_st`` reconstrói a decisão sem re-derivar a lógica.
+
+    Caso degenerado: se o operador igualar os dois markups do pregão
+    (``markup_st == markup_normal``), a distinção tributária perde sentido e
+    todos os itens com aquele valor contam como ST — aceitável, pois nesse
+    cenário o markup é o mesmo de qualquer forma.
+    """
+    if not markups:
+        return set()
+    return {off for off, mk in markups.items() if mk == markup_st}
+
+
 # === Captura do NCM no scraper (a fonte é o site do fornecedor) ===
 
 def ncm_de_card(valor: str | None) -> str | None:
@@ -104,8 +123,14 @@ def classificar_markups(
     Args:
         ncms_por_item: ``{offset -> ncm (str|None)}`` dos itens selecionados.
         markup_st / markup_normal: os dois markups do pregão (editáveis na UI).
-        overrides: ``{offset -> markup}`` com escolhas manuais do operador
-            (precedência total sobre a classificação automática).
+        overrides: ``{offset -> markup}`` com escolhas manuais do operador.
+            O override é o fallback de quando NÃO há NCM (única UI que o cria,
+            no painel "itens sem NCM"); por isso ele só vale para itens SEM
+            NCM. Quando o item TEM NCM, a classificação automática manda —
+            aplicar um override aqui honraria uma escolha obsoleta do tempo em
+            que o NCM era desconhecido (bug 2026-06: item ganha NCM de ST,
+            aparece "com ST" no painel, mas sai 1,45 na planilha porque o
+            override "Normal" criado quando era sem-NCM ainda vencia).
 
     Retorna ``(markups, resumo, sem_ncm)``:
         - markups: ``{offset -> markup}`` para passar ao exportador.
@@ -118,15 +143,17 @@ def classificar_markups(
     sem_ncm: list[int] = []
     for offset, ncm in ncms_por_item.items():
         if not ncm:
+            # Sem NCM: o operador decide via override; default = normal.
             resumo["sem_ncm"] += 1
             sem_ncm.append(offset)
             markups[offset] = overrides.get(offset, markup_normal)
         elif eh_st(ncm):
+            # Com NCM: classificação automática manda (override NÃO se aplica).
             resumo["st"] += 1
-            markups[offset] = overrides.get(offset, markup_st)
+            markups[offset] = markup_st
         else:
             resumo["normal"] += 1
-            markups[offset] = overrides.get(offset, markup_normal)
+            markups[offset] = markup_normal
     return markups, resumo, sem_ncm
 
 

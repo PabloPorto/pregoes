@@ -59,6 +59,13 @@ LINHA_TOTAL_REFERENCIA = 505                           # =SUM(Y5:Y504)
 LINHA_CABECALHO_TOTAL = 506                            # 'FATURAMENTO', 'MARGEM', 'LUCRO'
 LINHA_TOTAL_FINAL = 507                                # =SUM(I5:I504), =G507/C507, =SUM(K5:K504)
 
+# Coluna AC (29): indicador "foi gerado com Substituição Tributária?" (pedido
+# do cliente, 2026-06). Fica DEPOIS da última coluna do template (AB=28), então
+# não desloca nenhuma fórmula G..AB — é escrita só no arquivo exportado, o
+# template em disco continua intocado.
+COL_ST_INDICADOR = 29                                  # AC
+CABECALHO_ST = "SUBST. TRIBUTÁRIA"
+
 # Coluna (1-based) mais à direita que o exportador escreve: U = 21 (preço,
 # código e marca vindos do scraper). Define a largura mínima do template.
 _COLUNA_MAX_ESCRITA = 21
@@ -134,6 +141,7 @@ def exportar(
     numero_pregao: str | None = None,
     markup: float | None = None,
     markups: dict[int, float] | None = None,
+    itens_com_st: set[int] | None = None,
     selecoes: dict[int, "SelecaoFornecedor"] | None = None,
     destino: Path | str | None = None,
     template: Path | str | None = None,
@@ -213,6 +221,10 @@ def exportar(
     if n_itens > 500:
         _expandir_linhas(ws, n_extras=n_itens - 500)
 
+    # Cabeçalho da coluna indicadora de ST (AC4), com o visual dos vizinhos.
+    itens_com_st = itens_com_st or set()
+    _escrever_cabecalho_st(ws)
+
     # Preencher itens
     selecoes = selecoes or {}
     for offset, item in enumerate(itens):
@@ -248,9 +260,30 @@ def exportar(
         if m_item is not None:
             _aplicar_markup_em_linha(ws, linha, m_item)
 
+        # Coluna AC: foi gerado com Substituição Tributária? (pedido do cliente)
+        ws.cell(row=linha, column=COL_ST_INDICADOR).value = (
+            "Sim" if offset in itens_com_st else "Não")
+
     wb.save(destino_tmp)
     os.replace(destino_tmp, destino)   # rename atômico → publicação do destino
     return destino
+
+
+def _escrever_cabecalho_st(ws) -> None:
+    """Escreve o cabeçalho da coluna AC ("SUBST. TRIBUTÁRIA"), copiando o
+    visual de um cabeçalho vizinho (U4) para a coluna parecer nativa. Falha de
+    estilo NUNCA derruba a exportação — o que importa é o texto do cabeçalho."""
+    import copy
+    alvo = ws.cell(row=4, column=COL_ST_INDICADOR)
+    alvo.value = CABECALHO_ST
+    try:
+        modelo = ws["U4"]   # 'MARCA' — último cabeçalho de texto do template
+        alvo.font = copy.copy(modelo.font)
+        alvo.fill = copy.copy(modelo.fill)
+        alvo.border = copy.copy(modelo.border)
+        alvo.alignment = copy.copy(modelo.alignment)
+    except Exception:
+        pass
 
 
 def _escrever_texto(celula: "Cell", texto: object) -> None:

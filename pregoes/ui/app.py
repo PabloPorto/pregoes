@@ -616,7 +616,8 @@ def _df_para_itens(df: pd.DataFrame) -> list:
 
 
 def _gerar_excel(itens: list, markup: float, selecoes: dict,
-                 markups: dict | None = None):
+                 markups: dict | None = None,
+                 itens_com_st: set | None = None):
     """Exporta uma lista de ItemExtraido para a planilha matriz.
 
     `selecoes` é o mapa {indice_item: SelecaoFornecedor} já preparado pela
@@ -647,6 +648,16 @@ def _gerar_excel(itens: list, markup: float, selecoes: dict,
             tipo="danger")
         return
 
+    # Diagnóstico (auditoria 2026-06): por que a coluna ST sai "Não". Registra
+    # o NCM de cada seleção, o markup por item e o conjunto ST que chega aqui.
+    _log.info(
+        "GERAR planilha: %d itens | ncm_por_selecao=%s | markups=%s | itens_com_st=%s",
+        len(itens),
+        {off: getattr(s, "ncm", None) for off, s in (selecoes or {}).items()},
+        markups,
+        sorted(itens_com_st) if itens_com_st else itens_com_st,
+    )
+
     with st.spinner("Gerando planilha matriz a partir do template..."):
         try:
             destino = exportar(
@@ -655,6 +666,7 @@ def _gerar_excel(itens: list, markup: float, selecoes: dict,
                 numero_pregao=st.session_state.get("numero"),
                 markup=markup,
                 markups=markups,
+                itens_com_st=itens_com_st,
                 selecoes=selecoes,
             )
         except Exception as exc:
@@ -1551,7 +1563,7 @@ def _identificar_ncm(selecoes: dict, offsets: list) -> None:
                        text=f"Consultando NCM… {feitos}/{total}")
 
     try:
-        resultado = consultar_ncms(pedidos, progresso=_cb)
+        ncms, falhas = consultar_ncms(pedidos, progresso=_cb)
     except Exception as exc:
         barra.empty()
         _log.exception("falha ao consultar NCM")
@@ -1559,19 +1571,39 @@ def _identificar_ncm(selecoes: dict, offsets: list) -> None:
                           tipo="warning")
         return
     barra.empty()
+    # Só os resultados DEFINITIVOS (item visitado) entram no cache e nas
+    # seleções. Os transitórios (login/navegador falhou) NÃO são cacheados —
+    # senão um soluço travava o item "sem NCM" pelo resto da sessão e o
+    # re-clique não re-tentava (auditoria 2026-06, mesmo padrão do bloco 3).
+    overrides = st.session_state.get("markup_overrides", {})
     for off, _forn, url in pedidos:
-        ncm = resultado.get(off)
+        if off in falhas:
+            continue
+        ncm = ncms.get(off)
         cache[url] = ncm
         selecoes[off] = replace(selecoes[off], ncm=ncm)
+        # Identificar o NCM SUPERA o palpite manual feito quando o item era
+        # "sem NCM": limpa o override obsoleto para a classificação automática
+        # valer (defesa em profundidade junto com classificar_markups).
+        if ncm:
+            overrides.pop(off, None)
+    if falhas:
+        style.bloco_aviso(
+            f"{len(falhas)} item(ns) não puderam ser consultados agora "
+            "(login do fornecedor ou navegador). Os demais foram "
+            "classificados. Clique em <b>Identificar NCM</b> de novo para "
+            "tentar os que faltaram.",
+            tipo="warning")
 
 
-def _painel_markup(selecoes: dict, itens: list) -> dict:
+def _painel_markup(selecoes: dict, itens: list) -> tuple[dict, set]:
     """Painel "Markup deste pregão" (Fase 4 — Substituição Tributária).
 
     Gerencia POR EXCEÇÃO: o automático classifica cada item pelo NCM (ST →
     markup menor; normal → maior); o operador só ajusta os DOIS markups do
     pregão e decide os itens SEM NCM (nada é presumido ST em silêncio —
-    princípio Resp 7). Devolve ``{offset -> markup}`` para o exportador.
+    princípio Resp 7). Devolve ``(markups {offset -> markup}, com_st {offsets
+    com Substituição Tributária})`` para o exportador.
     """
     from pregoes import tributacao
 
@@ -1624,7 +1656,11 @@ def _painel_markup(selecoes: dict, itens: list) -> dict:
                                   else m_normal)
         markups, _, _ = tributacao.classificar_markups(
             ncms, m_st, m_normal, overrides)
-    return markups
+    # Conjunto ST calculado AQUI, com o MESMO m_st da classificação — é a
+    # fonte da coluna "SUBST. TRIBUTÁRIA" da planilha. Calcular no painel (onde
+    # a decisão acontece) evita re-derivar lendo mk_st de outra fonte.
+    com_st = tributacao.offsets_com_st(markups, m_st)
+    return markups, com_st
 
 
 def _carregar_catalogo_sessao():
@@ -1692,10 +1728,8 @@ def _busca_catalogo_item(idx: int, item) -> None:
     Procura produtos que o cliente JÁ TEM (por palavras OU código); mostra marca,
     código do fornecedor e a última cotação conhecida; e permite escolher um
     como opção do item (entra com o badge 'no seu catálogo' e já pré-selecionado).
+    O preço da opção é cotado AO VIVO ao usar — ver _usar_do_catalogo.
     """
-    from pregoes.scraper import ResultadoBusca
-    from pregoes.exportador import SelecaoFornecedor
-
     catalogo = _carregar_catalogo_sessao()
     with st.expander("🔍 Buscar no meu catálogo (produtos que já tenho)"):
         if not catalogo:
@@ -1718,6 +1752,9 @@ def _busca_catalogo_item(idx: int, item) -> None:
             st.caption("Nenhum produto encontrado no seu catálogo. Tente outras "
                        "palavras ou o código do fornecedor.")
             return
+        st.caption("O preço abaixo é só **referência da última compra**. Ao "
+                   "usar, o sistema busca o **preço atual** no site do "
+                   "fornecedor pelo código (preço muda todo dia).")
         with get_conn() as conn:
             for p in achados:
                 for forn, codigo in (("almeida", p.codigo_almeida),
@@ -1726,11 +1763,11 @@ def _busca_catalogo_item(idx: int, item) -> None:
                         continue
                     codigo = str(codigo).strip()
                     cot = _db.ultima_cotacao(conn, p.produto_id, forn)
-                    preco = float(cot["preco"]) if cot else 0.0
                     if cot:
-                        preco_txt = f"R$ {preco:.2f} (últ. {cot['consultado_em'][:10]})"
+                        ref_txt = (f"referência: R$ {float(cot['preco']):.2f} "
+                                   f"(últ. compra {cot['consultado_em'][:10]})")
                     else:
-                        preco_txt = "sem cotação — confira o preço na planilha"
+                        ref_txt = "sem referência de preço"
                     c1, c2 = st.columns([5, 1.4], vertical_alignment="center")
                     with c1:
                         st.markdown(
@@ -1739,25 +1776,63 @@ def _busca_catalogo_item(idx: int, item) -> None:
                             f"<span style='color:#64748b;font-size:0.82rem'>"
                             f"{forn.capitalize()} · "
                             f"<code>cód. {html.escape(codigo)}</code> · "
-                            f"{preco_txt}</span>",
+                            f"{ref_txt}</span>",
                             unsafe_allow_html=True)
                     with c2:
-                        if st.button("Usar", key=f"usecat_{idx}_{p.produto_id}_{forn}",
-                                     width="stretch"):
-                            novo = ResultadoBusca(
-                                descricao_encontrada=p.descricao_canonica or "",
-                                marca=p.marca or "", preco=preco,
-                                codigo_fornecedor=codigo,
-                                confianca="exato", fornecedor=forn,
-                                no_catalogo=True, produto_catalogo_id=p.produto_id,
-                                descricao_catalogo=p.descricao_canonica)
-                            st.session_state.resultados_busca.setdefault(
-                                idx, []).append(novo)
-                            st.session_state.selecoes[idx] = SelecaoFornecedor(
-                                preco=novo.preco,
-                                codigo_fornecedor=novo.codigo_fornecedor,
-                                marca=novo.marca)
-                            st.rerun()
+                        usar = st.button(
+                            "Usar (preço atual)",
+                            key=f"usecat_{idx}_{p.produto_id}_{forn}",
+                            width="stretch")
+                    if usar:
+                        _usar_do_catalogo(idx, p, forn, codigo)
+
+
+def _usar_do_catalogo(idx: int, produto, forn: str, codigo: str) -> None:
+    """Cota o produto do catálogo AO VIVO (pelo código) e o adiciona como opção
+    escolhida do item. NUNCA usa o preço histórico do catálogo — preço muda
+    todo dia (requisito do cliente, 2026-06). Se a cotação ao vivo falhar,
+    avisa e não grava preço algum (não cai no preço velho)."""
+    from pregoes.scraper import ResultadoBusca, cotar_por_codigo
+    from pregoes.exportador import SelecaoFornecedor
+
+    with st.spinner(f"Buscando o preço atual do código {codigo} na "
+                    f"{forn.capitalize()}…"):
+        try:
+            ao_vivo = cotar_por_codigo(forn, codigo)
+        except Exception as exc:
+            _log.exception("falha ao cotar por código no catálogo")
+            style.bloco_aviso(
+                "Não consegui consultar o preço atual agora "
+                f"({erros.mensagem_amigavel(exc)}). O preço do catálogo "
+                "<b>não</b> é usado. Tente de novo em instantes.",
+                tipo="warning")
+            return
+
+    if ao_vivo is None:
+        style.bloco_aviso(
+            f"O código <code>{html.escape(codigo)}</code> não foi encontrado "
+            f"agora no site da {forn.capitalize()} — o produto pode ter saído "
+            "de linha. Confira diretamente no site antes de usar.",
+            tipo="warning")
+        return
+
+    # Preço e marca vêm do site (atuais); o vínculo com o catálogo (badge +
+    # produto_id) é preservado para o reconhecimento "no seu catálogo".
+    novo = ResultadoBusca(
+        descricao_encontrada=ao_vivo.descricao_encontrada
+        or produto.descricao_canonica or "",
+        marca=ao_vivo.marca or produto.marca or "",
+        preco=ao_vivo.preco,
+        codigo_fornecedor=codigo,
+        confianca="exato", fornecedor=forn,
+        url=getattr(ao_vivo, "url", None),
+        no_catalogo=True, produto_catalogo_id=produto.produto_id,
+        descricao_catalogo=produto.descricao_canonica)
+    st.session_state.resultados_busca.setdefault(idx, []).append(novo)
+    st.session_state.selecoes[idx] = SelecaoFornecedor(
+        preco=novo.preco, codigo_fornecedor=novo.codigo_fornecedor,
+        marca=novo.marca)
+    st.rerun()
 
 
 def _mostrar_selecao(itens: list, resultados: dict) -> None:
@@ -1962,7 +2037,7 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
     st.caption(f"{selecionados} de {total} itens com marca/preço selecionados.")
 
     # Markup por item via Substituição Tributária (Fase 4).
-    markups = _painel_markup(st.session_state.selecoes, itens)
+    markups, itens_com_st = _painel_markup(st.session_state.selecoes, itens)
 
     if st.button("Gerar planilha matriz com preços", type="primary",
                  width="stretch"):
@@ -1978,7 +2053,7 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
         _registrar_aprendizado(itens, st.session_state.selecoes,
                                 st.session_state.get("resultados_busca") or {})
         _gerar_excel(itens, markup=markup, selecoes=st.session_state.selecoes,
-                     markups=markups)
+                     markups=markups, itens_com_st=itens_com_st)
 
 
 def _registrar_aprendizado(itens: list, selecoes: dict, resultados: dict) -> None:
@@ -2325,7 +2400,19 @@ def _aba_catalogo():
                 )
                 return
 
-        style.bloco_aviso(stats.resumo(), tipo="success")
+        # A padronização (etapa 2) só roda se houver chave Gemini. O texto
+        # do sucesso é condicional a isso: anunciar "Etapa 1 de 2" sem que a
+        # etapa 2 vá acontecer confundiria o operador (a tela mostrava um
+        # "✓ concluído" verde e um "preparando…" ao mesmo tempo — ambíguo).
+        vai_padronizar = bool(credenciais.carregar_chave_api("gemini"))
+        if vai_padronizar:
+            cabecalho = ("<b>Etapa 1 de 2 — importação concluída e salva.</b><br>"
+                         "Agora o sistema prepara o catálogo para a busca "
+                         "(etapa 2, abaixo). Os produtos já estão salvos mesmo "
+                         "se você sair.<br>")
+        else:
+            cabecalho = "<b>Importação concluída e salva.</b><br>"
+        style.bloco_aviso(cabecalho + stats.resumo(), tipo="success")
         if stats.avisos:
             with st.expander(f"⚠️ Avisos ({len(stats.avisos)})"):
                 for av in stats.avisos:
@@ -2334,29 +2421,31 @@ def _aba_catalogo():
         # Padroniza os nomes automaticamente (Fase B) — prepara o catálogo
         # para a busca por código. Invisível ao operador; se falhar (sem
         # chave/quota), a busca apenas cai no modo textual.
-        if credenciais.carregar_chave_api("gemini"):
+        if vai_padronizar:
             from pregoes import alinhador
-            barra = st.progress(0.0, text="Preparando o catálogo para a busca…")
+            barra = st.progress(
+                0.0, text="Etapa 2 de 2 — preparando o catálogo para a busca…")
             try:
                 stats_norm = alinhador.normalizar_catalogo(
                     callback=lambda f, t: barra.progress(
                         min(f / max(t, 1), 1.0),
-                        text=f"Preparando o catálogo… {f}/{t}"))
-                barra.progress(1.0, text="Catálogo pronto.")
+                        text=f"Etapa 2 de 2 — preparando o catálogo… {f}/{t}"))
+                barra.progress(
+                    1.0, text="Etapa 2 de 2 concluída — catálogo pronto para a busca.")
                 # Cobertura real — avisa se ficou parcial (quota/rede).
                 if stats_norm.get("falhos"):
                     style.bloco_aviso(
                         f"{stats_norm['falhos']} produto(s) não foram "
-                        "padronizados (limite da IA ou internet). A busca "
-                        "funciona, mas para cobertura total clique em importar "
-                        "de novo mais tarde.", tipo="warning")
+                        "padronizados (limite da IA ou internet). A importação "
+                        "está salva e a busca funciona; para cobertura total "
+                        "clique em importar de novo mais tarde.", tipo="warning")
             except Exception as exc:
                 _log.exception("falha ao padronizar catálogo")
                 barra.empty()
                 style.bloco_aviso(
-                    "Não consegui padronizar os nomes agora "
-                    f"({erros.mensagem_amigavel(exc)}). A busca funciona "
-                    "mesmo assim; tente importar de novo mais tarde.",
+                    "A importação está salva, mas não consegui padronizar os "
+                    f"nomes agora ({erros.mensagem_amigavel(exc)}). A busca "
+                    "funciona mesmo assim; tente importar de novo mais tarde.",
                     tipo="warning")
         st.rerun()
 

@@ -1304,6 +1304,34 @@ def _aplicar_llm_judge(
     return [bag[i] for i in indices if 0 <= i < len(bag)]
 
 
+def cotar_por_codigo(fornecedor: str, codigo: str) -> Optional[ResultadoBusca]:
+    """Cotação AO VIVO de um produto pelo código, no site do fornecedor.
+
+    Usada pela "busca no meu catálogo": o catálogo fornece o CÓDIGO, mas o
+    PREÇO tem que ser o ATUAL do site — preços mudam todo dia, então o preço
+    histórico guardado NUNCA pode ser usado na planilha (requisito do cliente,
+    2026-06).
+
+    Contrato (proposital, para o chamador não cair em preço velho):
+    - Retorna o ``ResultadoBusca`` com o preço atual quando o site devolve o
+      produto.
+    - Retorna ``None`` quando o site não devolve nada para o código (produto
+      fora de linha / código mudou) — fato definitivo.
+    - **Levanta exceção** se o login/navegador/rede falhar — é transitório, e
+      o chamador deve avisar e NÃO usar o preço do catálogo.
+    """
+    classes = {"almeida": AlmeidaDistribuidor, "dantas": DantasDistribuidora}
+    cls = classes.get(fornecedor)
+    cred = credenciais.carregar(fornecedor)
+    if not cls:
+        raise ValueError(f"Fornecedor desconhecido: {fornecedor!r}")
+    if not cred:
+        raise RuntimeError(f"Sem credencial configurada para {fornecedor}.")
+    with cls(cred["email"], cred["senha"]) as forn:
+        achados = forn.buscar_por_codigo(str(codigo).strip())
+    return achados[0] if achados else None
+
+
 # === Fase 4: NCM sob demanda (o NCM mora só na página de DETALHE) ===
 
 def consultar_ncms(pedidos, *, progresso=None) -> dict:
@@ -1319,8 +1347,18 @@ def consultar_ncms(pedidos, *, progresso=None) -> dict:
         pedidos: lista de ``(chave, fornecedor, url)`` dos produtos escolhidos.
         progresso: callback opcional ``(feitos, total)`` para barra na UI.
 
-    Retorna ``{chave: ncm|None}``. Degrada seguro: falha de login/rede num
-    fornecedor deixa os itens dele sem NCM (operador decide na UI).
+    Retorna ``(ncms, falhas)``:
+    - ``ncms``: ``{chave: ncm|None}`` só dos itens REALMENTE visitados. ``None``
+      aqui é definitivo ("visitei a página e ela não traz NCM") — seguro de
+      cachear.
+    - ``falhas``: conjunto de chaves que NÃO puderam ser consultadas (login do
+      fornecedor falhou, navegador não subiu, ou o ``goto`` deu timeout). São
+      transitórias — o chamador NÃO deve cacheá-las e deve permitir re-tentar.
+
+    Separar os dois é o que evita o "cache negativo": antes, uma falha de login
+    virava ``None`` indistinguível de "produto sem NCM", o operador não sabia
+    por que nada foi classificado e o re-clique não re-tentava (auditoria
+    2026-06, mesmo padrão do cache de busca / bloco 3).
     """
     from collections import defaultdict
 
@@ -1332,11 +1370,22 @@ def consultar_ncms(pedidos, *, progresso=None) -> dict:
     classes = {"almeida": AlmeidaDistribuidor, "dantas": DantasDistribuidora}
     total = sum(len(v) for v in por_forn.values())
     feitos = 0
-    out: dict = {}
+    ncms: dict = {}
+    falhas: set = set()
+
+    def _avancar():
+        nonlocal feitos
+        feitos += 1
+        if progresso:
+            progresso(feitos, total)
+
     for forn, lista in por_forn.items():
         cred = credenciais.carregar(forn)
         cls = classes.get(forn)
         if not cred or not cls:
+            for chave, _ in lista:
+                falhas.add(chave)
+                _avancar()
             continue
         try:
             with cls(cred["email"], cred["senha"]) as scraper:
@@ -1346,14 +1395,13 @@ def consultar_ncms(pedidos, *, progresso=None) -> dict:
                                            timeout=config.SCRAPER_TIMEOUT_SEGUNDOS * 1000)
                         scraper._page.wait_for_timeout(500)
                         txt = scraper._page.evaluate("() => document.body.innerText")
-                        out[chave] = tributacao.ncm_de_texto(txt)
+                        ncms[chave] = tributacao.ncm_de_texto(txt)  # str|None definitivo
                     except Exception:
-                        out[chave] = None
-                    feitos += 1
-                    if progresso:
-                        progresso(feitos, total)
+                        falhas.add(chave)            # transitório — re-tentável
+                    _avancar()
         except Exception:
-            # Login/inicialização falhou para este fornecedor — segue.
+            # Login/navegador falhou para este fornecedor — todos ficam pendentes.
             for chave, _ in lista:
-                out.setdefault(chave, None)
-    return out
+                falhas.add(chave)
+                _avancar()
+    return ncms, falhas
