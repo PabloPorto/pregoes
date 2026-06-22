@@ -191,6 +191,18 @@ def _tem_pregao_em_andamento() -> bool:
     return False
 
 
+def _tela_pregao_em_andamento() -> str:
+    """A tela onde está o trabalho do pregão atual, para 'Continuar o atual'
+    RETOMAR de onde parou (não basta fechar o modal — o operador pode ter
+    aberto o diálogo a partir do Início e precisa voltar ao trabalho)."""
+    ss = st.session_state
+    if ss.get("resultados_busca") or ss.get("selecoes"):
+        return "busca_precos"
+    if ss.get("extracao") is not None or ss.get("itens_revisados"):
+        return "revisao"
+    return "upload"
+
+
 @st.dialog("Começar um novo pregão?")
 def _confirmar_novo_pregao() -> None:
     """Confirmação antes de descartar um pregão em andamento (P1.7).
@@ -211,7 +223,10 @@ def _confirmar_novo_pregao() -> None:
         ir_para("upload")          # ir_para já faz st.rerun()
     if col_nao.button("Continuar o atual", width="stretch"):
         st.session_state.pop("_confirmar_novo_pregao", None)
-        st.rerun()                 # fecha o diálogo sem mexer no estado
+        # Retoma o trabalho em andamento (não só fecha o modal): leva à tela
+        # onde o pregão está. ir_para já faz st.rerun() e, com a flag removida,
+        # o diálogo não reabre.
+        ir_para(_tela_pregao_em_andamento())
 
 
 def _novo_pregao() -> None:

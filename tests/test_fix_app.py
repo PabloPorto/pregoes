@@ -502,3 +502,24 @@ def test_filtrar_selecionados_todos_escolhidos_inalterado():
     _, sel_f, mk_f, st_f = app._filtrar_selecionados(
         itens, {0: "A", 1: "B"}, {0: 1.3, 1: 1.45}, {0})
     assert sel_f == {0: "A", 1: "B"} and mk_f == {0: 1.3, 1: 1.45} and st_f == {0}
+
+
+def test_tela_pregao_em_andamento_retoma_no_lugar_certo():
+    """'Continuar o atual' deve retomar onde o pregão está: busca se já há
+    resultados/seleções, revisão se só houve extração, senão upload."""
+    ss = app.st.session_state
+    ss.clear()
+    ss["resultados_busca"] = {0: []}
+    assert app._tela_pregao_em_andamento() == "busca_precos"
+    ss.clear()
+    ss["selecoes"] = {0: object()}
+    assert app._tela_pregao_em_andamento() == "busca_precos"
+    ss.clear()
+    ss["extracao"] = object()
+    assert app._tela_pregao_em_andamento() == "revisao"
+    ss.clear()
+    ss["itens_revisados"] = [object()]
+    assert app._tela_pregao_em_andamento() == "revisao"
+    ss.clear()
+    assert app._tela_pregao_em_andamento() == "upload"
+    ss.clear()
