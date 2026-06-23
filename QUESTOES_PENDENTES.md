@@ -4,6 +4,47 @@
 
 ## STATUS 2026-06 — o que mudou desde o briefing
 
+- **NOVO (2026-06-23) — suíte de QA do APRENDIZADO (`tests/test_aprendizado.py`, 25 testes).**
+  Cobre as 8 frentes da retroalimentação: DB (guards+UPSERT), reuso fuzzy,
+  orquestrador (aprendizado antes do cache, **preço AO VIVO** não o salvo, item
+  aprendido não grava cache), salvaguarda 0.30 (fora-de-linha/exceção caem na
+  textual sem travar), **captura na UI**, **auto-correção (UPSERT ponta a ponta)**,
+  pré-seleção/ranking, e **reuso entre editais**. Dois ajustes de produção que a
+  suíte destravou/consolidou:
+  - **Fragilidade de captura corrigida:** `_registrar_aprendizado` recuperava o
+    fornecedor por re-match `(preço,código,marca)` em `resultados` e descartava o
+    aprendizado em SILÊNCIO quando não casava (float/espaço) ou em colisão entre
+    fornecedores. Agora `SelecaoFornecedor` carrega o `fornecedor` direto (gravado
+    nas 4 construções da UI); o re-match fica só como fallback legado.
+  - **Refactor testável:** `_chave_default`/`_melhor` saíram de dentro de
+    `_mostrar_selecao` para nível de módulo (`_chave_default_opcao`/`_melhor_opcao`)
+    — o ranking de pré-seleção (aprendido > catálogo > código > relevância > preço)
+    agora é testado sem `AppTest`.
+
+- **RESOLVIDO (2026-06-23) — QA: eixos elétricos liam medida errada (milhar pt-BR).**
+  Auditoria de QA (workflow) achou e verificou ao vivo: volt/watt/ampere eram
+  inteiro-puro (`(\d+)`) e colapsavam o milhar pt-BR — `1.500 W` virava
+  `('w','500')` (=500W!) e casava um 500W com **relevância 1.0** (produto de
+  potência errada como "match perfeito"); `12,5 V` virava `('v','5')`. Pior: o
+  reuso fuzzy do APRENDIZADO propagava o código de 500W para um edital de 1500W
+  como "sua escolha anterior". Corrigido para decimal+milhar (`(\d+(?:\.\d+)?)`
+  + `(?<![/.])`), igual kg/litro — `_norm_valor_dim` normaliza `1.500`→`1500`.
+  Também: `_RE_MM` ganhou `(?<![/.])` (o `5/16MM` vazava um `('mm','16')`
+  fantasma). +28 testes (eixos, dimensão, acentos, discriminador, fuzzy, E2E).
+
+- **LIMITAÇÃO CONHECIDA (2026-06-23, NÃO corrigida — decisão consciente):**
+  - **Milhar de DOIS grupos** (`1.000.000 L` = 1 milhão) some do eixo
+    litro/kg/metro (o regex só casa um grupo `.ddd`). Itens de milhão de
+    litros/kg não ocorrem no perfil do cliente (microempresa de construção);
+    fixar mexeria em regex calibrado por um caso que não aparece. Mantido como
+    limitação aceita.
+  - **Relevância de medida divergente nem sempre cruza o corte 0.35** (penaliza,
+    não some): `CANO 50mm` vs `100mm`=0.40; `ELETRODO E6013` vs `E7018`=0.51;
+    `PARAFUSO 5mm` vs `8mm`=0.36. O produto certo **rankeia acima** quando
+    existe (o errado vira "clutter", não auto-seleção — o operador escolhe); e
+    a calibração atual (8/9 verdadeiros, 0/21 falsos) **não deve ser afrouxada**
+    sem dado. Candidato a um "passe de precisão" futuro com dados reais.
+
 - **RESOLVIDO (2026-06-23) — Onda 1: query de busca não destravava 3 casos reais.**
   Diagnóstico em código (texto exato do edital → query): (a) "Alicate
   profissional" → a palavra-ruído "profissional" zerava o AND do site;

@@ -51,6 +51,11 @@ class SelecaoFornecedor:
     marca: str
     ncm: str | None = None   # Fase 4: NCM do produto escolhido → markup por ST
     url: str | None = None   # Fase 4: link da página de detalhe (p/ buscar o NCM)
+    # Fornecedor da opção escolhida (almeida/dantas). Gravado direto na seleção
+    # para o aprendizado saber a origem SEM re-casar por (preço,código,marca) —
+    # o re-match falhava em silêncio (float/espaço) e descartava o aprendizado
+    # (achado QA 2026-06). Opcional: o exportador não usa; só a retroalimentação.
+    fornecedor: str | None = None
 
 
 # Faixa de linhas que o template já tem prontas

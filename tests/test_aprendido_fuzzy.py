@@ -93,3 +93,54 @@ def test_fuzzy_reusa_com_milhar_ptbr_no_catalogo():
     achado = melhor_aprendido_fuzzy(
         "CAIXA DAGUA POLIETILENO 1000 LITROS", "almeida", aprendidos)
     assert achado is not None and achado["codigo_fornecedor"] == "777"
+
+
+# === Regressão do fix de eixos elétricos (2026-06-23) =======================
+# O gate de dimensão do reuso fuzzy depende de extrair_dimensoes ler o valor
+# CERTO. Antes, "1.500 W" virava ('w','500') e o fuzzy propagava o código de
+# um 500W para um edital de 1500W como se fosse a "escolha anterior" — pior
+# tipo de erro na retroalimentação (auto-seleciona produto errado).
+
+def test_fuzzy_nao_propaga_codigo_de_watt_errado():
+    aprendidos = [{
+        "fornecedor": "almeida",
+        "descricao_normalizada": normalizar_descricao("SECADOR PROFISSIONAL 500 W"),
+        "codigo_fornecedor": "C500", "marca": "X", "preco": None,
+    }]
+    # 1.500W (1500) != 500W → o gate de dimensão barra o reuso.
+    assert melhor_aprendido_fuzzy(
+        "SECADOR PROFISSIONAL 1.500 W", "almeida", aprendidos) is None
+    # Mesma potência → reusa (não-regressão).
+    assert melhor_aprendido_fuzzy(
+        "SECADOR PROFISSIONAL 500 W", "almeida", aprendidos) is not None
+
+
+def test_fuzzy_reusa_quando_so_muda_zero_decimal():
+    # '5MM' (edital) ≡ '5.0MM' (catálogo) — normalização une, gate não diverge.
+    aprendidos = [{
+        "fornecedor": "almeida",
+        "descricao_normalizada": normalizar_descricao("PARAFUSO SEXTAVADO 5.0MM"),
+        "codigo_fornecedor": "B", "marca": "X", "preco": None,
+    }]
+    m = melhor_aprendido_fuzzy("PARAFUSO SEXTAVADO 5MM", "almeida", aprendidos)
+    assert m is not None and m["codigo_fornecedor"] == "B"
+
+
+def test_fuzzy_isola_por_fornecedor_explicito():
+    aprendidos = [{
+        "fornecedor": "almeida",
+        "descricao_normalizada": normalizar_descricao("PARAFUSO 5MM"),
+        "codigo_fornecedor": "AAA", "marca": "X", "preco": None,
+    }]
+    assert melhor_aprendido_fuzzy("PARAFUSO 5MM", "dantas", aprendidos) is None
+    assert melhor_aprendido_fuzzy("PARAFUSO 5MM", "almeida", aprendidos) is not None
+
+
+def test_fuzzy_rejeita_produto_diferente_mesma_palavra():
+    # 'válvula' compartilhada, mas produto totalmente diferente → abaixo de 92.
+    aprendidos = [{
+        "fornecedor": "almeida",
+        "descricao_normalizada": normalizar_descricao("VALVULA LAVATORIO REBOUCAS 7/8"),
+        "codigo_fornecedor": "C5", "marca": "X", "preco": None,
+    }]
+    assert melhor_aprendido_fuzzy("VALVULA P/ COZINHA INOX", "almeida", aprendidos) is None

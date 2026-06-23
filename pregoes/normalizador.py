@@ -404,9 +404,14 @@ _NUMERAL_MAP = {
 }
 _RE_POLEGADA = re.compile(r"(\d+(?:\.\d+)?/\d+)")          # 3/16, 1.1/2, 5/16
 _RE_TOMADAS = re.compile(r"\b(\d+)\s*tomadas?\b")
-_RE_AMPERE = re.compile(r"\b(\d+)(?:a\b|\s*amperes?\b)")
-_RE_VOLT = re.compile(r"\b(\d+)\s*v(?:olts?)?\b")
-_RE_WATT = re.compile(r"\b(\d+)\s*w(?:atts?)?\b")
+# Elétrica (ampere/volt/watt) — EIXO PRÓPRIO. `(\d+(?:\.\d+)?)` + `(?<![/.])`
+# para capturar DECIMAL e MILHAR pt-BR, igual a kg/litro: sem isto, o inteiro-puro
+# `(\d+)` lia "1.500 W" como ('w','500') (=500W!), "1.000 W" como ('w','0') e
+# "12,5 V" como ('v','5'). `_norm_valor_dim` normaliza "1.500"→"1500" e mantém
+# "12.5" (bug verificado 2026-06: produto de potência errada virava match 1.0).
+_RE_AMPERE = re.compile(r"\b(?<![/.])(\d+(?:\.\d+)?)(?:a\b|\s*amperes?\b)")
+_RE_VOLT = re.compile(r"\b(?<![/.])(\d+(?:\.\d+)?)\s*v(?:olts?)?\b")
+_RE_WATT = re.compile(r"\b(?<![/.])(\d+(?:\.\d+)?)\s*w(?:atts?)?\b")
 _RE_CA = re.compile(r"\bca[\s-]?(\d+)\b")
 # Seção de cabo elétrico em mm² (área): "2.5MM²" / "2.5MM2" / "4 mm2".
 # É um EIXO PRÓPRIO ("mm2"), distinto do diâmetro nominal "mm" — cabo
@@ -422,7 +427,10 @@ _RE_MM2 = re.compile(r"\b(?<![/.])(\d+(?:\.\d+)?)\s*mm2\b")
 # Exige a unidade colada/adjacente — "6m" (metros) NÃO casa "mm". O
 # lookahead (?![0-9]) impede que "2.5mm2" (seção) seja lido como "2.5mm"
 # (diâmetro): seção é tratada por _RE_MM2.
-_RE_MM = re.compile(r"\b(\d+(?:\.\d+)?)\s*mm(?![0-9])\b")
+# (?<![/.]) barra o DENOMINADOR de fração colado: "PARAFUSO 5/16MM" não pode
+# virar ('mm','16') fantasma além de ('pol','5/16') (bug 2026-06) — mesma
+# proteção de mm2/l/kg/m.
+_RE_MM = re.compile(r"\b(?<![/.])(\d+(?:\.\d+)?)\s*mm(?![0-9])\b")
 _RE_CM = re.compile(r"\b(\d+(?:\.\d+)?)\s*cm\b")
 # Diâmetro nominal escrito SEM unidade colada: "DIÂMETRO 75", "DIÂMETRO DE 75",
 # "DIÂMETRO NOMINAL 75", "DN 75", "DN75", "Ø 75", "⌀ 75". Mapeado para o eixo

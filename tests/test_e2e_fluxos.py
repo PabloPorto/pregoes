@@ -537,3 +537,71 @@ def test_busca_no_site_termo_vazio_nao_toca_no_site(monkeypatch):
                         lambda f: {"email": "x", "senha": "y"})
     assert scraper.buscar_no_site("almeida", "   ") == []
     assert chamou["n"] == 0
+
+
+# ============ Precisão de medida + rede de categoria no ORQUESTRADOR =========
+
+def test_e2e_watt_milhar_produto_certo_rankeia_primeiro(banco, monkeypatch):
+    """Edital 1.500W: com o fix de eixo, o card 1500W (certo) vence o 500W —
+    antes os dois empatavam em relevância 1.0 e o 500W podia ser pré-selecionado."""
+    site = _SiteFake([(lambda q: True, [
+        _card("SECADOR PROFISSIONAL 500 W", "GAMA", 80.0, "C500"),
+        _card("SECADOR PROFISSIONAL 1500 W", "GAMA", 120.0, "C1500"),
+    ])])
+    forn = _fornecedor(monkeypatch, site)
+    lote = _buscar([_item("SECADOR PROFISSIONAL 1.500 W")], forn)
+    res = lote.resultados[0]
+    assert res, "deve achar"
+    assert res[0].codigo_fornecedor == "C1500", "o 1500W (certo) tem que vir no topo"
+
+
+def test_e2e_rede_de_categoria_destrava_and_restritivo(banco, monkeypatch):
+    """Site com busca AND restritiva: 'alicate pressao' (2 termos) zera; só a
+    rede final de 1 keyword ('alicate') devolve a categoria. Reproduz o caso
+    real reportado em campo."""
+    nome = "alicate de pressao 10pol morcego"
+    site = _SiteFake([
+        (lambda q: len(q.split()) == 1 and q.strip() in nome,
+         [_card("ALICATE DE PRESSAO 10POL MORCEGO", "MORCEGO", 35.0, "A1")]),
+        (lambda q: True, []),   # queries multi-termo zeram (AND restritivo)
+    ])
+    forn = _fornecedor(monkeypatch, site)
+    lote = _buscar([_item("Alicate DE pressão")], forn)
+    assert lote.resultados[0], "a rede de 1 keyword tem que destravar"
+    assert any("ALICATE" in o.descricao_encontrada for o in lote.resultados[0])
+    assert "alicate" in site.queries, "consultou a categoria isolada"
+
+
+def test_e2e_salvaguarda_descarta_codigo_aprendido_sem_relacao(banco, monkeypatch):
+    """Código aprendido que hoje devolve produto SEM relação (site trocou o
+    item) é descartado pela salvaguarda 0.30 e cai na textual — não entrega o
+    errado como 'sua escolha anterior'."""
+    _seed_aprendido(banco, "Alicate de pressão", "999", marca="X")
+    site = _SiteFake([
+        (lambda q: q.strip() == "999",
+         [_card("CHAVE DE FENDA PHILIPS 3/16", "X", 5.0, "999")]),
+        (lambda q: True,
+         [_card("ALICATE DE PRESSAO 10POL MORCEGO", "MORCEGO", 35.0, "A1")]),
+    ])
+    forn = _fornecedor(monkeypatch, site)
+    lote = _buscar([_item("Alicate de pressão")], forn)
+    descs = [o.descricao_encontrada for o in lote.resultados[0]]
+    assert not any("CHAVE" in d for d in descs), "código sem relação descartado"
+    assert any("ALICATE" in d for d in descs), "caiu na textual e achou o certo"
+    assert not any(getattr(o, "veio_por_aprendizado", False)
+                   for o in lote.resultados[0])
+
+
+def test_e2e_rede_de_categoria_filtra_lixo(banco, monkeypatch):
+    """A rede de 1 keyword traz a categoria inteira; o filtro de relevância
+    limpa o lixo (query 'parafuso' não pode entregar prego/bucha)."""
+    site = _SiteFake([(lambda q: True, [
+        _card("PARAFUSO SEXTAVADO 5/16 X 30 ZINCADO", "CISER", 0.5, "P1"),
+        _card("PREGO 18X27 COM CABECA", "GERDAU", 0.3, "N1"),
+        _card("BUCHA NYLON 8MM", "FISCHER", 0.2, "B1"),
+    ])])
+    forn = _fornecedor(monkeypatch, site)
+    lote = _buscar([_item("PARAFUSO SEXTAVADO 5/16")], forn)
+    descs = [o.descricao_encontrada for o in lote.resultados[0]]
+    assert any("PARAFUSO" in d for d in descs)
+    assert not any("PREGO" in d or "BUCHA" in d for d in descs), "lixo filtrado"

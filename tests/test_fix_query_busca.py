@@ -13,6 +13,12 @@ Garante também NÃO-REGRESSÃO: termos que SÃO categoria ("cabo", "aço", "fit
 from __future__ import annotations
 
 from pregoes.scraper import _montar_camadas
+from pregoes.normalizador import (
+    _casa_como_borda,
+    _keyword_discriminadora,
+    keywords_distintivas,
+    relevancia,
+)
 
 
 def _queries(descricao: str) -> list[str]:
@@ -78,3 +84,54 @@ def test_poda_nunca_esvazia_a_query():
     qs = _queries("Profissional Premium")
     assert qs, "nunca pode resultar em lista de queries vazia"
     assert all(q.strip() for q in qs)
+
+
+# --- Poda de marketing: vizinhos do caso real (rede de 1 keyword salva) ------
+
+def test_poda_cobre_so_profissional_premium_rede_salva_o_resto():
+    # 'top'/'comum'/'reforçado'/'industrial' NÃO estão em _ADJETIVOS_MARKETING:
+    # a query primária os mantém, mas a rede de 1 keyword ('alicate') garante
+    # que a categoria volte se o site zerar com o ruído.
+    for s, primaria in [("Alicate top", "alicate top"),
+                        ("Alicate comum", "alicate comum"),
+                        ("Alicate reforçado", "alicate reforcado"),
+                        ("Alicate industrial", "alicate industrial")]:
+        qs = _queries(s)
+        assert qs[0] == primaria
+        assert qs[-1] == "alicate"
+
+
+def test_rede_de_categoria_guard_4_chars_inclusivo():
+    # Categorias com EXATAMENTE 4 chars viram rede (limite é inclusivo).
+    for s, cat in [("CANO PVC 50MM", "cano"), ("LONA PRETA 8M", "lona"),
+                   ("FITA ISOLANTE 19MM", "fita"), ("SACO LIXO 100L", "saco")]:
+        assert _queries(s)[-1] == cat
+
+
+# --- Discriminador (marca/tipo) ---------------------------------------------
+
+def test_discriminador_pega_marca_descarta_generico_e_numerado():
+    assert _keyword_discriminadora("CHAVE FENDA COM PONTA STANLEY 3/16") == "stanley"
+    assert _keyword_discriminadora("CABO DE ACO GALVANIZADO BELGO 6MM") == "belgo"
+    # Marca com dígito (3M, E6013) não é discriminador (cai no Tier 2 de dimensão).
+    assert _keyword_discriminadora("FITA 3M ISOLANTE 19MM") is None
+    assert _keyword_discriminadora("ELETRODO E6013 2.5MM") is None
+
+
+def test_tipo_e_stopword_comum_nao_e():
+    # Assimetria documentada: 'tipo' é stopword de domínio (podada), 'comum' não.
+    assert keywords_distintivas("Alicate tipo") == ["alicate"]
+    assert keywords_distintivas("Alicate comum") == ["alicate", "comum"]
+
+
+# --- Anti-falso-positivo de substring (borda) -------------------------------
+
+def test_pilha_nao_casa_empilhadeira():
+    # Substring no MEIO não casa (senão 'pilha' ⊂ 'empilhadeira' alucinaria).
+    assert relevancia("PILHA AAA ALCALINA", "EMPILHADEIRA MANUAL 2T") < 0.35
+
+
+def test_casa_como_borda_prefixo_sim_meio_nao():
+    assert _casa_como_borda("cap", "cape")
+    assert _casa_como_borda("sold", "soldavel")
+    assert not _casa_como_borda("rato", "borracha")

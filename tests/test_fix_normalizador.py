@@ -322,3 +322,93 @@ def test_sinonimo_textura_faz_relevancia_passar_o_filtro():
 def test_sinonimo_word_boundary_nao_substitui_dentro_de_palavra():
     # \b evita reescrever 'textura' embutida em outra palavra (defensivo).
     assert "grafiato" not in normalizar_descricao("contextura")
+
+
+# --- Eixos elétricos: milhar pt-BR + decimal (bug verificado 2026-06-23) -----
+# Volt/watt/ampere eram inteiro-puro e colapsavam o milhar pt-BR: "1.500 W" lia
+# ('w','500') (=500W!) e casava 500W com relevância 1.0. Agora decimal+milhar.
+
+def test_watt_milhar_nao_vira_centena():
+    assert extrair_dimensoes("SECADOR PROFISSIONAL 1.500 W") == {("w", "1500")}
+    # 1.500W (1500) NÃO pode casar 500W como match perfeito
+    assert relevancia("SECADOR PROFISSIONAL 1.500 W",
+                      "SECADOR PROFISSIONAL 500 W") < 0.7
+
+
+def test_watt_milhar_mesmo_valor_casa_alto():
+    # "1.000 W" e "1000 W" são o MESMO produto escrito de dois jeitos
+    assert extrair_dimensoes("NOBREAK 1.000 W") == {("w", "1000")}
+    assert relevancia("NOBREAK SENOIDAL 1.000 W",
+                      "NOBREAK SENOIDAL 1000 W") >= 0.85
+
+
+def test_volt_decimal_nao_perde_inteiro():
+    d = extrair_dimensoes("SENSOR PROXIMIDADE 12,5 V")
+    assert ("v", "12.5") in d and ("v", "5") not in d
+
+
+def test_ampere_milhar_nao_vira_zero():
+    assert ("amp", "1000") in extrair_dimensoes("MOTOR INDUSTRIAL 1.000 AMPERES")
+
+
+def test_eletrica_valores_simples_intactos():
+    # Não-regressão: inteiros normais (sem milhar/decimal) continuam exatos.
+    assert extrair_dimensoes("LAMPADA 15W") == {("w", "15")}
+    assert extrair_dimensoes("DISJUNTOR 10A") == {("amp", "10")}
+    assert ("v", "750") in extrair_dimensoes("CABO FLEXIVEL 2.5MM2 750V")
+
+
+def test_mm_nao_vaza_denominador_de_fracao():
+    # "5/16MM": o 16 (denominador da polegada) não pode virar ('mm','16').
+    d = extrair_dimensoes("PARAFUSO 5/16MM")
+    assert ("mm", "16") not in d and ("pol", "5/16") in d
+
+
+def test_combo_eletrico_um_eixo_diverge_penaliza():
+    # volt coincide (220) mas watt diverge (3000≠2000) → penaliza mesmo assim.
+    assert relevancia("TRANSFORMADOR 220V 3000W",
+                      "TRANSFORMADOR 220V 2000W") < 0.7
+
+
+# --- Precisão por dimensão: medida errada é penalizada na relevância --------
+
+def test_valvula_fracao_diferente_penaliza():
+    assert extrair_dimensoes("VALVULA 7/8") == {("pol", "7/8")}
+    assert extrair_dimensoes("VALVULA 1.1/4") == {("pol", "1.1/4")}
+    assert relevancia("VALVULA P/ LAVATORIO REBOUCAS 7/8",
+                      "VALVULA P/ LAVATORIO REBOUCAS 1.1/4") < 0.7
+
+
+def test_vergalhao_classe_ca_penaliza():
+    assert ("ca", "50") in extrair_dimensoes("VERGALHAO ACO CA-50 12,5MM")
+    assert relevancia("VERGALHAO ACO CA-50 12,5MM",
+                      "VERGALHAO ACO CA-60 12,5MM") < 0.7
+
+
+def test_combo_pol_e_mm_um_diverge():
+    assert {("pol", "5/16"), ("mm", "30")} <= extrair_dimensoes(
+        "PARAFUSO SEXTAVADO 5/16 X 30MM")
+    assert relevancia("PARAFUSO SEXTAVADO 5/16 X 30MM",
+                      "PARAFUSO SEXTAVADO 5/16 X 40MM") < 0.7
+
+
+def test_diametro_nominal_casa_mm_e_diverge_de_outro():
+    assert relevancia("TUBO PVC RIGIDO DIAMETRO 75 SOLDAVEL",
+                      "TUBO PVC SOLDAVEL 75MM") >= 0.7
+    assert relevancia("TUBO PVC RIGIDO DIAMETRO 75 SOLDAVEL",
+                      "TUBO PVC SOLDAVEL 50MM") < 0.7
+
+
+def test_arame_numero_bitola_penaliza():
+    assert ("n", "14") in extrair_dimensoes("ARAME RECOZIDO Nº 14")
+    assert relevancia("ARAME RECOZIDO GALVANIZADO Nº 14",
+                      "ARAME RECOZIDO GALVANIZADO Nº 16") < 0.7
+
+
+# --- Acentos do domínio normalizam para ASCII (busca acento-insensível) -----
+
+def test_acentos_dominio_viram_ascii():
+    for ac, asc in [("latão", "latao"), ("sucção", "succao"),
+                    ("pressão", "pressao"), ("borrão", "borrao"),
+                    ("micrômetro", "micrometro")]:
+        assert normalizar_descricao(ac) == asc

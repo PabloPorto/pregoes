@@ -1879,7 +1879,7 @@ def _usar_do_catalogo(idx: int, produto, forn: str, codigo: str) -> None:
     st.session_state.resultados_busca.setdefault(idx, []).append(novo)
     st.session_state.selecoes[idx] = SelecaoFornecedor(
         preco=novo.preco, codigo_fornecedor=novo.codigo_fornecedor,
-        marca=novo.marca)
+        marca=novo.marca, fornecedor=novo.fornecedor)
     st.rerun()
 
 
@@ -1963,9 +1963,31 @@ def _usar_do_site(idx: int, r) -> None:
     st.session_state.resultados_busca.setdefault(idx, []).append(r)
     st.session_state.selecoes[idx] = SelecaoFornecedor(
         preco=r.preco, codigo_fornecedor=r.codigo_fornecedor,
-        marca=r.marca, ncm=getattr(r, "ncm", None), url=getattr(r, "url", None))
+        marca=r.marca, ncm=getattr(r, "ncm", None), url=getattr(r, "url", None),
+        fornecedor=getattr(r, "fornecedor", None))
     st.session_state.pop(f"site_res_{idx}", None)
     st.rerun()
+
+
+def _chave_default_opcao(item_desc: str, o):
+    """Ordena candidatos para o DEFAULT e para o topo da lista:
+    1º a ESCOLHA ANTERIOR do operador para esta descrição (retroalimentação —
+    a inteligência central; sempre vence), 2º o que JÁ ESTÁ no catálogo do
+    cliente por código, 3º código forte do edital, 4º relevância, 5º menor
+    preço. Sem nada disso, idêntico ao critério anterior (relevância, preço).
+
+    Nível de módulo (extraído de _mostrar_selecao em 2026-06) para ser testável
+    sem streamlit.testing.AppTest — é o contrato de pré-seleção da planilha."""
+    from pregoes.normalizador import relevancia as _relev
+    return (-int(getattr(o, "veio_por_aprendizado", False)),
+            -int(getattr(o, "no_catalogo", False)),
+            -_bonus_codigo(item_desc, o.descricao_encontrada),
+            -_relev(item_desc, o.descricao_encontrada), o.preco)
+
+
+def _melhor_opcao(item_desc: str, opcoes: list):
+    """Melhor default: aprendido > catálogo > código > relevância > preço."""
+    return min(opcoes, key=lambda o: _chave_default_opcao(item_desc, o))
 
 
 def _mostrar_selecao(itens: list, resultados: dict) -> None:
@@ -1982,22 +2004,10 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
     o operador escolhe.
     """
     from pregoes.exportador import SelecaoFornecedor
-    from pregoes.normalizador import relevancia as _relev
 
-    def _chave_default(item_desc: str, o):
-        """Ordena candidatos para o DEFAULT e para o topo da lista:
-        1º a ESCOLHA ANTERIOR do operador para esta descrição (retroalimentação
-        — a inteligência central; sempre vence), 2º o que JÁ ESTÁ no catálogo do
-        cliente por código, 3º código forte do edital, 4º relevância, 5º menor
-        preço. Sem nada disso, idêntico ao critério anterior (relevância, preço)."""
-        return (-int(getattr(o, "veio_por_aprendizado", False)),
-                -int(getattr(o, "no_catalogo", False)),
-                -_bonus_codigo(item_desc, o.descricao_encontrada),
-                -_relev(item_desc, o.descricao_encontrada), o.preco)
-
-    def _melhor(item_desc: str, opcoes: list):
-        """Melhor default: código forte do edital, depois relevância, preço."""
-        return min(opcoes, key=lambda o: _chave_default(item_desc, o))
+    # Ranking extraído para nível de módulo (testável sem AppTest).
+    _chave_default = _chave_default_opcao
+    _melhor = _melhor_opcao
 
     # Inicializa estado de seleções com a opção de MAIOR RELEVÂNCIA por item
     if "selecoes" not in st.session_state:
@@ -2011,6 +2021,7 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
                     marca=melhor.marca,
                     ncm=getattr(melhor, "ncm", None),
                     url=getattr(melhor, "url", None),
+                    fornecedor=getattr(melhor, "fornecedor", None),
                 )
 
     # Resumo
@@ -2178,7 +2189,8 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
                             idx, SelecaoFornecedor(
                                 preco=o.preco, codigo_fornecedor=o.codigo_fornecedor,
                                 marca=o.marca, ncm=getattr(o, "ncm", None),
-                                url=getattr(o, "url", None))),
+                                url=getattr(o, "url", None),
+                                fornecedor=getattr(o, "fornecedor", None))),
                     )
 
             # Rede de segurança: buscar no catálogo interno do cliente — SEMPRE
@@ -2245,15 +2257,19 @@ def _registrar_aprendizado(itens: list, selecoes: dict, resultados: dict) -> Non
                 desc_norm = _norm(item.descricao)
                 if not desc_norm:
                     continue
-                # Descobre fornecedor olhando o resultado escolhido pelo operador
-                opcoes = resultados.get(idx, [])
-                fornecedor = None
-                for o in opcoes:
-                    if (o.preco == sel.preco
-                            and o.codigo_fornecedor == sel.codigo_fornecedor
-                            and o.marca == sel.marca):
-                        fornecedor = o.fornecedor
-                        break
+                # Fornecedor: gravado DIRETO na seleção (robusto). Fallback ao
+                # re-match por (preço,código,marca) — só para seleções legadas
+                # sem o campo. Antes, o re-match era a ÚNICA via e descartava o
+                # aprendizado em silêncio quando não casava (float/espaço na
+                # marca) — furo da retroalimentação (achado QA 2026-06).
+                fornecedor = getattr(sel, "fornecedor", None)
+                if not fornecedor:
+                    for o in resultados.get(idx, []):
+                        if (o.preco == sel.preco
+                                and o.codigo_fornecedor == sel.codigo_fornecedor
+                                and o.marca == sel.marca):
+                            fornecedor = o.fornecedor
+                            break
                 if not fornecedor:
                     continue
                 _db.aprendido_gravar(
