@@ -836,8 +836,11 @@ class TestQueryDistintiva:
             "conforme ABNT NBR 14136")
         # 1ª camada = query distintiva curta (não a descrição completa)
         assert camadas[0][1] == "filtro linha tomadas eletricas"
-        # Descrição completa é o ÚLTIMO recurso
-        assert "conforme" in camadas[-1][1]
+        # Descrição completa continua como fallback textual (contém "conforme")
+        assert any("conforme" in q for _conf, q in camadas)
+        # Onda 1 (2026-06-23): a rede de 1 keyword de CATEGORIA é o novo último
+        # recurso — só dispara quando todas as anteriores zeram no site.
+        assert camadas[-1][1] == "filtro"
 
 
 class TestDimensao:

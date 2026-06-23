@@ -1883,6 +1883,91 @@ def _usar_do_catalogo(idx: int, produto, forn: str, codigo: str) -> None:
     st.rerun()
 
 
+def _busca_site_item(idx: int, item) -> None:
+    """Busca MANUAL ao vivo no site dos fornecedores, por nome OU código
+    (rede de segurança final — pedido do cliente 2026-06). Quando nem a busca
+    automática nem o catálogo trazem o esperado, o operador digita o termo,
+    escolhe o fornecedor e busca direto no site, SEM filtro (vê o que o site
+    devolve). O resultado escolhido entra como opção do item — e, ao gerar a
+    planilha, é APRENDIDO: na próxima vez vem sozinho (retroalimentação)."""
+    fornecedores = [
+        nome for nome in ("almeida", "dantas")
+        if credenciais.carregar(nome) is not None
+    ]
+    with st.expander("🌐 Buscar direto no site do fornecedor (nome ou código)"):
+        if not fornecedores:
+            st.caption("Configure as credenciais dos fornecedores em "
+                       "Configurações para buscar direto no site.")
+            return
+        c1, c2 = st.columns([3, 2], vertical_alignment="bottom")
+        with c1:
+            termo = st.text_input(
+                "Nome ou código do produto", value="", key=f"siteq_{idx}",
+                placeholder="ex.: alicate de pressão  ·  8811",
+                help="Busca AO VIVO no site, sem filtro — você vê o que o site "
+                     "devolve e escolhe. O preço é o atual do site.")
+        with c2:
+            forn_sel = st.radio(
+                "Fornecedor", fornecedores,
+                format_func=lambda f: f.capitalize(),
+                horizontal=True, key=f"siteforn_{idx}")
+        buscar = st.button("Buscar no site ao vivo", key=f"sitego_{idx}")
+        chave_res = f"site_res_{idx}"
+        if buscar and termo.strip():
+            from pregoes.scraper import buscar_no_site
+            with st.spinner(f"Buscando “{termo.strip()}” na "
+                            f"{forn_sel.capitalize()}…"):
+                try:
+                    achados = buscar_no_site(forn_sel, termo.strip())
+                    st.session_state[chave_res] = (forn_sel, achados)
+                except Exception as exc:
+                    _log.exception("falha na busca manual no site")
+                    style.bloco_aviso(
+                        "Não consegui buscar no site agora "
+                        f"({erros.mensagem_amigavel(exc)}). Tente de novo em "
+                        "instantes.", tipo="warning")
+                    st.session_state.pop(chave_res, None)
+        elif buscar:
+            st.caption("Digite um nome ou código para buscar.")
+
+        dados = st.session_state.get(chave_res)
+        if not dados:
+            return
+        forn_res, achados = dados
+        if not achados:
+            st.caption(f"Nada encontrado na {forn_res.capitalize()} para esse "
+                       "termo. Tente outras palavras ou o código.")
+            return
+        st.caption(f"{len(achados)} resultado(s) na {forn_res.capitalize()} — "
+                   "**preço atual do site**. Clique em **Usar** no escolhido.")
+        for j, r in enumerate(achados):
+            cc1, cc2 = st.columns([5, 1.4], vertical_alignment="center")
+            with cc1:
+                st.markdown(
+                    f"**{html.escape(r.marca or 'Sem marca')}** · "
+                    f"R$ {r.preco:.2f}<br>"
+                    f"<span style='color:#64748b;font-size:0.82rem'>"
+                    f"{html.escape((r.descricao_encontrada or '')[:64])} · "
+                    f"<code>cód. {html.escape(r.codigo_fornecedor or '')}</code>"
+                    f"</span>", unsafe_allow_html=True)
+            with cc2:
+                if st.button("Usar", key=f"siteuse_{idx}_{j}", width="stretch"):
+                    _usar_do_site(idx, r)
+
+
+def _usar_do_site(idx: int, r) -> None:
+    """Adiciona o resultado da busca manual no site como opção escolhida do
+    item (preço e marca atuais do site). Limpa o resultado da busca para a
+    tela voltar limpa."""
+    from pregoes.exportador import SelecaoFornecedor
+    st.session_state.resultados_busca.setdefault(idx, []).append(r)
+    st.session_state.selecoes[idx] = SelecaoFornecedor(
+        preco=r.preco, codigo_fornecedor=r.codigo_fornecedor,
+        marca=r.marca, ncm=getattr(r, "ncm", None), url=getattr(r, "url", None))
+    st.session_state.pop(f"site_res_{idx}", None)
+    st.rerun()
+
+
 def _mostrar_selecao(itens: list, resultados: dict) -> None:
     """Lista paginada de itens; cada candidato vira um card. Operador escolhe.
 
@@ -1901,11 +1986,12 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
 
     def _chave_default(item_desc: str, o):
         """Ordena candidatos para o DEFAULT e para o topo da lista:
-        1º o que JÁ ESTÁ no catálogo do cliente por código (feedback do
-        cliente — ele já compra esse produto), 2º código forte do edital,
-        3º relevância, 4º menor preço. Sem nada disso, idêntico ao critério
-        anterior (relevância, preço)."""
-        return (-int(getattr(o, "no_catalogo", False)),
+        1º a ESCOLHA ANTERIOR do operador para esta descrição (retroalimentação
+        — a inteligência central; sempre vence), 2º o que JÁ ESTÁ no catálogo do
+        cliente por código, 3º código forte do edital, 4º relevância, 5º menor
+        preço. Sem nada disso, idêntico ao critério anterior (relevância, preço)."""
+        return (-int(getattr(o, "veio_por_aprendizado", False)),
+                -int(getattr(o, "no_catalogo", False)),
                 -_bonus_codigo(item_desc, o.descricao_encontrada),
                 -_relev(item_desc, o.descricao_encontrada), o.preco)
 
@@ -2072,10 +2158,13 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
                         "**Buscar no meu catálogo** abaixo.")
                 for pos, o in enumerate(opcoes_ordenadas):
                     escolhido = _esta_selecionado(o)
-                    # "Já no seu catálogo" tem prioridade sobre os demais badges —
-                    # é o sinal mais forte para o operador (produto que ele já compra,
-                    # casado pelo código do fornecedor).
-                    if getattr(o, "no_catalogo", False):
+                    # "Sua escolha anterior" (retroalimentação) é o sinal MAIS
+                    # forte — o próprio operador já resolveu este item antes.
+                    # Depois "Já no seu catálogo" (produto que ele compra, casado
+                    # pelo código do fornecedor).
+                    if getattr(o, "veio_por_aprendizado", False):
+                        badge_html = style.pill("✓ sua escolha anterior", "aprendido")
+                    elif getattr(o, "no_catalogo", False):
                         badge_html = style.pill("✓ no seu catálogo", "catalogo")
                     elif pos == 0:
                         badge_html = style.pill("Melhor match", "match")
@@ -2096,6 +2185,11 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
             # disponível, inclusive quando não houve resultado nos fornecedores
             # (pedido do cliente 2026-06).
             _busca_catalogo_item(idx, item)
+
+            # Rede de segurança final: buscar AO VIVO direto no site (nome ou
+            # código), escolhendo o fornecedor — quando nem a busca automática
+            # nem o catálogo trazem o esperado (pedido do cliente 2026-06).
+            _busca_site_item(idx, item)
 
             # Opção de não usar este item
             sem_sel = sel_atual is None

@@ -303,3 +303,22 @@ def test_largura_l_igual_nao_vira_litros():
 def test_gr_de_graus_nao_vira_kg():
     """'JOELHO 90 GR' — GR é graus no domínio, não gramas."""
     assert extrair_dimensoes("JOELHO PVC SOLDAVEL 90 GR") == set()
+
+
+# --- Sinônimo de domínio: textura -> grafiato (Onda 1, 2026-06-23) -----------
+# Substituição (não expansão): reescreve nos DOIS lados da relevância, então o
+# match passa o filtro 0.35. Ver _SINONIMOS_DOMINIO.
+
+def test_sinonimo_textura_vira_grafiato_na_normalizacao():
+    assert normalizar_descricao("Revestimento textura") == "revestimento grafiato"
+    assert normalizar_descricao("TEXTURA ACRÍLICA 25KG") == "grafiato acrilica 25kg"
+
+
+def test_sinonimo_textura_faz_relevancia_passar_o_filtro():
+    # Sem substituição daria 0.0 (o filtro 0.35 descartaria o acerto).
+    assert relevancia("revestimento textura", "Grafiato 25kg") >= 0.35
+
+
+def test_sinonimo_word_boundary_nao_substitui_dentro_de_palavra():
+    # \b evita reescrever 'textura' embutida em outra palavra (defensivo).
+    assert "grafiato" not in normalizar_descricao("contextura")

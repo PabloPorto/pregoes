@@ -4,6 +4,83 @@
 
 ## STATUS 2026-06 — o que mudou desde o briefing
 
+- **RESOLVIDO (2026-06-23) — Onda 1: query de busca não destravava 3 casos reais.**
+  Diagnóstico em código (texto exato do edital → query): (a) "Alicate
+  profissional" → a palavra-ruído "profissional" zerava o AND do site;
+  (b) "Alicate de pressão" → AND de 2 termos restritivo; (c) "Revestimento
+  textura" → sinônimo (o site usa "grafiato"). **Tudo determinístico, zero IA
+  nova, mudanças aditivas (sem regressão):**
+  - `_ADJETIVOS_MARKETING` (lista NOVA e estreita: profissional/premium) podada
+    só na QUERY (`scraper._montar_camadas`), nunca na relevância, com guarda de
+    não-esvaziar. **Não** reusa `_ATRIBUTOS_GENERICOS` (contém aço/cabo/isolante
+    → regrediria "cabo de aço").
+  - Rede final de **1 keyword de categoria** ("alicate") no fim das camadas — só
+    dispara quando todas as anteriores zeram; dá candidatos para a relevância/
+    judge ranquearem.
+  - `_SINONIMOS_DOMINIO` por **substituição** (textura→grafiato) no
+    `normalizar_descricao`. Substituição (não expansão) é obrigatória: medido
+    `relevancia("revestimento textura","Grafiato 25kg")=0.0` (filtro mata o
+    acerto) vs `0.5` com a substituição (passa). Testes:
+    `tests/test_fix_query_busca.py` + `test_fix_normalizador.py` (incl.
+    não-regressão cabo/aço e fita/isolante).
+
+- **DECISÃO (2026-06-23) — Onda 2 (IA de re-query) DESCARTADA a favor da
+  retroalimentação.** Avaliou-se (workflow adversarial) usar o Gemini para
+  sugerir termos de busca quando a busca zera. **O cliente optou por investir
+  todos os recursos na RETROALIMENTAÇÃO sustentável** (o sistema aprende com os
+  inputs do operador até a assertividade se aproximar de ~100%). Racional que
+  sustenta a escolha: o loop já **cura o vocabulário sozinho** — o operador
+  resolve um sinônimo novo UMA vez na caixa "Buscar direto no site" e o sistema
+  aprende; sem custo de IA por chamada, sem tabela manual a manter. A IA de
+  re-query fica como ideia arquivada (exigiria tabela nova no SQLite, §15).
+
+- **QUESTÃO PENDENTE (2026-06-23) — sites Almeida/Dantas são sensíveis a acento?**
+  Toda query já vai SEM acento ("pressão"→"pressao", via NFD em
+  `normalizar_descricao`). Se o site exigir acento, "alicate de pressão" pode
+  continuar zerando mesmo com a rede de 1 keyword. **Default: manter sem acento**
+  (não mexer no `normalizar_descricao` às cegas — regrediria dezenas de itens que
+  funcionam). **Insumo p/ resolver:** rodar "alicate de pressao" vs "alicate de
+  pressão" nas 2 buscas reais (só o ambiente do cliente tem). **Rede imediata:**
+  a caixa "Buscar direto no site" já entregue.
+
+- **QUESTÃO PENDENTE (2026-06-23) — curadoria de `_SINONIMOS_DOMINIO` e
+  `_ADJETIVOS_MARKETING`.** São tabelas mínimas e curadas; o cliente é quem
+  conhece o vocabulário do catálogo. Confirmar: `textura↔grafiato` é seguro? há
+  outros pares (ex.: outro nome comercial p/ o mesmo produto)? algum termo de
+  marketing a podar além de profissional/premium — sem incluir palavra que seja
+  nome de linha de produto? O long-tail fica para a retroalimentação, não para
+  inflar estas tabelas.
+
+- **RESOLVIDO (2026-06-23) — retroalimentação ficava enjaulada atrás do cache.**
+  A escolha que o operador ensina para um item ("Textura X, cor W → marca A")
+  é a inteligência central do produto (o cliente está disposto a investir tempo
+  alimentando-a). O orquestrador consultava o **cache (TTL 2 dias) ANTES** do
+  aprendizado e dava `continue` — então um item repetido dentro da janela
+  voltava com o "melhor match" textual, não com a escolha A. Invertida a ordem
+  em [`scraper.py`](pregoes/scraper.py): **aprendizado primeiro, pulando o
+  cache**; o resultado aprendido é recuperado por código (preço ao vivo),
+  **pré-selecionado** e exibido com o badge **"✓ sua escolha anterior"**
+  (`veio_por_aprendizado`). Regressão travada por
+  `test_aprendizado_vence_o_cache_na_segunda_busca`.
+
+- **NOVO (2026-06-23) — caixa de busca AO VIVO no site (rede de segurança final).**
+  Quando nem a busca automática nem o catálogo trazem o esperado, o operador
+  digita **nome ou código**, escolhe o **fornecedor** e busca direto no site,
+  **sem filtro de relevância** (vê os cards crus e julga). É também a mitigação
+  para casos em que o filtro automático erra. `scraper.buscar_no_site()` +
+  UI `_busca_site_item` (por item, ao lado da "Buscar no meu catálogo"). O
+  resultado escolhido é APRENDIDO → na próxima vez vem sozinho.
+
+- **DÉBITO TÉCNICO (2026-06-23) — alguns produtos não voltam da busca automática
+  apesar de existirem no site (ex.: ALICATE de pressão/corte; REVESTIMENTO
+  textura volta só tinta).** Confirmado em código que NÃO é o filtro de
+  relevância (cards de alicate passam 0,5–1,0) nem o "número" (não vira
+  dimensão). A falha está na **camada viva** (o que o site devolve para o termo
+  ou o parse do card) — não reproduzível fora da máquina do cliente. **Para
+  isolar:** um item de edital real (texto exato) OU o diagnóstico rodando no
+  cliente. Mitigação já entregue: a busca AO VIVO no site (acima). Aguarda
+  exemplo do cliente.
+
 - **RESOLVIDO (2026-06) — matcher casava subproduto errado em eixos numéricos.**
   (Era o débito #2 da passada adversarial.) A mineração do catálogo real mudou
   o quadro: RAL e grão-de-lixa **não existem** no catálogo; o caso real é

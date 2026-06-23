@@ -75,9 +75,15 @@ normal (1,45) a partir daí.
 ### Busca de preços em camadas (estado atual, 2026-06)
 
 Por item, do mais preciso ao mais cobertor:
-1. **Cache** (TTL 2 dias) → reusa busca recente.
-2. **Aprendizado** (Camada 4) → descrição já confirmada pelo operador vira
-   código direto.
+1. **Aprendizado** (Camada 4) → descrição já confirmada pelo operador vira
+   código direto. **Consultado ANTES do cache (2026-06-23):** a escolha
+   ensinada pelo operador é a inteligência central do produto e tem
+   precedência sobre o resultado cru de qualquer busca/cache. Recupera o
+   produto por código (preço ao vivo), pré-seleciona e marca
+   `veio_por_aprendizado` (badge "✓ sua escolha anterior"). Antes o cache vinha
+   primeiro e atropelava o aprendizado dentro da janela de 2 dias.
+2. **Cache** (TTL 2 dias) → reusa busca recente. Só para itens **sem** escolha
+   aprendida (item aprendido pula o cache de propósito).
 3. **Catálogo por código** (Camada 0) → `matcher` casa a descrição do edital
    contra o catálogo histórico (importado das planilhas do cliente). A
    **canonização via Gemini** (`alinhador`) alinha o vocabulário
@@ -87,6 +93,12 @@ Por item, do mais preciso ao mais cobertor:
    (variante F) + validação de dimensão (inclui mm/pol/tomadas/volts).
 5. **Judge** (Gemini) → revisor semântico que rejeita os falsos sutis
    (fita-rotulador ≠ fita-crepe).
+
+**Redes de segurança manuais (por item, na tela de seleção):** "Buscar no meu
+catálogo" (produtos que o cliente já tem, preço cotado ao vivo por código) e
+"Buscar direto no site" (`scraper.buscar_no_site` — nome ou código, fornecedor
+à escolha, **sem filtro de relevância**: o operador vê os cards crus e julga).
+Toda escolha manual vira aprendizado → da próxima vez é automática.
 
 **Confiabilidade medida (edital real da especialidade do cliente):**
 ~88-90% certa para piloto supervisionado, após o sprint pré-piloto de

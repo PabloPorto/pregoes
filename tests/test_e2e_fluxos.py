@@ -228,7 +228,46 @@ def test_aprendizado_reusa_escolha_anterior_por_codigo(banco, monkeypatch):
     lote = _buscar([_item(item_desc)], forn)
     assert lote.resultados[0], "deve achar pelo aprendizado"
     assert lote.resultados[0][0].codigo_fornecedor == "52763"
+    assert lote.resultados[0][0].veio_por_aprendizado is True
     assert "52763" in site.queries
+
+
+def test_aprendizado_vence_o_cache_na_segunda_busca(banco, monkeypatch):
+    """Bloco A (2026-06): item repetido DENTRO da janela de cache (2 dias) deve
+    devolver a ESCOLHA APRENDIDA do operador — não o resultado cru do cache.
+
+    Regressão da causa-raiz: o cache era consultado ANTES do aprendizado e dava
+    `continue`, atropelando a retroalimentação. Agora o aprendizado vem primeiro
+    e PULA o cache."""
+    item_desc = "PARAFUSO SEXTAVADO 5/16 X 2 ZINCADO"
+    site = _SiteFake([
+        # busca por código 555 → o produto que o operador vai ENSINAR ser o certo
+        (lambda q: q.strip() == "555",
+         [_card("PARAFUSO SEXTAVADO 5/16X2 GALVANIZADO CISER", "CISER", 0.9, "555")]),
+        # busca textual → um card 'cru' diferente (vai pro cache na 1ª rodada)
+        (lambda q: True,
+         [_card("PARAFUSO SEXTAVADO 5/16X2 COMUM", "GENERICA", 0.5, "111")]),
+    ])
+    forn = _fornecedor(monkeypatch, site)
+
+    # 1ª busca, SEM aprendizado: textual acha o card cru "111" e CACHEIA.
+    lote1 = _buscar([_item(item_desc)], forn)
+    assert lote1.resultados[0][0].codigo_fornecedor == "111"
+    assert lote1.cache_misses >= 1
+
+    # Operador ENSINA: para este item, a escolha certa é o código 555 (CISER).
+    _seed_aprendido(banco, item_desc, "555", marca="CISER")
+
+    # 2ª busca, mesmo item, dentro da janela de cache → o APRENDIZADO vence.
+    n_antes = len(site.queries)
+    lote2 = _buscar([_item(item_desc)], forn)
+    res = lote2.resultados[0]
+    assert res, "2ª busca deve retornar a escolha aprendida"
+    assert res[0].codigo_fornecedor == "555", "veio a escolha aprendida, não o cache"
+    assert res[0].veio_por_aprendizado is True
+    assert lote2.codigo_hits >= 1
+    assert lote2.cache_hits == 0, "aprendizado pula o cache de propósito"
+    assert "555" in site.queries[n_antes:], "consultou o site pelo código aprendido"
 
 
 # ============ Fluxo: filtro de relevância + dimensão (precisão) ==========
@@ -429,3 +468,72 @@ def test_adv_item_descricao_none_nao_derruba_lote(banco, monkeypatch):
              _item("TORNEIRA 1/2", n=2)]
     lote = _buscar(itens, forn, progresso_callback=lambda f, t, d: None)
     assert 1 in lote.resultados        # o lote não quebrou; o 2º item foi processado
+
+
+# ============ Fluxo: busca manual AO VIVO no site (Bloco C) ==============
+
+def _fake_forn_site(cards, espera_query=None):
+    """Fábrica de scraper falso para `buscar_no_site`: context manager com
+    `_page`, `_rate_limiter.acquire` e `_buscar_query` — sem rede/navegador."""
+    class _RL:
+        def acquire(self):
+            return None
+
+    class _FakeForn:
+        def __init__(self, email, senha):
+            self._page = object()
+            self._rate_limiter = _RL()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def _buscar_query(self, page, query, conf):
+            if espera_query is not None:
+                assert query == espera_query, query
+            return [ResultadoBusca(d, m, p, c, conf, "almeida")
+                    for (d, m, p, c) in cards]
+    return _FakeForn
+
+
+def test_busca_no_site_manual_traz_cards_crus_sem_filtro(monkeypatch):
+    """A busca manual no site devolve os cards CRUS (sem filtro de relevância)
+    para o operador julgar — é a mitigação para casos onde o filtro automático
+    erra (ex.: alicate)."""
+    import pregoes.scraper as scraper
+    cards = [("ALICATE PRESSAO 10POL MORCEGO", "MORCEGO", 35.0, "A1"),
+             ("ALICATE PRESSAO 8POL CR-V", "CR-V", 28.0, "A2")]
+    monkeypatch.setattr(scraper, "AlmeidaDistribuidor",
+                        _fake_forn_site(cards, espera_query="alicate de pressao"))
+    monkeypatch.setattr(scraper.credenciais, "carregar",
+                        lambda f: {"email": "x", "senha": "y"})
+
+    achados = scraper.buscar_no_site("almeida", "  alicate de pressao  ")
+    assert [a.codigo_fornecedor for a in achados] == ["A1", "A2"]
+    assert achados[0].preco == 35.0
+
+
+def test_busca_no_site_sem_credencial_levanta(monkeypatch):
+    """Sem credencial configurada → erro claro (config/transitório), não silêncio."""
+    import pregoes.scraper as scraper
+    monkeypatch.setattr(scraper.credenciais, "carregar", lambda f: None)
+    with pytest.raises(RuntimeError):
+        scraper.buscar_no_site("almeida", "alicate")
+
+
+def test_busca_no_site_termo_vazio_nao_toca_no_site(monkeypatch):
+    """Termo vazio → retorna [] sem instanciar o scraper (sem rede)."""
+    import pregoes.scraper as scraper
+    chamou = {"n": 0}
+
+    class _Boom:
+        def __init__(self, *a):
+            chamou["n"] += 1
+
+    monkeypatch.setattr(scraper, "AlmeidaDistribuidor", _Boom)
+    monkeypatch.setattr(scraper.credenciais, "carregar",
+                        lambda f: {"email": "x", "senha": "y"})
+    assert scraper.buscar_no_site("almeida", "   ") == []
+    assert chamou["n"] == 0

@@ -61,6 +61,7 @@ from .matcher import (
     melhor_aprendido_fuzzy, melhor_match,
 )
 from .normalizador import (
+    _ADJETIVOS_MARKETING,
     diametro_para_query,
     keywords,
     keywords_distintivas,
@@ -93,6 +94,13 @@ class ResultadoBusca:
     no_catalogo: bool = False
     produto_catalogo_id: Optional[int] = None
     descricao_catalogo: Optional[str] = None  # descrição interna, para conferência
+    # Retroalimentação (Camada 4): True quando este resultado veio do
+    # APRENDIZADO — a descrição já foi resolvida pelo operador antes, e o
+    # produto foi recuperado pelo código ensinado. Aciona, na UI, a
+    # pré-seleção e o badge "✓ sua escolha anterior". É a inteligência que o
+    # cliente mais valoriza (feedback 2026-06): "sempre que esse item aparecer
+    # de novo, a escolha anterior deve ser fornecida".
+    veio_por_aprendizado: bool = False
 
 
 class Fornecedor(Protocol):
@@ -142,7 +150,7 @@ _RELEVANCIA_SALVAGUARDA_CODIGO = 0.30
 # cache (`precos_cache_descricao`) quando o número aqui difere do salvo
 # em `data/.busca_versao`. Evita que resultados de versões antigas do
 # algoritmo "vazem" para o operador via cache TTL 2d.
-BUSCA_VERSAO = "2026-06-11.11-eixos-l-kg-m"
+BUSCA_VERSAO = "2026-06-23.13-query-marketing-sinonimo-rede-categoria"
 
 
 def _montar_camadas(descricao: str) -> list[tuple[str, str]]:
@@ -167,6 +175,14 @@ def _montar_camadas(descricao: str) -> list[tuple[str, str]]:
             camadas.append((confianca, q))
 
     distintivas = keywords_distintivas(descricao, 4)
+    # Poda adjetivos de MARKETING da QUERY (só aqui, não na relevância):
+    # "alicate profissional" -> "alicate", senão o AND do site zera (nenhum
+    # produto se chama "profissional"). Guarda dura: se a poda esvaziar, mantém
+    # o original (nunca query vazia). Ver `_ADJETIVOS_MARKETING`.
+    if distintivas:
+        podadas = [k for k in distintivas if k not in _ADJETIVOS_MARKETING]
+        if podadas:
+            distintivas = podadas
     diam = diametro_para_query(descricao)   # Fase 2: "75mm" se houver diâmetro nominal
     if distintivas:
         base = " ".join(distintivas)
@@ -182,8 +198,16 @@ def _montar_camadas(descricao: str) -> list[tuple[str, str]]:
     # 2. Núcleo curto (categoria — 2 primeiras distintivas)
     if len(distintivas) >= 2:
         _add("variacao", " ".join(distintivas[:2]))
-    # 3. Último recurso: descrição normalizada completa
+    # 3. Último recurso textual: descrição normalizada completa
     _add("variacao", normalizar_descricao(descricao))
+    # 4. Rede final de CATEGORIA: UMA keyword distintiva. Só é efetivamente
+    # tentada quando TODAS as anteriores zeraram no site (buscar() para na 1ª
+    # camada com resultado relevante). Garante que a categoria devolva
+    # candidatos para a relevância/judge ranquearem — destrava "alicate
+    # profissional" e a hipótese de AND-restritivo em "alicate de pressão".
+    # >=4 chars p/ não cair em sigla genérica ("pvc") que traria o catálogo todo.
+    if distintivas and len(distintivas[0]) >= 4:
+        _add("variacao", distintivas[0])
 
     return camadas
 
@@ -1018,13 +1042,39 @@ def buscar_precos_para_itens(
                     log_forn = LogItemFornecedor(fornecedor=forn.nome)
                     log_item.por_fornecedor.append(log_forn)
 
-                # 1. Tenta cache de descrição (camada mais barata).
-                # Payload VAZIO é tratado como miss: "não achei" não é
-                # distinguível de falha transitória (sessão caída, site
-                # instável) — honrar "[]" por 2 dias transformava um soluço
-                # do site em "Não encontrado" persistente, exatamente na
-                # hora do pregão (auditoria 2026-06, achado alto nº 5).
-                if conn is not None and usar_cache and desc_norm:
+                # Camada 4 (APRENDIZADO) — consultada ANTES do cache: a escolha
+                # que o operador ENSINOU tem precedência sobre qualquer resultado
+                # cru de busca/cache. Sem isto, um item repetido dentro da janela
+                # de cache (2 dias) voltava com o "melhor match" textual em vez da
+                # escolha A do operador — a retroalimentação ficava enjaulada
+                # atrás do cache (feedback do cliente 2026-06; é a inteligência
+                # central do produto). Casa por descrição exata normalizada
+                # (rápido, indexado) ou, se não, por reuso FUZZY (descrição
+                # parecida + dimensão compatível). O resultado é recuperado por
+                # CÓDIGO (preço ao vivo) logo abaixo.
+                codigo_aprendido = None
+                if conn is not None and desc_norm:
+                    try:
+                        aprendido = db.aprendido_buscar(conn, desc_norm, forn.nome)
+                        if aprendido is None and aprendidos_lista:
+                            aprendido = melhor_aprendido_fuzzy(
+                                item.descricao, forn.nome, aprendidos_lista)
+                        if aprendido is not None:
+                            codigo_aprendido = aprendido["codigo_fornecedor"]
+                    except Exception:
+                        codigo_aprendido = None
+                if log_forn is not None and codigo_aprendido:
+                    log_forn.aprendido_codigo = codigo_aprendido
+
+                # 1. Cache de descrição (camada mais barata) — só quando NÃO há
+                # escolha aprendida para esta descrição. Item aprendido pula o
+                # cache de propósito (acima): a escolha do operador vence o
+                # resultado cru. Payload VAZIO é tratado como miss: "não achei"
+                # não se distingue de falha transitória — honrar "[]" por 2 dias
+                # virava "Não encontrado" persistente na hora do pregão
+                # (auditoria 2026-06, achado alto nº 5).
+                if (not codigo_aprendido and conn is not None
+                        and usar_cache and desc_norm):
                     payload = db.cache_buscar(conn, desc_norm, forn.nome)
                     encontrados_cache = (
                         _payload_to_resultados(payload, forn.nome)
@@ -1043,36 +1093,16 @@ def buscar_precos_para_itens(
                         continue
                     cache_misses += 1
 
-                # 2. Camada 4: aprendizado por feedback. Se o operador
-                # já confirmou para esta descrição+fornecedor no passado,
-                # vamos direto na busca por código. Mais barato que o
-                # matcher fuzzy (Camada 0) porque casa por descrição exata
-                # normalizada — sem ambiguidade.
-                codigo_aprendido = None
-                if conn is not None and desc_norm:
-                    try:
-                        aprendido = db.aprendido_buscar(conn, desc_norm, forn.nome)
-                        # Camada 4 plena: se não houve match EXATO, tenta reuso
-                        # FUZZY (descrição parecida + dimensão compatível).
-                        if aprendido is None and aprendidos_lista:
-                            aprendido = melhor_aprendido_fuzzy(
-                                item.descricao, forn.nome, aprendidos_lista)
-                        if aprendido is not None:
-                            codigo_aprendido = aprendido["codigo_fornecedor"]
-                    except Exception:
-                        codigo_aprendido = None
-                if log_forn is not None and codigo_aprendido:
-                    log_forn.aprendido_codigo = codigo_aprendido
-
                 # Camada 0: matcher contra catálogo
                 if log_forn is not None and match is not None:
                     log_forn.catalogo_produto_id = match.produto.produto_id
                     log_forn.catalogo_score = float(match.score)
                     log_forn.catalogo_codigo = match.codigo_para(forn.nome)
 
-                # 3. Camada 0: busca por código (determinística). Só dispara
-                # se temos match no catálogo COM código para este fornecedor
-                # E o scraper suporta `buscar_por_codigo` (mocks antigos não).
+                # 2. Busca por código (determinística): o APRENDIZADO (acima) tem
+                # prioridade; senão, o código do catálogo (Camada 0). Só dispara
+                # se há código para este fornecedor E o scraper suporta
+                # `buscar_por_codigo` (mocks antigos não).
                 codigo = codigo_aprendido or (
                     match.codigo_para(forn.nome) if match else None
                 )
@@ -1111,6 +1141,14 @@ def buscar_precos_para_itens(
                     if encontrados:
                         veio_por_codigo = True
                         codigo_hits += 1
+                        # Origem "aprendizado": a UI pré-seleciona e mostra
+                        # "✓ sua escolha anterior" (retroalimentação VISÍVEL).
+                        # ResultadoBusca é frozen → recria com a marca de origem.
+                        if codigo_aprendido:
+                            encontrados = [
+                                replace(r, veio_por_aprendizado=True)
+                                for r in encontrados
+                            ]
                         if log_forn is not None:
                             log_forn.veio_por_codigo = True
 
@@ -1341,6 +1379,42 @@ def cotar_por_codigo(fornecedor: str, codigo: str) -> Optional[ResultadoBusca]:
     with cls(cred["email"], cred["senha"]) as forn:
         achados = forn.buscar_por_codigo(str(codigo).strip())
     return achados[0] if achados else None
+
+
+def buscar_no_site(
+    fornecedor: str, termo: str, limite: int = 10
+) -> list[ResultadoBusca]:
+    """Busca MANUAL ao vivo no site do fornecedor, por NOME ou CÓDIGO.
+
+    Rede de segurança final (pedido do cliente 2026-06): quando nem a busca
+    automática nem o catálogo trazem o que o operador espera, ele digita o termo
+    e busca direto no site, escolhendo o fornecedor. Também é a mitigação para
+    casos em que o filtro automático erra (ex.: alicate).
+
+    Diferente da busca automática (`buscar`), NÃO aplica o filtro de relevância:
+    devolve os cards CRUS do site (até `limite`) para o operador julgar — é o
+    ponto: ver exatamente o que o site retorna. O preço é o ATUAL do site.
+
+    Contrato de falhas idêntico a `cotar_por_codigo`:
+    - Retorna a lista (possivelmente vazia) quando o site responde.
+    - **Levanta exceção** se login/navegador/rede falhar (transitório) — o
+      chamador avisa e o operador re-tenta.
+    """
+    termo = (termo or "").strip()
+    if not termo:
+        return []
+    classes = {"almeida": AlmeidaDistribuidor, "dantas": DantasDistribuidora}
+    cls = classes.get(fornecedor)
+    if not cls:
+        raise ValueError(f"Fornecedor desconhecido: {fornecedor!r}")
+    cred = credenciais.carregar(fornecedor)
+    if not cred:
+        raise RuntimeError(f"Sem credencial configurada para {fornecedor}.")
+    with cls(cred["email"], cred["senha"]) as forn:
+        forn._rate_limiter.acquire()
+        # confiança 'variacao' — é match manual, não verificado por texto.
+        brutos = forn._buscar_query(forn._page, termo, "variacao")
+    return brutos[:max(1, limite)]
 
 
 # === Fase 4: NCM sob demanda (o NCM mora só na página de DETALHE) ===

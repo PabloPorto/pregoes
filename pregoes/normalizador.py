@@ -83,6 +83,24 @@ _GRAFIAS_EQUIVALENTES = [
     (re.compile(r"\bfillips\b"), "philips"),
 ]
 
+# Sinônimos de DOMÍNIO (material de construção): o EDITAL usa um termo e o
+# CATÁLOGO do fornecedor usa outro para o MESMO produto. Tratamos por
+# SUBSTITUIÇÃO (não expansão): reescrevemos para a forma do catálogo nos DOIS
+# lados — a query enviada ao site E a referência da relevância. Por que
+# substituição: medido `relevancia("revestimento textura","Grafiato 25kg")=0.0`
+# (o filtro 0.35 DESCARTA o acerto); com `textura->grafiato` a referência
+# também vira "grafiato" e o score sobe para 0.5 (PASSA). Expansão (manter
+# "textura" e só adicionar uma query-irmã "grafiato") deixaria a relevância em
+# 0.0 e o verdadeiro positivo seria jogado fora.
+# MÍNIMA e curada, igual `_GRAFIAS_EQUIVALENTES` — cada par confirmado com o
+# cliente (ver QUESTOES_PENDENTES). `\b` evita substituir dentro de palavra.
+# O long-tail de sinônimos é coberto pela RETROALIMENTAÇÃO (o operador resolve
+# um termo novo uma vez na caixa "Buscar direto no site" e o sistema aprende) —
+# não inflar esta tabela à mão.
+_SINONIMOS_DOMINIO = [
+    (re.compile(r"\btextura\b"), "grafiato"),
+]
+
 # Stopwords pt-BR genéricas que poluem busca em catálogo de fornecedor
 _STOPWORDS = frozenset({
     "de", "da", "do", "das", "dos", "para", "com", "sem", "em",
@@ -129,6 +147,20 @@ _NUMERAIS_EXTENSO = frozenset({
     "catorze", "quinze", "dezesseis", "dezessete", "dezoito", "dezenove",
     "vinte", "trinta", "quarenta", "cinquenta", "sessenta", "cem",
     "cento", "mil",
+})
+
+# Adjetivos de MARKETING — aparecem no edital ("alicate profissional") mas NUNCA
+# no NOME do produto no catálogo; numa busca AND zeram o resultado (nenhum
+# produto se chama "profissional"). Podados SÓ na QUERY de busca
+# (`scraper._montar_camadas`), NUNCA na relevância nem no discriminador, e com
+# guarda de não-esvaziar. Lista NOVA, ESTREITA e conservadora de propósito: só
+# palavras que comprovadamente nunca são nome/categoria de produto. NÃO reusar
+# `_ATRIBUTOS_GENERICOS` aqui — ele contém "aco"/"cabo"/"isolante", que SÃO
+# categoria, e podá-los regrediria "cabo de aço"→"6mm". Extensível com
+# confirmação do cliente (ver QUESTOES_PENDENTES). A rede de UMA keyword no
+# `_montar_camadas` cobre os adjetivos que não estiverem aqui.
+_ADJETIVOS_MARKETING = frozenset({
+    "profissional", "premium",
 })
 
 
@@ -182,6 +214,11 @@ def normalizar_descricao(descricao: str | None) -> str:
     # Grafias equivalentes (philips/phillips) — depois do lower, antes do
     # colapso de espaços. Barato e estável.
     for padrao, canonico in _GRAFIAS_EQUIVALENTES:
+        s = padrao.sub(canonico, s)
+    # Sinônimos de domínio (textura→grafiato): mesma mecânica das grafias,
+    # aplicada aos DOIS lados da relevância (query e card do site) para o match
+    # passar o filtro. Ver `_SINONIMOS_DOMINIO`.
+    for padrao, canonico in _SINONIMOS_DOMINIO:
         s = padrao.sub(canonico, s)
     # Cola "número unidade" (ver _NUM_UNIDADE): "500 l" → "500l". Preventivo
     # contra o espaço solto que perde a medida na busca.

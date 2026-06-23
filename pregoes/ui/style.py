@@ -439,6 +439,8 @@ div[class*="st-key-ppoptsel-"] {{
 .pp-pill--match  {{ background: {PALETA['success_bg']}; color: {PALETA['success']}; }}
 .pp-pill--barato {{ background: {PALETA['info_bg']};    color: {PALETA['info']};    }}
 .pp-pill--catalogo {{ background: #EDE9FE; color: #6D28A9; }}
+/* Âmbar/dourado: "memória" do sistema — a escolha que o operador já ensinou. */
+.pp-pill--aprendido {{ background: #FEF3C7; color: #92400E; }}
 </style>
 """
 
@@ -470,7 +472,7 @@ def render_badge(texto: str, tipo: TipoBadge = "neutro") -> None:
     st.markdown(badge(texto, tipo), unsafe_allow_html=True)
 
 
-def pill(texto: str, tipo: Literal["match", "barato", "catalogo"]) -> str:
+def pill(texto: str, tipo: Literal["match", "barato", "catalogo", "aprendido"]) -> str:
     """Pílula de destaque inline (ex.: 'Melhor match', 'Mais barato').
 
     Renderiza igual em qualquer SO — substitui os emoji ⭐/💰, que tinham
