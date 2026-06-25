@@ -100,6 +100,38 @@ def offsets_com_st(markups: dict[int, float] | None, markup_st: float) -> set[in
     return {off for off, mk in markups.items() if mk == markup_st}
 
 
+def com_st_de_ncms(
+    ncms_por_item: dict[int, str | None],
+    markup_st: float,
+    markup_normal: float,
+    overrides: dict[int, float] | None = None,
+) -> set[int]:
+    """Offsets com Substituição Tributária — fonte da coluna "SUBST. TRIBUTÁRIA"
+    da planilha. Decidido EXPLICITAMENTE (por NCM ou pela escolha "Com ST" do
+    operador), NÃO inferido do valor do markup.
+
+    Por quê (achado QA M1, 2026-06-25): inferir ST de ``markup == markup_st``
+    fazia a coluna MENTIR quando o operador igualava os dois markups do pregão —
+    todos os itens passavam a contar como ST, inclusive os normais. Aqui um item
+    NORMAL por NCM nunca é marcado ST, independentemente do markup.
+
+    Quando ``markup_st == markup_normal`` a distinção tributária é nula (mesmo
+    preço) e o sinal do operador para itens SEM NCM é ambíguo (os dois rádios
+    gravam o mesmo valor); nesse caso NENHUM item sem-NCM é marcado ST (evita o
+    falso ST, lado seguro). Não afeta preço — só a coluna informativa.
+    """
+    overrides = overrides or {}
+    distintos = markup_st != markup_normal
+    out: set[int] = set()
+    for off, ncm in ncms_por_item.items():
+        if ncm:
+            if eh_st(ncm):
+                out.add(off)
+        elif distintos and overrides.get(off) == markup_st:
+            out.add(off)
+    return out
+
+
 # === Captura do NCM no scraper (a fonte é o site do fornecedor) ===
 
 def ncm_de_card(valor: str | None) -> str | None:

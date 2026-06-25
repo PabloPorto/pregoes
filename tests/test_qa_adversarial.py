@@ -15,7 +15,8 @@ from openpyxl import load_workbook
 from pregoes.extrator import ItemExtraido
 from pregoes.exportador import exportar, SelecaoFornecedor
 from pregoes.tributacao import (
-    eh_st, markup_para, classificar_markups, offsets_com_st, _conjunto_st,
+    eh_st, markup_para, classificar_markups, offsets_com_st, com_st_de_ncms,
+    _conjunto_st,
 )
 
 
@@ -109,11 +110,36 @@ def test_classificar_ncm_invalido_truthy_e_normal_caracterizacao():
 
 
 def test_offsets_com_st_degenerado_marca_todos_caracterizacao():
-    """CARACTERIZAÇÃO + FLAG (menor): com st==normal, a função infere ST por
-    igualdade de markup e marca TODOS como ST — a coluna SUBST. TRIBUTÁRIA passa
-    a afirmar 'Sim' até para itens normais. Documentado como 'aceitável' (o
-    preço fica certo), mas a coluna fica factualmente errada. Achado menor."""
+    """CARACTERIZAÇÃO da função LEGADA (M1): inferir ST por igualdade de markup
+    marcava TODOS como ST quando st==normal. Mantida só para documentar o defeito
+    original — a produção NÃO usa mais offsets_com_st (ver regressão abaixo)."""
     assert offsets_com_st({0: 1.45, 1: 1.45}, markup_st=1.45) == {0, 1}
+
+
+# NCMs reais: um COM ST (consta no Anexo 05) e um normal (não consta).
+_NCM_ST = "11010010"
+_NCM_NORMAL = "94036000"
+
+
+def test_com_st_explicito_nao_mente_com_markups_iguais_regressao_M1():
+    """REGRESSÃO de M1 (corrigido 2026-06-25): mesmo com os DOIS markups iguais,
+    a coluna ST é decidida pelo NCM — item normal NUNCA é marcado ST. (Antes,
+    offsets_com_st marcava os dois.)"""
+    ncms = {0: _NCM_ST, 1: _NCM_NORMAL}
+    # markups iguais (cenário que quebrava): só o item de NCM-ST conta.
+    assert com_st_de_ncms(ncms, markup_st=1.45, markup_normal=1.45) == {0}
+    # markups distintos (caso normal): mesma resposta — robusto aos dois lados.
+    assert com_st_de_ncms(ncms, markup_st=1.30, markup_normal=1.45) == {0}
+
+
+def test_com_st_explicito_respeita_escolha_do_operador_sem_ncm():
+    """Item SEM NCM segue a escolha 'Com ST' do operador (override == markup_st),
+    mas quando os markups são iguais a escolha é ambígua (os dois rádios gravam o
+    mesmo valor) → lado seguro: NÃO marca ST (evita falso positivo)."""
+    ncms = {0: None, 1: None}
+    overrides = {0: 1.30}  # operador marcou "Com ST" no item 0
+    assert com_st_de_ncms(ncms, 1.30, 1.45, overrides) == {0}     # distintos: respeita
+    assert com_st_de_ncms(ncms, 1.45, 1.45, overrides) == set()   # iguais: ambíguo → vazio
 
 
 # --- exportador: aplicação por OFFSET (alinhamento / fora do range) --------

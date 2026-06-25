@@ -1830,10 +1830,11 @@ def _painel_markup(selecoes: dict, itens: list) -> tuple[dict, set]:
                                   else m_normal)
         markups, _, _ = tributacao.classificar_markups(
             ncms, m_st, m_normal, overrides)
-    # Conjunto ST calculado AQUI, com o MESMO m_st da classificação — é a
-    # fonte da coluna "SUBST. TRIBUTÁRIA" da planilha. Calcular no painel (onde
-    # a decisão acontece) evita re-derivar lendo mk_st de outra fonte.
-    com_st = tributacao.offsets_com_st(markups, m_st)
+    # Conjunto ST decidido EXPLICITAMENTE (por NCM ou pela escolha do operador),
+    # NÃO inferido do valor do markup — é a fonte da coluna "SUBST. TRIBUTÁRIA"
+    # da planilha. Assim a coluna não mente quando os dois markups são iguais
+    # (achado QA M1): item normal por NCM nunca é marcado ST.
+    com_st = tributacao.com_st_de_ncms(ncms, m_st, m_normal, overrides)
     return markups, com_st
 
 
