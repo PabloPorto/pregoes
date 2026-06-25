@@ -165,6 +165,7 @@ def ir_para(tela: str):
 # em silêncio (auditoria 2026-06, achado alto nº 6).
 CHAVES_PREGAO = ("extracao", "df_editavel", "resultados_busca",
                  "selecoes", "pagina_busca", "itens_revisados",
+                 "itens_edital", "mapa_busca_edital",
                  "usando_tabelas_docling", "mapeamento_tabela_idx",
                  "markup_overrides", "pregao_gerado_hash")
 
@@ -579,7 +580,11 @@ def tela_revisao():
         width="stretch",
         height=500,
         column_config={
-            "OK": st.column_config.CheckboxColumn("OK?", default=True),
+            "OK": st.column_config.CheckboxColumn(
+                "Buscar preço?", default=True,
+                help="Marque os itens cujo preço o sistema deve buscar nos "
+                     "fornecedores. TODOS os itens do edital vão para a planilha "
+                     "— os desmarcados ficam sem preço, para preencher à mão."),
             "Item": st.column_config.NumberColumn("Item", format="%d"),
             "Descrição": st.column_config.TextColumn("Descrição", width="large"),
             "Unidade": st.column_config.TextColumn("Unidade"),
@@ -594,21 +599,29 @@ def tela_revisao():
     # que é a única fonte de verdade dos checkboxes (não tocamos em
     # df_editavel para evitar race conditions).
     n_marcados = int(edited["OK"].sum())
-    st.caption(f"**{n_marcados}** de **{len(edited)}** itens marcados.")
+    st.caption(f"**{n_marcados}** de **{len(edited)}** itens marcados para "
+               f"**buscar preço** · todos os **{len(edited)}** vão para a "
+               f"planilha (os demais sem preço).")
 
     st.divider()
 
     # O markup é definido só na tela de Buscar preços (por item, via
     # Substituição Tributária). Aqui é só revisão/extração.
-    st.session_state.itens_revisados = _df_para_itens(edited)
+    # `itens_revisados` = itens a BUSCAR (marcados OK). `itens_edital` = edital
+    # INTEIRO (todos) que vai para a matriz; `mapa_busca_edital` alinha um ao
+    # outro na exportação (OK = "buscar preço", não "incluir na matriz").
+    edital, busca, mapa = _itens_revisao(edited)
+    st.session_state.itens_revisados = busca
+    st.session_state.itens_edital = edital
+    st.session_state.mapa_busca_edital = mapa
 
     # Botões em linha própria, com proporções iguais.
     col_btn1, col_btn2 = st.columns(2)
     with col_btn1:
         if st.button("Buscar preços", type="primary", width="stretch",
-                     help="Consulta Almeida e Dantas (qualquer um configurado). Pode demorar minutos."):
+                     help="Busca o preço dos itens MARCADOS em Almeida e Dantas (qualquer um configurado). Pode demorar minutos."):
             if not st.session_state.itens_revisados:
-                style.bloco_aviso("Nenhum item marcado como OK — nada para buscar.", tipo="danger")
+                style.bloco_aviso("Nenhum item marcado para buscar preço — marque ao menos um.", tipo="danger")
             elif (credenciais.carregar("almeida") is None
                   and credenciais.carregar("dantas") is None):
                 style.bloco_aviso(
@@ -621,25 +634,47 @@ def tela_revisao():
 
     with col_btn2:
         if st.button("Gerar sem buscar", width="stretch",
-                     help="Gera a planilha matriz com colunas L/T/U vazias (preço, código, marca em branco)."):
+                     help="Gera a planilha com o EDITAL INTEIRO, sem preços (todas as colunas de preço/código/marca em branco, para preencher à mão)."):
             _gerar_excel(_df_para_itens(edited), markup=config.MARKUP_DEFAULT,
                          selecoes={})
 
 
-def _df_para_itens(df: pd.DataFrame) -> list:
-    """Converte DataFrame editado de volta para lista de ItemExtraido (linhas OK)."""
+def _linha_para_item(r):
+    """Uma linha do data_editor de revisão → ItemExtraido."""
     from pregoes.extrator import ItemExtraido
-    df_ok = df[df["OK"] == True]
-    return [
-        ItemExtraido(
-            item_numero=int(r["Item"]) if pd.notna(r["Item"]) else None,
-            descricao=str(r["Descrição"]) if pd.notna(r["Descrição"]) else "",
-            unidade=str(r["Unidade"]) if pd.notna(r["Unidade"]) else None,
-            quantidade=float(r["Quantidade"]) if pd.notna(r["Quantidade"]) else None,
-            valor_referencia=float(r["Valor referência"]) if pd.notna(r["Valor referência"]) else None,
-        )
-        for _, r in df_ok.iterrows()
-    ]
+    return ItemExtraido(
+        item_numero=int(r["Item"]) if pd.notna(r["Item"]) else None,
+        descricao=str(r["Descrição"]) if pd.notna(r["Descrição"]) else "",
+        unidade=str(r["Unidade"]) if pd.notna(r["Unidade"]) else None,
+        quantidade=float(r["Quantidade"]) if pd.notna(r["Quantidade"]) else None,
+        valor_referencia=float(r["Valor referência"]) if pd.notna(r["Valor referência"]) else None,
+    )
+
+
+def _itens_revisao(df: pd.DataFrame):
+    """Do df editado da revisão, devolve ``(edital, busca, mapa)``.
+
+    - ``edital``: TODOS os itens (todas as linhas), na ordem do edital → vão para
+      a MATRIZ inteira (pedido do cliente: o pregoeiro confere o edital todo,
+      mesmo sem preço).
+    - ``busca``: só os marcados "OK" ("buscar preço deste item") → lista de
+      busca/seleção nos fornecedores.
+    - ``mapa``: índice em ``edital`` de cada item de ``busca``, na ordem — para
+      re-mapear ``selecoes``/``markups``/``itens_com_st`` do índice-de-busca p/ o
+      índice-no-edital ao exportar (OK = "buscar preço", NÃO "incluir na matriz").
+    """
+    edital, busca, mapa = [], [], []
+    for _, r in df.iterrows():
+        edital.append(_linha_para_item(r))
+        if r["OK"] == True:
+            mapa.append(len(edital) - 1)
+            busca.append(edital[-1])
+    return edital, busca, mapa
+
+
+def _df_para_itens(df: pd.DataFrame) -> list:
+    """Itens marcados "OK" ("buscar preço") — a lista de busca/seleção."""
+    return _itens_revisao(df)[1]
 
 
 def _gerar_excel(itens: list, markup: float, selecoes: dict,
@@ -662,8 +697,25 @@ def _gerar_excel(itens: list, markup: float, selecoes: dict,
     itens, busca preços, mas planilha não exportava porque pegava
     snapshot antiga do df).
     """
+    # A MATRIZ contém o EDITAL INTEIRO (todos os itens), com preço só nos itens
+    # buscados/selecionados. `itens` aqui é a lista de BUSCA (marcados "OK");
+    # trocamos pelo edital completo e re-mapeamos selecoes/markups/ST do índice
+    # de busca para o índice no edital (OK = "buscar preço", não "incluir na
+    # matriz" — pedido do cliente 2026-06-25). Sem edital armazenado (caminho de
+    # teste/legado), segue com `itens` como veio.
+    edital = st.session_state.get("itens_edital")
+    mapa = st.session_state.get("mapa_busca_edital")
+    if edital and mapa is not None and len(mapa) == len(itens):
+        def _remap_dict(d):
+            return {mapa[k]: v for k, v in d.items() if 0 <= k < len(mapa)}
+        selecoes = _remap_dict(selecoes or {})
+        markups = _remap_dict(markups) if markups else markups
+        if itens_com_st:
+            itens_com_st = {mapa[k] for k in itens_com_st if 0 <= k < len(mapa)}
+        itens = edital
+
     if not itens:
-        style.bloco_aviso("Nenhum item marcado como OK — nada para exportar.", tipo="danger")
+        style.bloco_aviso("Nenhum item no edital — nada para exportar.", tipo="danger")
         return
 
     # Órgão + número são OBRIGATÓRIOS (decisão do cliente): identificam o pregão
@@ -1566,7 +1618,9 @@ def _hash_pregao() -> str:
     furos — achado da revisão de QA 2026-06)."""
     import hashlib
     ss = st.session_state
-    itens = ss.get("itens_revisados") or []
+    # Hash sobre o EDITAL completo (o que de fato vai na matriz); cai para a
+    # lista de busca se o edital ainda não foi montado.
+    itens = ss.get("itens_edital") or ss.get("itens_revisados") or []
     sel = ss.get("selecoes") or {}
     partes = (
         tuple((getattr(i, "item_numero", None), getattr(i, "descricao", None),

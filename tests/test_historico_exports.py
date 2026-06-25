@@ -634,3 +634,57 @@ def test_persistir_edital_identidade_vazia_nao_funde_caracterizacao(
     app._persistir_edital(_itens_fake(app, 1), {}, Path("a.xlsx"), markup=1.45)
     app._persistir_edital(_itens_fake(app, 1), {}, Path("b.xlsx"), markup=1.45)
     assert _contar(dbp, "editais") == 2   # sem identidade → 2 editais (não funde)
+
+
+# === Requisito: MATRIZ = edital inteiro; OK = "buscar preço" (2026-06-25) ===
+
+def test_itens_revisao_separa_edital_busca_e_mapa(app_modulo):
+    """O df editado vira (edital=TODOS, busca=só OK, mapa=posições no edital)."""
+    import pandas as pd
+    app = app_modulo
+    df = pd.DataFrame([
+        {"OK": True,  "Item": 1, "Descrição": "A", "Unidade": "UN",
+         "Quantidade": 1, "Valor referência": 10.0},
+        {"OK": False, "Item": 2, "Descrição": "B", "Unidade": "UN",
+         "Quantidade": 2, "Valor referência": 20.0},
+        {"OK": True,  "Item": 3, "Descrição": "C", "Unidade": "UN",
+         "Quantidade": 3, "Valor referência": 30.0},
+    ])
+    edital, busca, mapa = app._itens_revisao(df)
+    assert [i.descricao for i in edital] == ["A", "B", "C"]   # TODOS na matriz
+    assert [i.descricao for i in busca] == ["A", "C"]          # só os OK p/ buscar
+    assert mapa == [0, 2]                                      # posições no edital
+
+
+def test_gerar_excel_exporta_edital_inteiro_preco_so_nos_buscados(app_modulo):
+    """REGRESSÃO do requisito do cliente: a MATRIZ contém o EDITAL INTEIRO; só os
+    itens marcados OK ('buscar preço') e selecionados saem com preço. Antes, o
+    filtro por OK na revisão tirava os não-OK da matriz inteira."""
+    from openpyxl import load_workbook
+    from pregoes.extrator import ItemExtraido
+    from pregoes.exportador import SelecaoFornecedor
+    app = app_modulo
+    app.st.session_state["orgao"] = "Pref Natuba"
+    app.st.session_state["numero"] = "002/2026"
+    app.st.session_state["pdf_path"] = "x.pdf"
+    # Edital de 5 itens; operador marcou OK só os itens 1 e 3 (offsets edital 0 e 2).
+    edital = [ItemExtraido(item_numero=n, descricao=f"PRODUTO {n}", unidade="UN",
+                           quantidade=n, valor_referencia=10.0 * n) for n in range(1, 6)]
+    busca = [edital[0], edital[2]]            # OK: itens 1 e 3
+    app.st.session_state["itens_edital"] = edital
+    app.st.session_state["itens_revisados"] = busca
+    app.st.session_state["mapa_busca_edital"] = [0, 2]
+    # Escolheu preço só para o 1º item de BUSCA (offset de busca 0 → edital 0).
+    selecoes = {0: SelecaoFornecedor(preco=7.0, codigo_fornecedor="C1", marca="M1")}
+
+    app._gerar_excel(busca, markup=1.45, selecoes=selecoes)
+
+    arqs = list(config.EXPORTS_DIR.glob("*.xlsx"))
+    assert arqs, "planilha gerada"
+    ws = load_workbook(arqs[0]).active
+    # TODOS os 5 itens do edital presentes, em ordem.
+    for off in range(5):
+        assert ws[f"C{5 + off}"].value == f"PRODUTO {off + 1}", f"item {off+1} sumiu"
+    # Preço (col L) só no item de edital 0 (único buscado E selecionado).
+    assert ws["L5"].value == 7.0
+    assert all(ws[f"L{ln}"].value is None for ln in (6, 7, 8, 9)), "preço vazou p/ não-selecionado"
