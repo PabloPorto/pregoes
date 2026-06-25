@@ -42,6 +42,7 @@ Uso típico:
 from __future__ import annotations
 
 import json
+import logging
 import math
 import time
 from dataclasses import asdict, dataclass, field, replace
@@ -118,6 +119,8 @@ class Fornecedor(Protocol):
 
 
 # === Almeida ===
+
+_logger = logging.getLogger(__name__)
 
 _BASE_URL_ALMEIDA = "https://www.almeidadistribuidor.com.br"
 _MAX_RESULTADOS_POR_QUERY = 30
@@ -341,6 +344,99 @@ class _RateLimiter:
             self._ultimo = agora
 
 
+# === Condição de pagamento (Forma + Prazo) ===
+# O preço dos produtos VARIA conforme a Forma/Prazo de pagamento escolhidos no
+# modal "Selecione suas Preferências" (home de Almeida e Dantas). Sem selecionar,
+# o site usa a condição default da sessão — que não é, necessariamente, a que o
+# operador usa para comprar. Aplicamos a condição CONFIGURADA (Configurações) uma
+# vez por sessão, logo após o login; a escolha grava na sessão (PHPSESSID/token),
+# então vale para TODAS as buscas (textual, por código, catálogo, busca no site).
+# Seletores estáveis confirmados por inspeção (scripts/inspecionar_pagamento.py):
+# os <select> têm `name` iguais nos dois sites; as opções têm `value` estáveis.
+
+_SEL_FORMA = 'select[name="id_forma_pagamento_preferencia"]'
+_SEL_PRAZO = 'select[name="id_condicao_pagamento_preferencia"]'
+
+
+def _abrir_modal_preferencias(page) -> bool:
+    """Abre o modal "Selecione suas Preferências" e devolve True se os <select>
+    ficaram visíveis. Os selects existem no DOM mas só ficam visíveis com o modal
+    aberto. Tenta gatilhos resilientes (o que abriu na inspeção foi o texto
+    "Preferências") e VERIFICA a visibilidade após cada clique — autocorretivo."""
+    if page.locator(f"{_SEL_FORMA}:visible").count():
+        return True
+    candidatos = [
+        lambda: page.get_by_text("Preferências", exact=False),
+        lambda: page.locator("header, .header, nav, .topo").get_by_text(
+            "BANCO", exact=False),
+        lambda: page.get_by_text("Forma de Pagamento", exact=False),
+    ]
+    for fab in candidatos:
+        try:
+            loc = fab()
+            n = loc.count()
+        except Exception:
+            continue
+        for i in range(min(n, 3)):   # tenta as primeiras ocorrências
+            try:
+                loc.nth(i).click(timeout=2_500)
+                page.wait_for_timeout(700)
+                if page.locator(f"{_SEL_FORMA}:visible").count():
+                    return True
+            except Exception:
+                continue
+    return False
+
+
+def _aplicar_preferencia_pagamento(page, fornecedor: str) -> None:
+    """Aplica a condição de pagamento configurada para `fornecedor` na sessão.
+
+    Degrada graciosamente: sem preferência configurada, ou se o modal/select não
+    aparecer, NÃO mexe — segue no default do site (comportamento anterior, zero
+    regressão). NUNCA levanta exceção (não pode derrubar o login)."""
+    pref = credenciais.carregar_preferencia_pagamento(fornecedor)
+    if not pref or not pref.get("forma_value") or not pref.get("prazo_value"):
+        return
+    base_url = config.FORNECEDORES.get(fornecedor)
+    if not base_url:
+        return
+    try:
+        page.goto(base_url, wait_until="networkidle",
+                  timeout=config.SCRAPER_TIMEOUT_SEGUNDOS * 1000)
+        if not _abrir_modal_preferencias(page):
+            _logger.warning(
+                "Condição de pagamento (%s): não abri o modal de preferências — "
+                "seguindo no default do site.", fornecedor)
+            return
+        _select_visivel(page, _SEL_FORMA, pref["forma_value"], pref.get("forma_texto"))
+        _select_visivel(page, _SEL_PRAZO, pref["prazo_value"], pref.get("prazo_texto"))
+        botao = page.get_by_role("button", name="Confirmar")
+        if not botao.count():
+            botao = page.get_by_text("Confirmar", exact=False)
+        botao.first.click(timeout=5_000)
+        page.wait_for_timeout(2_500)   # sessão atualiza (PHPSESSID/token)
+        _logger.info("Condição de pagamento aplicada (%s): %s | %s", fornecedor,
+                     pref.get("forma_texto"), pref.get("prazo_texto"))
+    except Exception as exc:
+        _logger.warning(
+            "Não consegui aplicar a condição de pagamento em %s (%s) — seguindo "
+            "no default do site.", fornecedor, type(exc).__name__)
+
+
+def _select_visivel(page, seletor: str, value: str, texto: str | None) -> None:
+    """Seleciona a opção por VALUE no <select> visível; se o value não existir
+    mais (lista do site mudou), tenta pelo TEXTO. Levanta se nenhum funcionar
+    (o chamador captura e degrada)."""
+    sel = page.locator(f"{seletor}:visible").first
+    try:
+        sel.select_option(value=value)
+    except Exception:
+        if texto:
+            sel.select_option(label=texto)
+        else:
+            raise
+
+
 class AlmeidaDistribuidor:
     """
     Scraper de almeidadistribuidor.com.br.
@@ -404,6 +500,10 @@ class AlmeidaDistribuidor:
             self._page.set_default_timeout(_timeout_ms)
             self._page.set_default_navigation_timeout(_timeout_ms)
             self._login(self._page)
+            # Aplica a condição de pagamento configurada (Forma+Prazo) na sessão,
+            # senão o preço vem da condição default do site. Gracioso: sem config
+            # ou modal ausente → segue no default (não derruba o login).
+            _aplicar_preferencia_pagamento(self._page, self.nome)
         except BaseException:
             self._fechar()
             raise
@@ -676,6 +776,10 @@ class DantasDistribuidora:
             self._page.set_default_timeout(_timeout_ms)
             self._page.set_default_navigation_timeout(_timeout_ms)
             self._login(self._page)
+            # Aplica a condição de pagamento configurada (Forma+Prazo) na sessão,
+            # senão o preço vem da condição default do site. Gracioso: sem config
+            # ou modal ausente → segue no default (não derruba o login).
+            _aplicar_preferencia_pagamento(self._page, self.nome)
         except BaseException:
             self._fechar()
             raise

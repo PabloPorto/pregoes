@@ -166,7 +166,7 @@ def ir_para(tela: str):
 CHAVES_PREGAO = ("extracao", "df_editavel", "resultados_busca",
                  "selecoes", "pagina_busca", "itens_revisados",
                  "usando_tabelas_docling", "mapeamento_tabela_idx",
-                 "markup_overrides")
+                 "markup_overrides", "pregao_gerado_hash")
 
 
 def _limpar_pregao() -> None:
@@ -181,7 +181,19 @@ def _tem_pregao_em_andamento() -> bool:
     Sinais: um PDF já extraído, itens já revisados ou marcas/preços já
     escolhidos. (Não inspeciona `df_editavel` porque a verdade de um
     DataFrame é ambígua e levantaria exceção.)
+
+    Exceção: se a planilha foi GERADA e NADA mudou desde então
+    (`pregao_gerado_hash` == hash atual dos insumos), o trabalho está salvo
+    (arquivo + histórico) — começar um novo não perde nada, então não avisamos.
+    Sem isto, o operador via o modal "pregão em andamento" mesmo DEPOIS de
+    concluir (feedback do cliente 2026-06). Se ele mexer em QUALQUER insumo
+    (marca, preço, NCM, markup, revisão…), o hash muda e o aviso volta — sem
+    precisar instrumentar cada ação (a revisão de QA achou 4 ações que ficavam
+    de fora quando o re-arme era manual).
     """
+    gerado = st.session_state.get("pregao_gerado_hash")
+    if gerado is not None and gerado == _hash_pregao():
+        return False
     if st.session_state.get("extracao") is not None:
         return True
     if st.session_state.get("itens_revisados"):
@@ -630,42 +642,18 @@ def _df_para_itens(df: pd.DataFrame) -> list:
     ]
 
 
-def _filtrar_selecionados(itens: list, selecoes: dict,
-                          markups: dict | None, itens_com_st: set | None):
-    """Mantém só os itens presentes em `selecoes` (os que o operador escolheu
-    usar) e RE-INDEXA selecoes/markups/itens_com_st para 0..M-1 na ordem
-    original. Exportador e _persistir_edital usam o offset como chave, então as
-    quatro estruturas têm que ficar alinhadas. Função pura (sem Streamlit).
-
-    Retorna ``(itens_f, selecoes_f, markups_f, itens_com_st_f)``.
-    """
-    sel = selecoes or {}
-    indices = [i for i in range(len(itens)) if i in sel]
-    remap = {antigo: novo for novo, antigo in enumerate(indices)}
-    itens_f = [itens[i] for i in indices]
-    selecoes_f = {remap[i]: sel[i] for i in indices}
-    markups_f = ({remap[i]: markups[i] for i in indices if i in markups}
-                 if markups else markups)
-    com_st_f = ({remap[i] for i in indices if i in itens_com_st}
-                if itens_com_st else itens_com_st)
-    return itens_f, selecoes_f, markups_f, com_st_f
-
-
 def _gerar_excel(itens: list, markup: float, selecoes: dict,
                  markups: dict | None = None,
-                 itens_com_st: set | None = None,
-                 apenas_selecionados: bool = False):
+                 itens_com_st: set | None = None):
     """Exporta uma lista de ItemExtraido para a planilha matriz.
 
-    `selecoes` é o mapa {indice_item: SelecaoFornecedor} já preparado pela
-    tela de busca. Vazio = planilha sem preço (operador preenche manualmente).
-
-    `apenas_selecionados` (caminho "gerar COM preços"): exporta SÓ os itens
-    que o operador escolheu usar (presentes em `selecoes`). Itens marcados
-    "Não usar este item" (removidos de selecoes) ou sem resultado ficam de
-    fora — nada de linha em branco / #DIV/0! na planilha final (pedido do
-    cliente 2026-06). O caminho "Gerar sem buscar" usa False: exporta todos
-    com preço em branco para preenchimento manual.
+    A planilha contém SEMPRE **todos** os itens do edital, na ordem original
+    (pedido do cliente 2026-06: o pregoeiro confere o edital inteiro). `selecoes`
+    é o mapa {indice_item: SelecaoFornecedor} preparado pela tela de busca; os
+    itens FORA desse mapa ficam na planilha com preço/marca/código em branco
+    (operador preenche à mão ou o item não entra no lance). O exportador escreve
+    descrição/unidade/qtd/ref de todos e L/T/U/markup só dos presentes em
+    `selecoes` — não há filtragem aqui.
 
     Aceita lista de ItemExtraido (não DataFrame). O caller é responsável
     por converter `edited` do data_editor via `_df_para_itens(edited)`.
@@ -677,18 +665,6 @@ def _gerar_excel(itens: list, markup: float, selecoes: dict,
     if not itens:
         style.bloco_aviso("Nenhum item marcado como OK — nada para exportar.", tipo="danger")
         return
-
-    # Mantém só os itens escolhidos para usar; itens "Não usar" / sem resultado
-    # ficam fora da planilha (pedido do cliente 2026-06).
-    if apenas_selecionados:
-        if not any(i in (selecoes or {}) for i in range(len(itens))):
-            style.bloco_aviso(
-                "Nenhum item foi escolhido para usar. Selecione ao menos um "
-                "produto na lista (ou use 'Gerar sem buscar' na revisão).",
-                tipo="danger")
-            return
-        itens, selecoes, markups, itens_com_st = _filtrar_selecionados(
-            itens, selecoes, markups, itens_com_st)
 
     # Órgão + número são OBRIGATÓRIOS (decisão do cliente): identificam o pregão
     # no histórico e são a chave da dedup por re-geração. Revalidamos AQUI — não
@@ -735,6 +711,13 @@ def _gerar_excel(itens: list, markup: float, selecoes: dict,
         # `destino`/`markup` vão para a tabela exports_log (rastreio/rebaixar).
         _persistir_edital(itens, selecoes, destino, markup)
 
+    # Pregão CONCLUÍDO: o trabalho está salvo (arquivo + histórico). Guarda a
+    # IMPRESSÃO DIGITAL dos insumos gerados — enquanto o estado bater com ela, o
+    # sistema não trata mais como "em andamento" (senão o modal "começar um novo
+    # pregão" aparecia mesmo depois de gerar — feedback do cliente 2026-06). Se o
+    # operador mexer em qualquer insumo, o hash deixa de bater e o aviso volta.
+    st.session_state["pregao_gerado_hash"] = _hash_pregao()
+
     style.bloco_aviso(f"Planilha gerada: <code>{destino.name}</code>", tipo="success")
     if selecoes:
         st.caption(f"Inclui preço/marca/código para {len(selecoes)} de {len(itens)} itens.")
@@ -747,6 +730,14 @@ def _gerar_excel(itens: list, markup: float, selecoes: dict,
             width="stretch",
             type="primary",
         )
+
+    # Caminho claro de saída: o pregão acabou. Como o hash gerado bate com o
+    # estado atual, `_novo_pregao` limpa e navega direto (sem o modal "perder
+    # trabalho").
+    st.caption("Pregão concluído e salvo no histórico. Pode baixar a planilha "
+               "acima ou começar o próximo.")
+    if st.button("Começar um novo pregão", width="stretch", key="novo_apos_gerar"):
+        _novo_pregao()
 
 
 def _persistir_edital(itens: list, selecoes: dict, destino, markup) -> None:
@@ -1010,6 +1001,8 @@ def tela_configuracoes():
                         "Credenciais da Almeida salvas com sucesso.", tipo="success",
                     )
 
+        _form_condicao_pagamento("almeida")
+
     with aba_dantas:
         atual_dantas = credenciais.carregar("dantas") or {"email": "", "senha": ""}
         if atual_dantas.get("email"):
@@ -1049,6 +1042,8 @@ def tela_configuracoes():
                     style.bloco_aviso(
                         "Credenciais da Dantas salvas com sucesso.", tipo="success",
                     )
+
+        _form_condicao_pagamento("dantas")
 
     with aba_ia:
         gemini_key = credenciais.carregar_chave_api("gemini") or ""
@@ -1174,6 +1169,9 @@ def tela_busca_precos():
             tipo="danger",
         )
         return
+
+    # Transparência: a CONDIÇÃO DE PAGAMENTO define o preço raspado.
+    _mostrar_condicao_pagamento(fornecedores_disponiveis)
 
     # Já buscou: pula direto para a tela de seleção.
     if "resultados_busca" in st.session_state:
@@ -1476,6 +1474,123 @@ def _brl(valor: float) -> str:
     return "R$ " + (
         f"{valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     )
+
+
+def _form_condicao_pagamento(fornecedor: str) -> None:
+    """Seletor da CONDIÇÃO DE PAGAMENTO (Forma + Prazo) por fornecedor. O preço no
+    site varia conforme a condição; aqui o operador fixa a que ele usa, e o scraper
+    aplica em toda busca. Opções bundladas (config.carregar_opcoes_pagamento)."""
+    opcoes = config.carregar_opcoes_pagamento().get(fornecedor, {})
+    forma_ops = opcoes.get("forma", [])
+    prazo_ops = opcoes.get("prazo", [])
+    if not forma_ops or not prazo_ops:
+        return   # sem opções bundladas (raro) — não mostra o seletor
+    pref = credenciais.carregar_preferencia_pagamento(fornecedor) or {}
+
+    def _idx(ops, value):
+        for i, o in enumerate(ops):
+            if o.get("value") == value:
+                return i
+        return 0
+
+    st.markdown("**Condição de pagamento** — o preço no site **muda** conforme a "
+                "forma e o prazo. Escolha a condição sob a qual você realmente "
+                "compra; o sistema busca os preços nela.")
+    with st.form(f"form_pagto_{fornecedor}"):
+        forma = st.selectbox(
+            "Forma de Pagamento", forma_ops,
+            index=_idx(forma_ops, pref.get("forma_value")),
+            format_func=lambda o: o["texto"], key=f"forma_{fornecedor}")
+        prazo = st.selectbox(
+            "Prazo de Pagamento", prazo_ops,
+            index=_idx(prazo_ops, pref.get("prazo_value")),
+            format_func=lambda o: o["texto"], key=f"prazo_{fornecedor}")
+        if st.form_submit_button("Salvar condição de pagamento", type="primary"):
+            credenciais.salvar_preferencia_pagamento(
+                fornecedor, forma["value"], forma["texto"],
+                prazo["value"], prazo["texto"])
+            style.bloco_aviso(
+                f"Condição salva: <b>{html.escape(forma['texto'])}</b> · "
+                f"<b>{html.escape(prazo['texto'])}</b>. As próximas buscas usam "
+                "essa condição.", tipo="success")
+            pref = {"forma_texto": forma["texto"], "prazo_texto": prazo["texto"]}
+    if pref:
+        st.caption(f"Condição atual: {pref.get('forma_texto')} · "
+                   f"{pref.get('prazo_texto')}")
+    else:
+        st.caption("Ainda não configurado — o sistema usa a condição **default** "
+                   "do site (o preço pode não bater com a sua).")
+
+
+def _mostrar_condicao_pagamento(fornecedores: list) -> None:
+    """Na tela de busca, mostra a condição de pagamento que será usada por
+    fornecedor (o preço raspado é o dessa condição). Avisa quando não há condição
+    configurada — aí o preço vem do default do site, que pode não bater com o do
+    cliente."""
+    configuradas, falta = [], []
+    for nome in fornecedores:
+        pref = credenciais.carregar_preferencia_pagamento(nome)
+        if pref:
+            configuradas.append(
+                f"{nome.capitalize()}: {pref['forma_texto']} · {pref['prazo_texto']}")
+        else:
+            falta.append(nome.capitalize())
+    if configuradas:
+        st.caption("💳 Preços para a condição de pagamento → "
+                   + "   |   ".join(configuradas))
+    if falta:
+        style.bloco_aviso(
+            "Sem condição de pagamento configurada para <b>" + ", ".join(falta) +
+            "</b> — o preço vem da condição <b>default</b> do site (pode não bater "
+            "com a sua). Configure em <b>Configurações</b>, na aba do fornecedor.",
+            tipo="warning")
+
+
+def _hash_pregao() -> str:
+    """Impressão digital dos INSUMOS da planilha: itens revisados, seleções (com
+    NCM) e os markups (global, ST, normal, overrides). Serve para saber se o
+    estado MUDOU desde a última geração — QUALQUER mudança (marca, preço, NCM,
+    markup, edição da revisão, re-extração) altera o hash e re-arma o aviso de
+    'pregão em andamento' sozinha, sem instrumentar cada ação (o que deixava
+    furos — achado da revisão de QA 2026-06)."""
+    import hashlib
+    ss = st.session_state
+    itens = ss.get("itens_revisados") or []
+    sel = ss.get("selecoes") or {}
+    partes = (
+        tuple((getattr(i, "item_numero", None), getattr(i, "descricao", None),
+               getattr(i, "unidade", None), getattr(i, "quantidade", None),
+               getattr(i, "valor_referencia", None)) for i in itens),
+        tuple(sorted((off, getattr(v, "preco", None),
+                      getattr(v, "codigo_fornecedor", None),
+                      getattr(v, "marca", None), getattr(v, "ncm", None))
+                     for off, v in sel.items())),
+        ss.get("markup"), ss.get("mk_st"), ss.get("mk_normal"),
+        tuple(sorted((ss.get("markup_overrides") or {}).items())),
+    )
+    return hashlib.sha256(repr(partes).encode("utf-8")).hexdigest()
+
+
+def _escolher_opcao(idx: int, o) -> None:
+    """Registra a marca/preço que o operador escolheu para um item."""
+    from pregoes.exportador import SelecaoFornecedor
+    st.session_state.selecoes[idx] = SelecaoFornecedor(
+        preco=o.preco, codigo_fornecedor=o.codigo_fornecedor, marca=o.marca,
+        ncm=getattr(o, "ncm", None), url=getattr(o, "url", None),
+        fornecedor=getattr(o, "fornecedor", None))
+
+
+def _numero_item_edital(item, idx: int) -> int:
+    """Número do item NO EDITAL para exibição na tela de busca — a mesma fonte
+    da coluna ITEM (B) da planilha exportada, para o operador conferir "que
+    produto é este no edital?" pelo ID.
+
+    Fallback ao sequencial 1-based quando o PDF não trouxe `item_numero`.
+    Checagem explícita `is not None` (e NÃO `item.item_numero or idx+1`): um
+    item_numero válido igual a 0 não pode cair no fallback. Espelha a mesma
+    regra do exportador (coluna B)."""
+    n = getattr(item, "item_numero", None)
+    return n if n is not None else idx + 1
 
 
 def _titulo_item(descricao: str) -> str:
@@ -2116,12 +2231,12 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
         icone_status = {"success": ":material/check_circle:",
                         "warning": ":material/help:",
                         "danger": ":material/cancel:"}[tipo_status]
-        # Numeração SEQUENCIAL (1..N) nesta lista — pedido do cliente: os
-        # números do edital (2, 9, 25…) pulavam e confundiam. O número do
-        # edital é preservado na planilha (coluna ITEM). idx é a posição
-        # 0-based na lista completa (contínua entre páginas).
+        # Mostra o NÚMERO DO ITEM NO EDITAL (item.item_numero) — pedido do
+        # cliente 2026-06: ele identifica "que produto é este no edital?" pelo
+        # ID, igual ao da coluna ITEM da planilha. Fallback ao sequencial 1-based
+        # quando o PDF não trouxe o número (ver _numero_item_edital).
         cabecalho = (
-            f"**Item {idx + 1}** · "
+            f"**Item {_numero_item_edital(item, idx)}** · "
             f"{_titulo_item(item.descricao)} · :{cor_status}[{label_status}]"
         )
         with st.expander(cabecalho, expanded=False, icon=icone_status):
@@ -2185,12 +2300,7 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
                         badge_html = ""
                     _card_opcao(
                         idx, pos, o, badge_html=badge_html, escolhido=escolhido,
-                        on_escolher=lambda o=o: st.session_state.selecoes.__setitem__(
-                            idx, SelecaoFornecedor(
-                                preco=o.preco, codigo_fornecedor=o.codigo_fornecedor,
-                                marca=o.marca, ncm=getattr(o, "ncm", None),
-                                url=getattr(o, "url", None),
-                                fornecedor=getattr(o, "fornecedor", None))),
+                        on_escolher=lambda o=o: _escolher_opcao(idx, o),
                     )
 
             # Rede de segurança: buscar no catálogo interno do cliente — SEMPRE
@@ -2230,8 +2340,7 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
         _registrar_aprendizado(itens, st.session_state.selecoes,
                                 st.session_state.get("resultados_busca") or {})
         _gerar_excel(itens, markup=markup, selecoes=st.session_state.selecoes,
-                     markups=markups, itens_com_st=itens_com_st,
-                     apenas_selecionados=True)
+                     markups=markups, itens_com_st=itens_com_st)
 
 
 def _registrar_aprendizado(itens: list, selecoes: dict, resultados: dict) -> None:

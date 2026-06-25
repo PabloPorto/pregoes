@@ -605,3 +605,51 @@ def test_e2e_rede_de_categoria_filtra_lixo(banco, monkeypatch):
     descs = [o.descricao_encontrada for o in lote.resultados[0]]
     assert any("PARAFUSO" in d for d in descs)
     assert not any("PREGO" in d or "BUCHA" in d for d in descs), "lixo filtrado"
+
+
+# ====== Exportação: TODOS os itens do edital, só selecionados preenchidos =====
+# Feedback do cliente 2026-06 (revisado): a matriz deve conter o edital INTEIRO
+# na ordem original; só os itens que o operador escolheu participar têm preço.
+
+def test_exportacao_todos_itens_presentes_selecoes_esparsas(tmp_path):
+    itens = [ItemExtraido(item_numero=n, descricao=f"PRODUTO {n}", unidade="un",
+                          quantidade=10, valor_referencia=5.0)
+             for n in range(1, 11)]                 # edital de 10 itens
+    # Operador participa só dos offsets 0, 2, 4, 6 (itens 1,3,5,7).
+    sel = lambda c, p: SelecaoFornecedor(preco=p, codigo_fornecedor=c,
+                                         marca="M", fornecedor="almeida")
+    selecoes = {0: sel("A1", 11.0), 2: sel("A3", 33.0),
+                4: sel("A5", 55.0), 6: sel("A7", 77.0)}
+    destino = tmp_path / "m.xlsx"
+    exportar(itens, selecoes=selecoes, destino=destino)
+    ws = load_workbook(destino).active
+
+    # Todos os 10 itens presentes, na ordem (A=sequencial, B=ID do edital).
+    assert ws["A5"].value == 1 and ws["B5"].value == 1
+    assert ws["A14"].value == 10 and ws["B14"].value == 10   # último item presente
+    # Item NÃO selecionado (offset 1, item 2): descrição/qtd preenchidos, preço vazio.
+    assert ws["B6"].value == 2
+    assert ws["C6"].value == "PRODUTO 2" and ws["E6"].value == 10
+    assert ws["L6"].value is None and ws["T6"].value is None
+    # Itens selecionados: preço preenchido.
+    assert ws["L5"].value == 11.0 and ws["T5"].value == "A1"
+    assert ws["L9"].value == 55.0                            # offset 4 → linha 9
+    assert ws["L14"].value is None                           # último não selecionado
+
+
+def test_item_numero_preservado_em_B_independe_de_selecao(tmp_path):
+    # IDs do edital não-contíguos (2, 9, 25) + um sem número (None → fallback).
+    itens = [ItemExtraido(item_numero=n, descricao=f"P{n}", unidade="un", quantidade=1)
+             for n in [2, 9, 25, None]]
+    selecoes = {1: SelecaoFornecedor(preco=5.0, codigo_fornecedor="X", marca="M",
+                                     fornecedor="almeida")}   # só o item_numero=9
+    destino = tmp_path / "m.xlsx"
+    exportar(itens, selecoes=selecoes, destino=destino)
+    ws = load_workbook(destino).active
+    # Coluna B = ID do edital (mesma fonte do cabeçalho da busca).
+    assert [ws[f"B{5+i}"].value for i in range(4)] == [2, 9, 25, 4]  # None→offset+1=4
+    # Coluna A = sequência da lista (sempre 1..N).
+    assert [ws[f"A{5+i}"].value for i in range(4)] == [1, 2, 3, 4]
+    # Só o item_numero=9 (offset 1) tem preço.
+    assert ws["L6"].value == 5.0
+    assert ws["L5"].value is None and ws["L7"].value is None and ws["L8"].value is None

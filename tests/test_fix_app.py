@@ -466,42 +466,34 @@ def test_tentar_mapa_aprendido_sem_mapa_salvo_devolve_original(tmp_path):
         assert app._tentar_mapa_aprendido(fraco, conn, "e.pdf") is fraco
 
 
-# === Feedback cliente 2026-06: excluir itens "não usar" + re-indexar ========
+# === Feedback cliente 2026-06 (revisado): cabeçalho da busca usa o ID do edital
+# A planilha passou a exportar TODOS os itens (só os selecionados preenchidos) —
+# acabou a filtragem/reindexação (_filtrar_selecionados foi removida). E o
+# cabeçalho da tela de busca mostra o número do item NO EDITAL (não sequencial),
+# para o operador conferir com a coluna ITEM da planilha.
 
-def test_filtrar_selecionados_remove_nao_usados_e_reindexa():
-    """Itens 1, 3 e 5 sem seleção ("Não usar"/sem resultado) saem; os
-    escolhidos (0,2,4) viram 0,1,2 com selecoes/markups/ST realinhados."""
+def test_numero_item_edital_usa_item_numero():
     class _It:
-        def __init__(self, n): self.n = n
-    itens = [_It(i) for i in range(6)]
-    selecoes = {0: "A", 2: "C", 4: "E"}          # só 0,2,4 escolhidos
-    markups = {0: 1.30, 2: 1.45, 4: 1.30}
-    com_st = {0, 4}
-    itens_f, sel_f, mk_f, st_f = app._filtrar_selecionados(
-        itens, selecoes, markups, com_st)
-    assert [it.n for it in itens_f] == [0, 2, 4]   # ordem original preservada
-    assert sel_f == {0: "A", 1: "C", 2: "E"}       # re-indexado 0..2
-    assert mk_f == {0: 1.30, 1: 1.45, 2: 1.30}
-    assert st_f == {0, 2}                           # offsets 0(orig0) e 2(orig4)
+        def __init__(self, n): self.item_numero = n
+    # IDs não-contíguos do edital (2, 9, 25) aparecem como tais, não 1,2,3.
+    assert app._numero_item_edital(_It(2), 0) == 2
+    assert app._numero_item_edital(_It(9), 1) == 9
+    assert app._numero_item_edital(_It(25), 2) == 25
 
 
-def test_filtrar_selecionados_sem_markup_nem_st():
+def test_numero_item_edital_fallback_quando_ausente():
     class _It:
-        pass
-    itens = [_It(), _It()]
-    itens_f, sel_f, mk_f, st_f = app._filtrar_selecionados(
-        itens, {1: "X"}, None, None)
-    assert len(itens_f) == 1 and sel_f == {0: "X"}
-    assert mk_f is None and st_f is None
+        def __init__(self, n): self.item_numero = n
+    # PDF sem número → fallback ao sequencial 1-based (idx+1).
+    assert app._numero_item_edital(_It(None), 0) == 1
+    assert app._numero_item_edital(_It(None), 4) == 5
 
 
-def test_filtrar_selecionados_todos_escolhidos_inalterado():
+def test_numero_item_edital_zero_nao_cai_no_fallback():
     class _It:
-        pass
-    itens = [_It(), _It()]
-    _, sel_f, mk_f, st_f = app._filtrar_selecionados(
-        itens, {0: "A", 1: "B"}, {0: 1.3, 1: 1.45}, {0})
-    assert sel_f == {0: "A", 1: "B"} and mk_f == {0: 1.3, 1: 1.45} and st_f == {0}
+        def __init__(self, n): self.item_numero = n
+    # item_numero == 0 é válido — checagem 'is not None' (não 'or idx+1').
+    assert app._numero_item_edital(_It(0), 3) == 0
 
 
 def test_tela_pregao_em_andamento_retoma_no_lugar_certo():
@@ -522,4 +514,95 @@ def test_tela_pregao_em_andamento_retoma_no_lugar_certo():
     assert app._tela_pregao_em_andamento() == "revisao"
     ss.clear()
     assert app._tela_pregao_em_andamento() == "upload"
+    ss.clear()
+
+
+# === Feedback cliente 2026-06: gerar a planilha conclui o pregão ============
+# Antes, gerar não marcava conclusão → o modal "começar um novo pregão" aparecia
+# mesmo depois de concluir. Agora guardamos o HASH dos insumos ao gerar; enquanto
+# o estado bate com o hash, não avisa. QUALQUER mudança (marca, preço, NCM,
+# markup, revisão) muda o hash e re-arma o aviso sozinha — a revisão de QA achou
+# 4 ações (NCM, markup, voltar-à-revisão, Docling) que o re-arme manual perdia.
+
+from types import SimpleNamespace as _NS
+
+
+def _item_ns(n=1):
+    return _NS(item_numero=n, descricao=f"P{n}", unidade="un", quantidade=1,
+               valor_referencia=2.0)
+
+
+def _sel_ns(preco=10.0, cod="A1", marca="DECA", ncm=None):
+    return _NS(preco=preco, codigo_fornecedor=cod, marca=marca, ncm=ncm)
+
+
+def test_pregao_gerado_sem_mudanca_nao_conta_como_em_andamento():
+    ss = app.st.session_state
+    ss.clear()
+    ss["extracao"] = object()
+    ss["itens_revisados"] = [_item_ns()]
+    ss["selecoes"] = {0: _sel_ns()}
+    assert app._tem_pregao_em_andamento() is True
+    # gerar guarda o hash → enquanto nada muda, não avisa (trabalho salvo)
+    ss["pregao_gerado_hash"] = app._hash_pregao()
+    assert app._tem_pregao_em_andamento() is False
+    ss.clear()
+
+
+def test_limpar_pregao_zera_hash_gerado():
+    ss = app.st.session_state
+    ss.clear()
+    ss["pregao_gerado_hash"] = "abc"
+    ss["selecoes"] = {0: object()}
+    app._limpar_pregao()
+    assert "pregao_gerado_hash" not in ss and "selecoes" not in ss
+    ss.clear()
+
+
+def test_trocar_marca_apos_gerar_rearma():
+    ss = app.st.session_state
+    ss.clear()
+    ss["selecoes"] = {0: _sel_ns(marca="DECA")}
+    ss["pregao_gerado_hash"] = app._hash_pregao()
+    assert app._tem_pregao_em_andamento() is False
+    ss["selecoes"][0] = _sel_ns(preco=12.0, cod="A2", marca="DOCOL")   # trocou
+    assert app._tem_pregao_em_andamento() is True
+    ss.clear()
+
+
+def test_mudar_markup_apos_gerar_rearma():
+    """Furo da revisão: mudar o markup (global/ST/normal) após gerar deve avisar."""
+    ss = app.st.session_state
+    ss.clear()
+    ss["selecoes"] = {0: _sel_ns()}
+    ss["mk_st"] = 1.30
+    ss["mk_normal"] = 1.45
+    ss["pregao_gerado_hash"] = app._hash_pregao()
+    assert app._tem_pregao_em_andamento() is False
+    ss["mk_st"] = 1.60               # aumentou o markup ST → planilha desatualizada
+    assert app._tem_pregao_em_andamento() is True
+    ss.clear()
+
+
+def test_identificar_ncm_apos_gerar_rearma():
+    """Furo da revisão: identificar NCM muda a classificação ST → deve avisar."""
+    ss = app.st.session_state
+    ss.clear()
+    ss["selecoes"] = {0: _sel_ns(ncm=None)}
+    ss["pregao_gerado_hash"] = app._hash_pregao()
+    assert app._tem_pregao_em_andamento() is False
+    ss["selecoes"][0] = _sel_ns(ncm="39172300")    # NCM identificado depois
+    assert app._tem_pregao_em_andamento() is True
+    ss.clear()
+
+
+def test_escolher_opcao_grava_selecao():
+    ss = app.st.session_state
+    ss.clear()
+    ss["selecoes"] = {}
+    o = _NS(preco=12.5, codigo_fornecedor="A1", marca="DECA",
+            ncm=None, url=None, fornecedor="almeida")
+    app._escolher_opcao(3, o)
+    sel = ss["selecoes"][3]
+    assert sel.preco == 12.5 and sel.marca == "DECA" and sel.fornecedor == "almeida"
     ss.clear()

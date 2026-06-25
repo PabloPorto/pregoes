@@ -34,6 +34,7 @@ import pytest
 RAIZ = Path(__file__).resolve().parent.parent
 BAT = RAIZ / "iniciar.bat"
 TOML = RAIZ / ".streamlit" / "config.toml"
+RUN_APP = RAIZ / "run_app.py"
 
 
 # --------------------------------------------------------------------------
@@ -135,22 +136,23 @@ def test_config_toml_esconde_stacktrace():
     assert "showErrorDetails = true" not in conteudo
 
 
-def test_iniciar_bat_passa_address_loopback():
-    """iniciar.bat passa --server.address=127.0.0.1 (cinto e suspensório)."""
-    conteudo = _texto(BAT)
-
-    assert "--server.address=127.0.0.1" in conteudo, (
-        "iniciar.bat precisa forçar o bind no loopback como reforço ao toml."
+def test_iniciar_bat_loopback_garantido_via_run_app():
+    """iniciar.bat agora sobe pelo run_app.py (entrypoint unificado com o .exe,
+    para aplicar os patches do index.html: pt-BR + atalho de cache). O loopback
+    127.0.0.1 (cinto e suspensório com o toml) passa a ser garantido no run_app.py."""
+    bat = _texto(BAT)
+    run_app = _texto(RUN_APP)
+    assert "run_app.py" in bat, "iniciar.bat deve delegar ao run_app.py"
+    assert "--server.address=127.0.0.1" in run_app, (
+        "run_app.py precisa forçar o bind no loopback como reforço ao toml."
     )
-    assert "0.0.0.0" not in conteudo
+    assert "0.0.0.0" not in bat and "0.0.0.0" not in run_app
 
 
-def test_iniciar_bat_preserva_comando_streamlit():
-    """O fix não pode ter quebrado a invocação principal do Streamlit."""
-    conteudo = _texto(BAT)
-
-    assert "streamlit run pregoes\\ui\\app.py" in conteudo
-    assert "--server.port=8501" in conteudo
+def test_iniciar_bat_usa_run_app_na_porta_8501():
+    """A invocação principal do Streamlit vive no run_app.py (porta 8501)."""
+    assert "python run_app.py" in _texto(BAT)
+    assert "--server.port=8501" in _texto(RUN_APP)
 
 
 if __name__ == "__main__":

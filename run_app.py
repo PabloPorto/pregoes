@@ -27,35 +27,54 @@ def _resource(rel: str) -> str:
     return os.path.join(base, rel)
 
 
-def _evitar_traducao_automatica() -> None:
-    """Declara a página como pt-BR para o navegador NÃO oferecer tradução.
+# Script injetado no index.html para NEUTRALIZAR os atalhos de teclado do
+# Streamlit que colidem com o copiar/recarregar do navegador: "C" abre o popup
+# "Clear cache" e "R" faz rerun. No Windows, copiar é Ctrl+C — e o "C" disparava
+# o diálogo de cache (no Mac não acontece porque copiar é Cmd+C). Capturamos o
+# keydown na fase de CAPTURA (antes do handler do Streamlit) e só impedimos a
+# PROPAGAÇÃO — sem preventDefault — então copiar/colar/recarregar continuam
+# funcionando normalmente; só o atalho interno do Streamlit é suprimido.
+_SCRIPT_ATALHOS = (
+    '<script id="pp-atalhos-guard">'
+    "(function(){window.addEventListener('keydown',function(e){"
+    "var k=(e.key||'').toLowerCase();"
+    "if((e.ctrlKey||e.metaKey)&&(k==='c'||k==='r')){e.stopImmediatePropagation();}"
+    "},true);})();"
+    "</script>"
+)
 
-    Por quê: o Streamlit serve ``<html lang="en">``. Em navegador configurado em
-    português (Edge/Chrome), isso dispara a TRADUÇÃO automática, que troca os
-    nós de texto do DOM (ex.: "Gemini" → "Gêmeos"). Aí o Streamlit, ao atualizar
-    a tela, não acha o nó que esperava e quebra com
-    ``NotFoundError: removeChild ... is not a child of this node`` (visto em
-    campo no Windows). Marcando a página como pt-BR + ``translate="no"``, o
-    navegador não traduz e o erro some.
 
-    Idempotente; falha em silêncio (nunca impede o app de subir).
+def _ajustar_pagina_streamlit() -> None:
+    """Patches no index.html servido pelo Streamlit, para o operador leigo:
+
+    (1) Declara a página pt-BR + ``translate="no"``: o Streamlit serve
+        ``<html lang="en">`` e o navegador em português TRADUZ a página, trocando
+        nós do DOM (ex.: "Gemini" → "Gêmeos") — aí o Streamlit não acha o nó e
+        quebra com ``NotFoundError: removeChild`` (visto no Windows).
+    (2) Neutraliza o atalho de teclado do Streamlit que abre o popup "Clear cache"
+        no Ctrl+C (ver ``_SCRIPT_ATALHOS``).
+
+    Idempotente (marcadores ``lang="pt-BR"`` e ``pp-atalhos-guard``); falha em
+    silêncio (nunca impede o app de subir).
     """
     try:
         import streamlit
         idx = os.path.join(os.path.dirname(streamlit.__file__),
                            "static", "index.html")
         html = open(idx, encoding="utf-8").read()
-        if 'lang="pt-BR"' in html:
-            return
-        novo = html.replace('<html lang="en">',
-                            '<html lang="pt-BR" translate="no">')
-        novo = novo.replace(
-            "<head>",
-            '<head><meta name="google" content="notranslate"/>', 1)
+        novo = html
+        if 'lang="pt-BR"' not in novo:
+            novo = novo.replace('<html lang="en">',
+                                '<html lang="pt-BR" translate="no">')
+            novo = novo.replace(
+                "<head>",
+                '<head><meta name="google" content="notranslate"/>', 1)
+        if "pp-atalhos-guard" not in novo:
+            novo = novo.replace("</head>", _SCRIPT_ATALHOS + "</head>", 1)
         if novo != html:
             open(idx, "w", encoding="utf-8").write(novo)
     except Exception:
-        pass   # tradução é cosmético/UX; nunca bloquear o boot por causa disto
+        pass   # ajustes cosméticos/UX; nunca bloquear o boot por causa disto
 
 
 def _abrir_navegador() -> None:
@@ -81,7 +100,8 @@ def main() -> None:
     # is true". Forçamos o modo de produção via env var ANTES de o Streamlit
     # ler a config — tem precedência sobre a autodetecção. Ver BUILD.md.
     os.environ["STREAMLIT_GLOBAL_DEVELOPMENT_MODE"] = "false"
-    _evitar_traducao_automatica()   # página pt-BR → navegador não traduz/quebra
+    # pt-BR (navegador não traduz/quebra) + neutraliza o popup "Clear cache" no Ctrl+C
+    _ajustar_pagina_streamlit()
     app_path = _resource(os.path.join("pregoes", "ui", "app.py"))
     threading.Thread(target=_abrir_navegador, daemon=True).start()
     sys.argv = [

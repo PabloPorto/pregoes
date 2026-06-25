@@ -38,7 +38,7 @@ def _raiz_bundle() -> Path:
 # Versão do aplicativo — aparece na sidebar e no log de boot. Sem ela, o
 # suporte remoto fica às cegas sobre o que o cliente está rodando (auditoria
 # 2026-06). Bump a cada .exe entregue ao cliente.
-VERSAO_APP = "1.0.8"
+VERSAO_APP = "1.0.9"
 
 # Estrutura de diretórios
 BASE_DIR = _raiz_gravavel()
@@ -146,3 +146,17 @@ COLUNAS_PREENCHIDAS_RPA = ["item", "descricao", "unidade", "quantidade",
 # === UI Streamlit ===
 PORTA_UI = 8501
 TITULO_APP = "Pregões — Automação de Formação de Preços"
+
+
+def carregar_opcoes_pagamento() -> dict:
+    """Opções de Forma/Prazo de pagamento por fornecedor — bundladas, capturadas
+    do site por ``scripts/inspecionar_pagamento.py``. Formato:
+    ``{fornecedor: {"forma": [{value, texto}], "prazo": [{value, texto}]}}``.
+    Devolve {} se o arquivo faltar (a UI degrada para o que houver)."""
+    import json
+    # Mesmo padrão do ncm_st.json (bundla no .exe ao lado do pacote pregoes).
+    arq = Path(__file__).resolve().parent / "dados" / "opcoes_pagamento.json"
+    try:
+        return json.loads(arq.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}

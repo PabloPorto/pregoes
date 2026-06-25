@@ -17,11 +17,12 @@ echo  IMPORTANTE: Mantenha esta janela aberta enquanto usa.
 echo  Para fechar o sistema, basta fechar esta janela.
 echo.
 
-REM Roda o Streamlit. Ele abre o navegador automaticamente.
-REM --server.address=127.0.0.1 prende a UI ao loopback (cinto e suspensorio
-REM junto do .streamlit\config.toml): o sistema NUNCA fica exposto na rede
-REM Wi-Fi local, protegendo credenciais dos fornecedores e a chave Gemini.
-python -m streamlit run pregoes\ui\app.py --server.port=8501 --server.address=127.0.0.1 --browser.gatherUsageStats=false --server.headless=false
+REM Sobe pelo run_app.py (o MESMO entrypoint do .exe). Ele prende a UI ao
+REM loopback (127.0.0.1 -> nunca exposta na rede Wi-Fi local), abre o navegador
+REM sozinho, E aplica os ajustes do index.html: pagina pt-BR (navegador nao
+REM traduz/quebra) + neutraliza o popup "Clear cache" no Ctrl+C. Rodar o
+REM streamlit direto pulava esses ajustes.
+python run_app.py
 
 echo.
 echo Sistema encerrado.

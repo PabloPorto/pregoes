@@ -4,6 +4,80 @@
 
 ## STATUS 2026-06 — o que mudou desde o briefing
 
+- **RESOLVIDO (2026-06-25) — gerar a planilha não concluía o pregão (modal nagava).**
+  Depois de gerar a matriz, o sistema seguia tratando o pregão como "em
+  andamento" e mostrava o modal "Começar um novo pregão? (vai descartar…)".
+  Corrigido marcando a conclusão ao gerar. **Design robusto via HASH dos insumos**
+  (`_hash_pregao`: itens revisados + seleções com NCM + markups global/ST/normal/
+  overrides): ao gerar, guarda-se o hash; enquanto o estado bate, não avisa; se o
+  operador mexe em QUALQUER insumo, o hash muda e o aviso re-arma sozinho. A
+  primeira versão (re-armar manualmente em cada ação) tinha **4 furos** achados por
+  uma revisão adversarial (workflow) — NCM, painel de markup, edição da revisão,
+  re-extração Docling — onde a mudança pós-geração era descartada em silêncio. O
+  hash elimina a classe inteira de "ponto de reset esquecido". Botão "Começar um
+  novo pregão" na tela de sucesso. Testes: `test_fix_app.py` (incl. markup/NCM
+  re-armam). NÃO-bugs confirmados: órgão/número (metadados), re-busca (fase
+  anterior), histórico, "Continuar o atual".
+
+- **RESOLVIDO (2026-06-25) — popup "Clear cache" no Ctrl+C (Windows).**
+  O Streamlit tem atalhos de teclado embutidos (`C` = Clear cache, `R` = rerun)
+  sem config para desligar. No Windows, **copiar é Ctrl+C** → o `C` abria o
+  diálogo de cache; no Mac não acontece (copiar é Cmd+C). `run_app.py` agora
+  injeta um script no `index.html` que captura `Ctrl/Cmd + C|R` na fase de
+  CAPTURA e só impede a PROPAGAÇÃO (sem `preventDefault`) — copiar/colar
+  continuam, mas o atalho interno do Streamlit não dispara. `toolbarMode="minimal"`
+  (já no config) **não** desliga esses atalhos. Também unifiquei o `iniciar.bat`
+  para subir pelo `run_app.py` (antes rodava `streamlit run` direto e pulava
+  ESTE fix e o de tradução pt-BR). Testes: `tests/test_run_app.py`. *Validar no
+  Windows no próximo .exe — não reproduzível no Mac (Cmd+C não colide).*
+
+- **RESOLVIDO (2026-06-25) — CONDIÇÃO DE PAGAMENTO agora é aplicada (não pega mais o default).**
+  Almeida e Dantas têm o modal "Selecione suas Preferências" (Forma + Prazo); trocar
+  a condição muda o preço de todos os produtos. O scraper só logava e buscava →
+  pegava o default da sessão (custo possivelmente errado na matriz). Resolvido por
+  **condição FIXA por fornecedor** (decisão do cliente), com a inspeção primeiro
+  (`scripts/inspecionar_pagamento.py`) que revelou: `<select>` de **name estável e
+  igual nos 2 sites** (`id_forma_pagamento_preferencia` / `id_condicao_pagamento_preferencia`),
+  opções com **value estável**, e que **Confirmar grava na sessão** (PHPSESSID/token).
+  Implementação:
+  - `pregoes/dados/opcoes_pagamento.json` — opções (Forma/Prazo, value+texto) por
+    fornecedor, capturadas do site. Bundla no .exe (datas=("pregoes","pregoes")).
+  - `credenciais.salvar/carregar_preferencia_pagamento(fornecedor)` — guarda a
+    escolha (seção `preferencias_pagamento`).
+  - Configurações: seletor de Forma + Prazo por fornecedor (`_form_condicao_pagamento`).
+  - Scraper: `_aplicar_preferencia_pagamento(page, fornecedor)` **após o login** nos
+    dois `__enter__` — abre o modal (gatilho resiliente + verifica visibilidade),
+    seleciona por value (fallback p/ texto), Confirmar. 1× por sessão → vale p/
+    buscar/por_codigo/catálogo/busca-no-site. **Degradação graciosa**: sem config ou
+    modal ausente → segue no default (sem regressão); nunca derruba o login.
+  - Transparência: a tela de busca mostra "💳 Preços para a condição → …" e avisa
+    quando não configurada. Testes: `tests/test_pagamento.py` (8).
+  - **A VALIDAR EM CAMPO:** confirmar na máquina do cliente que o modal abre com o
+    gatilho escolhido e o preço muda (o log diz "Condição aplicada" ou "não abri o
+    modal"). A inspeção provou a mecânica (cookies/preço), mas o gatilho exato do
+    modal não foi 100% isolado — se falhar, o log aponta e ajustamos o seletor.
+
+- **RESOLVIDO (2026-06-24) — planilha matriz volta a conter o edital INTEIRO; IDs do edital na busca.**
+  Correção de DOIS entendimentos anteriores meus, esclarecidos pelo cliente:
+  - **Exporta TODOS os itens do edital** (na ordem original), com **apenas os
+    selecionados preenchidos** (preço/marca/código/NCM/markup). Antes eu havia
+    feito o "Gerar com preços" EXCLUIR os não-selecionados (`apenas_selecionados`
+    + `_filtrar_selecionados`, que filtrava e reindexava). O pregoeiro precisa do
+    edital completo na matriz. Implementação: o `exportar` já iterava todos os
+    itens e só preenchia L/T/U/markup/AC onde `selecoes.get(offset)` existe —
+    bastou **remover a filtragem** (param `apenas_selecionados`, função
+    `_filtrar_selecionados` e a guarda de seleção-vazia foram apagados; código
+    morto). O histórico (`_persistir_edital`) passa a gravar todos os itens
+    (preço NULL nos não-selecionados) — mais fiel ao edital.
+  - **Cabeçalho da busca mostra o ID do EDITAL** (`item.item_numero`), não a
+    numeração sequencial 1..N que eu havia colocado. O operador identifica "que
+    produto é este no edital?" pelo mesmo número da coluna ITEM da planilha
+    (helper `_numero_item_edital`, fallback 1-based quando o PDF não traz número).
+  - **Nota de UX aceita:** linhas não-selecionadas mostram `#DIV/0!` na coluna
+    MARGEM (fórmula `J/G` com preço vazio) — idêntico ao que o "Gerar sem buscar"
+    já produz. Template é sagrado (não mexer em fórmula); se incomodar, vira
+    questão futura, fora do escopo desta mudança.
+
 - **NOVO (2026-06-23) — suíte de QA do APRENDIZADO (`tests/test_aprendizado.py`, 25 testes).**
   Cobre as 8 frentes da retroalimentação: DB (guards+UPSERT), reuso fuzzy,
   orquestrador (aprendizado antes do cache, **preço AO VIVO** não o salvo, item

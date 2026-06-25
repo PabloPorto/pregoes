@@ -1,0 +1,322 @@
+{
+  "almeida": {
+    "forma": [
+      {
+        "value": "237",
+        "texto": "BANCO BRADESCO - COB BANCARIA"
+      },
+      {
+        "value": "CALM",
+        "texto": "CARTÃO DE CRÉDITO"
+      },
+      {
+        "value": "BKAN",
+        "texto": "PAGAMENTO ANTECIPADO BOLETO"
+      },
+      {
+        "value": "PIX2",
+        "texto": "PIX"
+      }
+    ],
+    "prazo": [
+      {
+        "value": "1",
+        "texto": "A VISTA (MÍNIMO R$ 300,00)"
+      },
+      {
+        "value": "2",
+        "texto": "7 DIAS (MÍNIMO R$ 300,00)"
+      },
+      {
+        "value": "44",
+        "texto": "15 DIAS (MÍNIMO R$ 300,00)"
+      },
+      {
+        "value": "23",
+        "texto": "30 DIAS (MÍNIMO R$ 300,00)"
+      },
+      {
+        "value": "15",
+        "texto": "45 DIAS (MÍNIMO R$ 300,00)"
+      },
+      {
+        "value": "21",
+        "texto": "60 DIAS (MÍNIMO R$ 750,00)"
+      },
+      {
+        "value": "29",
+        "texto": "75 DIAS DIAS (MÍNIMO R$ 750"
+      },
+      {
+        "value": "68",
+        "texto": "7/14 DIAS (MÍNIMO R$ 500,00)"
+      },
+      {
+        "value": "10",
+        "texto": "20/40 DIAS (MÍNIMO R$ 500,00)"
+      },
+      {
+        "value": "11",
+        "texto": "25/35 DIAS (MÍNIMO R$ 500,00)"
+      },
+      {
+        "value": "16",
+        "texto": "30/60 DIAS (MÍNIMO R$ 500,00)"
+      },
+      {
+        "value": "22",
+        "texto": "45/75 DIAS (MÍNIMO R$ 900,00)"
+      },
+      {
+        "value": "30",
+        "texto": "60/90 DIAS (MÍNIMO R$ 2.000,00)"
+      },
+      {
+        "value": "91",
+        "texto": "7/14/21 DIAS (MÍNIMO R$ 750,00)"
+      },
+      {
+        "value": "7",
+        "texto": "14/21/28"
+      },
+      {
+        "value": "12",
+        "texto": "15/30/45 DIAS (MÍNIMO R$ 750,00)"
+      },
+      {
+        "value": "13",
+        "texto": "20/30/40 DIAS (MÍNIMO R$ 750,00)"
+      },
+      {
+        "value": "17",
+        "texto": "30/45/60 DIAS (MÍNIMO R$ 750,00)"
+      },
+      {
+        "value": "104",
+        "texto": "40/60/80 VALOR MINIMO(900)"
+      },
+      {
+        "value": "24",
+        "texto": "30/60/90 DIAS (MÍNIMO R$ 750,00"
+      },
+      {
+        "value": "101",
+        "texto": "45/60/75 DIAS (MÍNIMO R$ 900,00)"
+      },
+      {
+        "value": "31",
+        "texto": "45/75/105 DIAS (MÍNIMO R$ 750,00)"
+      },
+      {
+        "value": "90",
+        "texto": "60/75/90 DIAS (MÍNIMO R$ 2.000,00)"
+      },
+      {
+        "value": "88",
+        "texto": "7/14/21/28"
+      },
+      {
+        "value": "14",
+        "texto": "15/25/35/45 DIAS (MÍNIMO R$ 1.000,00)"
+      },
+      {
+        "value": "19",
+        "texto": "25/35/45/75 DIAS (MÍNIMO R$ 1.000,00)"
+      },
+      {
+        "value": "18",
+        "texto": "30/40/50/60 DIAS (MÍNIMO R$ 1.000,00)"
+      },
+      {
+        "value": "25",
+        "texto": "30/45/75/90 DIAS (MÍNIMO R$ 1.000,00)"
+      },
+      {
+        "value": "26",
+        "texto": "30/50/70/90 DIAS (MÍNIMO R$ 1.000,00)"
+      },
+      {
+        "value": "32",
+        "texto": "30/60/90/120 DIAS (MÍNIMO R$ 1.500,00)"
+      },
+      {
+        "value": "20",
+        "texto": "15/30/45/60/75 DIAS (MÍNIMO R$ 1.250,00)"
+      },
+      {
+        "value": "27",
+        "texto": "20/40/60/80/100 D. (MÍNIMO R$ 1.250,00)"
+      },
+      {
+        "value": "43",
+        "texto": "30/45/60/75/90 DIAS (MÍNIMO R$ 1.250,00)"
+      },
+      {
+        "value": "100",
+        "texto": "40/50/60/70/80 DIAS (MÍNIMO R$ 1.250,00)"
+      },
+      {
+        "value": "63",
+        "texto": "15/30/45/60/75/90/105 DIAS (R$ 1.750,00)"
+      },
+      {
+        "value": "58",
+        "texto": "30/45/60/75/90/105/120 1750"
+      },
+      {
+        "value": "34",
+        "texto": "30/45/60/75/90/105/120 DIAS (R$ 1750,00)"
+      }
+    ]
+  },
+  "dantas": {
+    "forma": [
+      {
+        "value": "001",
+        "texto": "BANCO DO BRASIL - COB BANCARIA"
+      },
+      {
+        "value": "CART",
+        "texto": "CARTAO DE CRÉDITO"
+      },
+      {
+        "value": "BKAN",
+        "texto": "PAGAMENTO ANTECIPADO BOLETO"
+      },
+      {
+        "value": "PIX2",
+        "texto": "PIX SITE"
+      }
+    ],
+    "prazo": [
+      {
+        "value": "1",
+        "texto": "A VISTA"
+      },
+      {
+        "value": "2",
+        "texto": "7 DIAS"
+      },
+      {
+        "value": "69",
+        "texto": "7 DIAS"
+      },
+      {
+        "value": "3",
+        "texto": "14 DIAS"
+      },
+      {
+        "value": "4",
+        "texto": "21 DIAS"
+      },
+      {
+        "value": "9",
+        "texto": "30 DIAS"
+      },
+      {
+        "value": "15",
+        "texto": "45 DIAS"
+      },
+      {
+        "value": "21",
+        "texto": "60 DIAS"
+      },
+      {
+        "value": "29",
+        "texto": "75 DIAS MIN(750,00)"
+      },
+      {
+        "value": "7",
+        "texto": "7/14 DIAS"
+      },
+      {
+        "value": "10",
+        "texto": "20/40 DIAS"
+      },
+      {
+        "value": "16",
+        "texto": "30/60 DIAS"
+      },
+      {
+        "value": "23",
+        "texto": "40/80 DIAS"
+      },
+      {
+        "value": "22",
+        "texto": "45/75 DIAS"
+      },
+      {
+        "value": "30",
+        "texto": "60/90 DIAS MIN(1500,00)"
+      },
+      {
+        "value": "60",
+        "texto": "7/14/21"
+      },
+      {
+        "value": "17",
+        "texto": "30/45/60 DIAS"
+      },
+      {
+        "value": "24",
+        "texto": "30/60/90 DIAS"
+      },
+      {
+        "value": "73",
+        "texto": "40/60/80"
+      },
+      {
+        "value": "264",
+        "texto": "45/60/75 DIAS"
+      },
+      {
+        "value": "31",
+        "texto": "45/75/105 DIAS MIN"
+      },
+      {
+        "value": "65",
+        "texto": "60/75/90 MIN(1500,00)"
+      },
+      {
+        "value": "38",
+        "texto": "7/14/21/28"
+      },
+      {
+        "value": "14",
+        "texto": "15/25/35/45 DIAS"
+      },
+      {
+        "value": "25",
+        "texto": "30/45/75/90 DIAS"
+      },
+      {
+        "value": "26",
+        "texto": "30/50/70/90 DIAS"
+      },
+      {
+        "value": "32",
+        "texto": "30/60/90/120 DIAS MIN (1500,00)"
+      },
+      {
+        "value": "20",
+        "texto": "15/30/45/60/75 DIAS"
+      },
+      {
+        "value": "27",
+        "texto": "20/40/60/80/100 DIAS"
+      },
+      {
+        "value": "44",
+        "texto": "30/45/60/75/90"
+      },
+      {
+        "value": "28",
+        "texto": "20/40/45/75/85/100 D"
+      },
+      {
+        "value": "34",
+        "texto": "30/45/60/75/90/105/120 MIN"
+      }
+    ]
+  }
+}

@@ -101,6 +101,54 @@ def carregar_chave_api(provider: str) -> Optional[str]:
     return chave if chave else None
 
 
+# === Condição de pagamento por fornecedor (Forma + Prazo) ===
+# O preço nos sites varia conforme a condição de pagamento. Guardamos a escolha
+# do operador (value para o scraper selecionar + texto para exibir) por fornecedor,
+# numa seção própria do mesmo arquivo. Estrutura:
+#   { "preferencias_pagamento": { "almeida": {forma_value, forma_texto,
+#                                              prazo_value, prazo_texto}, ... } }
+_CHAVE_PREF = "preferencias_pagamento"
+
+
+def carregar_preferencia_pagamento(fornecedor: str) -> Optional[dict]:
+    """Retorna `{forma_value, forma_texto, prazo_value, prazo_texto}` da condição
+    de pagamento configurada para o fornecedor, ou None se não houver."""
+    if not CAMINHO.exists():
+        return None
+    try:
+        dados = json.loads(CAMINHO.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+        return None
+    pref = (dados.get(_CHAVE_PREF) or {}).get(fornecedor)
+    if not pref or not pref.get("forma_value") or not pref.get("prazo_value"):
+        return None
+    return pref
+
+
+def salvar_preferencia_pagamento(
+    fornecedor: str, forma_value: str, forma_texto: str,
+    prazo_value: str, prazo_texto: str,
+) -> None:
+    """Persiste a condição de pagamento escolhida. Preserva as outras entradas
+    (credenciais, chaves de API, o outro fornecedor)."""
+    if CAMINHO.exists():
+        try:
+            dados = json.loads(CAMINHO.read_text(encoding="utf-8"))
+            if not isinstance(dados, dict):
+                dados = {}
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+            dados = {}
+    else:
+        dados = {}
+
+    dados.setdefault(_CHAVE_PREF, {})[fornecedor] = {
+        "forma_value": forma_value, "forma_texto": forma_texto,
+        "prazo_value": prazo_value, "prazo_texto": prazo_texto,
+    }
+    CAMINHO.parent.mkdir(parents=True, exist_ok=True)
+    CAMINHO.write_text(json.dumps(dados, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
 def salvar_chave_api(provider: str, api_key: str) -> None:
     """Persiste uma chave API. Cria o arquivo se não existir, sobrescreve a
     entrada do provider, preserva outras entradas."""
