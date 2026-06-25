@@ -88,17 +88,21 @@ _GRAFIAS_EQUIVALENTES = [
 # SUBSTITUIÇÃO (não expansão): reescrevemos para a forma do catálogo nos DOIS
 # lados — a query enviada ao site E a referência da relevância. Por que
 # substituição: medido `relevancia("revestimento textura","Grafiato 25kg")=0.0`
-# (o filtro 0.35 DESCARTA o acerto); com `textura->grafiato` a referência
-# também vira "grafiato" e o score sobe para 0.5 (PASSA). Expansão (manter
-# "textura" e só adicionar uma query-irmã "grafiato") deixaria a relevância em
-# 0.0 e o verdadeiro positivo seria jogado fora.
-# MÍNIMA e curada, igual `_GRAFIAS_EQUIVALENTES` — cada par confirmado com o
-# cliente (ver QUESTOES_PENDENTES). `\b` evita substituir dentro de palavra.
-# O long-tail de sinônimos é coberto pela RETROALIMENTAÇÃO (o operador resolve
-# um termo novo uma vez na caixa "Buscar direto no site" e o sistema aprende) —
-# não inflar esta tabela à mão.
+# (o filtro 0.35 DESCARTA o acerto); reescrevendo p/ "grafiato" a referência
+# também vira "grafiato" e o score passa o corte.
+#
+# ESCOPO POR FRASE (não o "textura" solto): "textura" é palavra genérica que
+# aparece em FERRAMENTAS de aplicar textura (PINCEL/ROLO/LIXA PARA TEXTURA), que
+# NÃO são o revestimento. Substituir "textura" cru quebrava a busca dessas
+# ferramentas (query "pincel grafiato" → site não acha o pincel) e ainda casava
+# o revestimento por engano (achado QA 2026-06-25). Por isso casamos só as
+# FRASES do revestimento ("revestimento textura", "textura acrilica"), nunca o
+# termo isolado. O long-tail de outras grafias é coberto pela RETROALIMENTAÇÃO
+# (o operador resolve uma vez na caixa "Buscar direto no site" e o sistema
+# aprende) — não inflar esta tabela à mão.
 _SINONIMOS_DOMINIO = [
-    (re.compile(r"\btextura\b"), "grafiato"),
+    (re.compile(r"\brevestimento textura\b"), "revestimento grafiato"),
+    (re.compile(r"\btextura acrilica\b"), "grafiato acrilica"),
 ]
 
 # Stopwords pt-BR genéricas que poluem busca em catálogo de fornecedor

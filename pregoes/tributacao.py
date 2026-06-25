@@ -50,15 +50,19 @@ def normalizar_ncm(ncm: str | None) -> str:
 def eh_st(ncm: str | None) -> bool:
     """True se o NCM (ou um prefixo dele) consta na lista de ST.
 
-    Testa o NCM completo e depois os prefixos de 6 e 4 dígitos, porque a lista
-    usa posições (``'3917'`` cobre ``'3917.40.90'``). NCM com menos de 4
-    dígitos (ou vazio) não classifica.
+    Testa TODOS os prefixos de 4 a 8 dígitos, porque a lista usa posições e
+    mistura comprimentos de 4 a 8 (``'3917'`` cobre ``'3917.40.90'``; ``'84099'``
+    cobre ``'8409.90.00'``). NCM com menos de 4 dígitos (ou vazio) não classifica.
+
+    Antes testava só 4/6/8 → as 22 posições de 5 e 7 dígitos da lista (5,7% do
+    total) nunca casavam, e produtos dessas famílias saíam com markup NORMAL em
+    vez de ST (superprecificação ~11,5%) — defeito de QA 2026-06-25.
     """
     n = normalizar_ncm(ncm)
     if len(n) < 4:
         return False
     conjunto = _conjunto_st()
-    return n in conjunto or n[:6] in conjunto or n[:4] in conjunto
+    return any(n[:k] in conjunto for k in range(4, 9))
 
 
 def markup_para(
