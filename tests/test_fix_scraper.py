@@ -285,3 +285,36 @@ def test_fechar_idempotente_apos_falha(monkeypatch):
     browser.fechado = False
     alm.__exit__(None, None, None)  # não deve re-fechar (browser já é None)
     assert browser.fechado is False, "limpeza deveria ser idempotente (browser zerado)"
+
+
+# === _esperar_sessao: espera ATIVA pelos cookies (fix do login lento 2026-06-25) ===
+
+def test_esperar_sessao_true_quando_cookies_aparecem_tarde():
+    """Login lento: cookies só aparecem após algumas checagens → True (não falha
+    falso como o sleep fixo de 4s fazia)."""
+    from pregoes import scraper
+
+    class _Ctx:
+        def __init__(self): self.n = 0
+        def cookies(self):
+            self.n += 1
+            return ([{"name": "PHPSESSID"}, {"name": "token"}]
+                    if self.n >= 4 else [])
+
+    class _Pg:
+        def wait_for_timeout(self, ms): pass
+
+    assert scraper._esperar_sessao(_Ctx(), _Pg(), timeout_s=15) is True
+
+
+def test_esperar_sessao_false_se_cookies_nunca_vem():
+    """Login genuinamente falho: cookies nunca aparecem → False dentro do prazo."""
+    from pregoes import scraper
+
+    class _Ctx:
+        def cookies(self): return [{"name": "outro"}]
+
+    class _Pg:
+        def wait_for_timeout(self, ms): pass
+
+    assert scraper._esperar_sessao(_Ctx(), _Pg(), timeout_s=1) is False

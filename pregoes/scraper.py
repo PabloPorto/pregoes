@@ -453,6 +453,22 @@ def _select_visivel(page, seletor: str, value: str, texto: str | None,
             raise
 
 
+def _esperar_sessao(context, page, timeout_s: int = 15) -> bool:
+    """Espera os cookies de sessão (PHPSESSID + token) aparecerem após o submit
+    do login, conferindo a cada 0.5s até ``timeout_s``.
+
+    Substitui o sleep FIXO de 4s, que produzia "falha no login" FALSA quando o
+    site estava lento: o POST + redirect que grava os cookies às vezes passa de
+    4s (campo 2026-06-25 — um login real levou 26s num momento de lentidão).
+    Devolve True assim que a sessão é estabelecida (não espera o prazo todo)."""
+    for _ in range(max(1, int(timeout_s / 0.5))):
+        nomes = {c["name"] for c in context.cookies()}
+        if "PHPSESSID" in nomes and "token" in nomes:
+            return True
+        page.wait_for_timeout(500)
+    return False
+
+
 class AlmeidaDistribuidor:
     """
     Scraper de almeidadistribuidor.com.br.
@@ -555,13 +571,10 @@ class AlmeidaDistribuidor:
         # robusto (o botão "Entrar" tem várias instâncias na página e
         # nenhuma tem role=button bem definido).
         senha_input.press("Enter")
-        page.wait_for_timeout(4_000)
-
-        # Valida que a sessão foi estabelecida. O sinal mais confiável é
-        # a presença do cookie PHPSESSID + token (ambos só aparecem após
-        # login bem-sucedido).
-        cookies = {c["name"]: c["value"] for c in self._context.cookies()}
-        if "PHPSESSID" not in cookies or "token" not in cookies:
+        # Espera ATIVA pelos cookies de sessão (PHPSESSID + token, que só
+        # aparecem após login bem-sucedido) — não um sleep fixo de 4s, que
+        # falhava falso em dias lentos (ver _esperar_sessao).
+        if not _esperar_sessao(self._context, page):
             raise RuntimeError(
                 "Falha no login Almeida — cookies de sessão não foram "
                 "estabelecidos. Verifique email/senha em data/credenciais.json."
@@ -827,10 +840,9 @@ class DantasDistribuidora:
         senha_input = page.locator("input[name='senha']").first
         senha_input.fill(self._senha)
         senha_input.press("Enter")
-        page.wait_for_timeout(4_000)
-
-        cookies = {c["name"]: c["value"] for c in self._context.cookies()}
-        if "PHPSESSID" not in cookies or "token" not in cookies:
+        # Espera ATIVA pelos cookies de sessão (não sleep fixo de 4s — ver
+        # _esperar_sessao; falhava falso quando o site estava lento).
+        if not _esperar_sessao(self._context, page):
             raise RuntimeError(
                 "Falha no login Dantas — cookies de sessão não foram "
                 "estabelecidos. Verifique email/senha em data/credenciais.json."
