@@ -708,8 +708,19 @@ def _gerar_excel(itens: list, markup: float, selecoes: dict,
             return
 
         # Persistir edital + itens + histórico da planilha (mesma transação).
-        # `destino`/`markup` vão para a tabela exports_log (rastreio/rebaixar).
-        _persistir_edital(itens, selecoes, destino, markup)
+        # BEST-EFFORT: a planilha JÁ foi gerada (arquivo no disco) — uma falha ao
+        # salvar o HISTÓRICO (DB travado/disco) não pode bloquear o download nem
+        # derrubar a tela na hora do pregão (achado QA D3, 2026-06-25). Loga,
+        # avisa e SEGUE para o sucesso/download; o histórico completa-se na
+        # próxima geração.
+        try:
+            _persistir_edital(itens, selecoes, destino, markup)
+        except Exception:
+            _log.exception("falha ao salvar o histórico do pregão (planilha OK)")
+            style.bloco_aviso(
+                "A planilha foi gerada — baixe abaixo. Só não consegui registrá-la "
+                "no <b>histórico</b> agora; gere de novo mais tarde para completar.",
+                tipo="warning")
 
     # Pregão CONCLUÍDO: o trabalho está salvo (arquivo + histórico). Guarda a
     # IMPRESSÃO DIGITAL dos insumos gerados — enquanto o estado bater com ela, o

@@ -653,3 +653,43 @@ def test_item_numero_preservado_em_B_independe_de_selecao(tmp_path):
     # Só o item_numero=9 (offset 1) tem preço.
     assert ws["L6"].value == 5.0
     assert ws["L5"].value is None and ws["L7"].value is None and ws["L8"].value is None
+
+
+# ============ QA adversarial #5 — falha parcial na orquestração =============
+
+def test_orq_um_fornecedor_cai_nao_derruba_o_outro(banco, monkeypatch):
+    """Sessão de um fornecedor cai (buscar levanta em TODO item) → o outro ainda
+    entrega e o lote completa, com ErroBusca registrado (não derruba o pregão)."""
+    from pregoes.scraper import DantasDistribuidora
+    site_ok = _SiteFake([(lambda q: True, [
+        _card("TORNEIRA METAL CROMADA BICA MOVEL 1/2", "DECA", 89.0, "501")])])
+    forn_ok = _fornecedor(monkeypatch, site_ok)         # almeida ok
+    forn_bad = DantasDistribuidora(email="x", senha="y")
+    monkeypatch.setattr(forn_bad, "_buscar_query",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("sessão caiu")))
+    monkeypatch.setattr(forn_bad._rate_limiter, "acquire", lambda: None)
+
+    lote = buscar_precos_para_itens(
+        [_item("TORNEIRA METAL CROMADA BICA MOVEL 1/2")], [forn_ok, forn_bad],
+        usar_llm_judge=False)
+    assert lote.resultados[0], "Almeida (ok) deve entregar resultado"
+    assert any(e.fornecedor == "dantas" for e in lote.erros), "Dantas caiu → ErroBusca"
+
+
+def test_orq_falha_num_item_nao_contamina_o_proximo(banco, monkeypatch):
+    """buscar levanta SÓ no 1º item (descrição específica) → o 2º item ainda é
+    buscado e entregue (resiliência por item, não aborta o lote)."""
+    def site(page, query, conf):
+        if "QUEBRA" in query.upper():
+            raise RuntimeError("falha pontual nesse item")
+        return [ResultadoBusca("PARAFUSO SEXTAVADO 5/16 ZINCADO", "CISER",
+                               0.5, "P1", conf, "almeida")]
+    forn = AlmeidaDistribuidor(email="x", senha="y")
+    monkeypatch.setattr(forn, "_buscar_query", site)
+    monkeypatch.setattr(forn._rate_limiter, "acquire", lambda: None)
+
+    lote = buscar_precos_para_itens(
+        [_item("ITEM QUEBRA", n=1), _item("PARAFUSO SEXTAVADO 5/16", n=2)],
+        [forn], usar_llm_judge=False)
+    assert lote.resultados.get(1), "o 2º item deve ter resultado apesar da falha no 1º"
+    assert any(e.indice_item == 0 for e in lote.erros), "a falha do 1º item virou ErroBusca"

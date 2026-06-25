@@ -597,3 +597,40 @@ def test_gerar_excel_bloqueia_geracao_sem_identidade(app_modulo, tmp_path):
 
 if __name__ == "__main__":  # pragma: no cover
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+# === QA adversarial #4 — falha parcial e identidade vazia ===================
+
+def test_gerar_excel_falha_no_historico_nao_pode_bloquear_download(
+        app_modulo, monkeypatch):
+    """REGRESSÃO de D3 (corrigido 2026-06-25): se salvar o histórico falhar, a
+    planilha JÁ gerada (no disco) NÃO pode ser perdida — _gerar_excel loga, avisa
+    e SEGUE (não propaga). Histórico é best-effort; a entrega é prioridade."""
+    from pregoes.exportador import SelecaoFornecedor
+    app = app_modulo
+    app.st.session_state["orgao"] = "Pref X"
+    app.st.session_state["numero"] = "1/2026"
+    app.st.session_state["pdf_path"] = "x.pdf"
+    itens = _itens_fake(app, 2)
+    selecoes = {0: SelecaoFornecedor(preco=5.0, codigo_fornecedor="A", marca="M")}
+    monkeypatch.setattr(app, "_persistir_edital",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            RuntimeError("DB travado no meio do pregão")))
+    # NÃO pode levantar: a falha de histórico é tratada e o fluxo segue.
+    app._gerar_excel(itens, markup=1.45, selecoes=selecoes)
+    assert list(config.EXPORTS_DIR.glob("*.xlsx")), "planilha gerada deve estar no disco"
+
+
+def test_persistir_edital_identidade_vazia_nao_funde_caracterizacao(
+        app_modulo, tmp_path):
+    """CARACTERIZAÇÃO: sem órgão+número, cada geração cria um edital NOVO (não
+    funde pregões sem identidade — por design). Inalcançável pela UI (o
+    _gerar_excel bloqueia identidade vazia), mas documenta o ramo INSERT-novo."""
+    app = app_modulo
+    dbp = tmp_path / "pregoes.db"
+    app.st.session_state["orgao"] = ""
+    app.st.session_state["numero"] = ""
+    app.st.session_state["pdf_path"] = "x.pdf"
+    app._persistir_edital(_itens_fake(app, 1), {}, Path("a.xlsx"), markup=1.45)
+    app._persistir_edital(_itens_fake(app, 1), {}, Path("b.xlsx"), markup=1.45)
+    assert _contar(dbp, "editais") == 2   # sem identidade → 2 editais (não funde)
