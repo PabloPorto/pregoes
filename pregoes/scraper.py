@@ -409,30 +409,46 @@ def _aplicar_preferencia_pagamento(page, fornecedor: str) -> None:
                 "seguindo no default do site.", fornecedor)
             return
         _select_visivel(page, _SEL_FORMA, pref["forma_value"], pref.get("forma_texto"))
-        _select_visivel(page, _SEL_PRAZO, pref["prazo_value"], pref.get("prazo_texto"))
+        # A forma re-renderiza o <select> de Condição/Prazo via JS (mostra/oculta
+        # e popula) de forma ASSÍNCRONA. Esperamos o re-render ASSENTAR e só então
+        # checamos a visibilidade ATUAL: o prazo só existe para boleto/cartão; PIX
+        # e PAGAMENTO ANTECIPADO o ocultam. Aplicar prazo num select que vai ser
+        # ocultado travava ~60s e voltava preço no default (achado de campo
+        # 2026-06: forma PIX não tem prazo).
+        page.wait_for_timeout(1_200)
+        tem_prazo = bool(pref.get("prazo_value")
+                         and page.locator(f"{_SEL_PRAZO}:visible").count())
+        if tem_prazo:
+            _select_visivel(page, _SEL_PRAZO, pref["prazo_value"], pref.get("prazo_texto"))
         botao = page.get_by_role("button", name="Confirmar")
         if not botao.count():
             botao = page.get_by_text("Confirmar", exact=False)
         botao.first.click(timeout=5_000)
         page.wait_for_timeout(2_500)   # sessão atualiza (PHPSESSID/token)
         _logger.info("Condição de pagamento aplicada (%s): %s | %s", fornecedor,
-                     pref.get("forma_texto"), pref.get("prazo_texto"))
+                     pref.get("forma_texto"),
+                     pref.get("prazo_texto") if tem_prazo else "(forma sem prazo)")
     except Exception as exc:
         _logger.warning(
             "Não consegui aplicar a condição de pagamento em %s (%s) — seguindo "
             "no default do site.", fornecedor, type(exc).__name__)
 
 
-def _select_visivel(page, seletor: str, value: str, texto: str | None) -> None:
+def _select_visivel(page, seletor: str, value: str, texto: str | None,
+                    timeout_ms: int = 4_000) -> None:
     """Seleciona a opção por VALUE no <select> visível; se o value não existir
     mais (lista do site mudou), tenta pelo TEXTO. Levanta se nenhum funcionar
-    (o chamador captura e degrada)."""
+    (o chamador captura e degrada).
+
+    Timeout CURTO por tentativa (~4s) de propósito: um <select> oculto/ausente ou
+    uma opção obsoleta deve degradar rápido, não pendurar a busca por 60s (eram
+    30s por value + 30s por texto). Achado de campo 2026-06."""
     sel = page.locator(f"{seletor}:visible").first
     try:
-        sel.select_option(value=value)
+        sel.select_option(value=value, timeout=timeout_ms)
     except Exception:
         if texto:
-            sel.select_option(label=texto)
+            sel.select_option(label=texto, timeout=timeout_ms)
         else:
             raise
 

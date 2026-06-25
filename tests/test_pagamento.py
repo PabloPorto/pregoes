@@ -64,12 +64,13 @@ def test_opcoes_pagamento_bundladas():
 # --- Aplicação no scraper (modal → seleciona → Confirmar) -------------------
 
 class _FakeLoc:
-    def __init__(self, page, sel):
+    def __init__(self, page, sel, count=1):
         self.page = page
         self.sel = sel
+        self._count = count
 
     def count(self):
-        return 1   # selects/botões "existem e estão visíveis" no fake
+        return self._count   # selects/botões "existem e estão visíveis" no fake
 
     @property
     def first(self):
@@ -78,7 +79,7 @@ class _FakeLoc:
     def nth(self, i):
         return self
 
-    def select_option(self, value=None, label=None):
+    def select_option(self, value=None, label=None, **kw):
         self.page.selects.append((self.sel, value, label))
 
     def click(self, **kw):
@@ -89,15 +90,20 @@ class _FakeLoc:
 
 
 class _FakePage:
-    def __init__(self):
+    def __init__(self, prazo_visivel=True):
         self.selects: list = []
         self.clicks: list = []
         self.gotos: list = []
+        self.prazo_visivel = prazo_visivel
 
     def goto(self, url, **kw):
         self.gotos.append(url)
 
     def locator(self, sel):
+        # O <select> de Condição/Prazo fica OCULTO para formas sem prazo (PIX,
+        # antecipado). O teste simula isso com prazo_visivel=False → count 0.
+        if "id_condicao_pagamento" in sel and ":visible" in sel and not self.prazo_visivel:
+            return _FakeLoc(self, sel, count=0)
         return _FakeLoc(self, sel)
 
     def get_by_text(self, *a, **k):
@@ -120,6 +126,23 @@ def test_aplica_preferencia_seleciona_por_value_e_confirma(monkeypatch):
     assert "PIX2" in valores and "32" in valores, "selecionou Forma e Prazo pelo value"
     assert page.clicks, "clicou em Confirmar"
     assert page.gotos, "navegou para a home do fornecedor"
+
+
+def test_aplica_preferencia_forma_sem_prazo_pula_prazo_e_confirma(monkeypatch):
+    """Regressão de campo (2026-06): a forma PIX NÃO tem <select> de Condição/
+    Prazo (fica oculto após escolher PIX). O código deve PULAR o prazo — não
+    travar tentando aplicá-lo num select oculto — e ainda assim aplicar a forma
+    e clicar em Confirmar. Antes, travava ~60s por value+texto e caía no default
+    do site (voltando preço na condição errada)."""
+    monkeypatch.setattr(scraper.credenciais, "carregar_preferencia_pagamento",
+                        lambda f: {"forma_value": "PIX2", "forma_texto": "PIX",
+                                   "prazo_value": "1", "prazo_texto": "A VISTA"})
+    page = _FakePage(prazo_visivel=False)        # PIX → prazo oculto
+    scraper._aplicar_preferencia_pagamento(page, "almeida")
+    valores = [v for (_sel, v, _lab) in page.selects]
+    assert "PIX2" in valores, "aplicou a forma (PIX)"
+    assert "1" not in valores, "NÃO tentou aplicar o prazo oculto"
+    assert page.clicks, "clicou em Confirmar mesmo sem prazo"
 
 
 def test_aplica_preferencia_sem_config_nao_toca_no_site(monkeypatch):
