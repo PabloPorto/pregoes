@@ -320,6 +320,46 @@ def test_dedup_opcoes_mantem_precos_diferentes():
     assert len(app._dedup_opcoes([p25, p32])) == 2   # produtos distintos ficam
 
 
+# === Escolha fora do corte de exibição SEMPRE aparece (bug do site search 2026-06-27) ===
+
+def _opt(cod, preco, marca="X"):
+    from types import SimpleNamespace as O
+    return O(fornecedor="almeida", codigo_fornecedor=cod, marca=marca, preco=preco)
+
+
+def test_mesma_selecao_casa_por_preco_marca_codigo():
+    o = _opt("9", 5.0, "A")
+    assert app._mesma_selecao(o, _opt("9", 5.0, "A"))
+    assert not app._mesma_selecao(o, _opt("8", 5.0, "A"))   # código diferente
+    assert not app._mesma_selecao(o, _opt("9", 6.0, "A"))   # preço diferente
+    assert not app._mesma_selecao(o, None)
+
+
+def test_opcoes_visiveis_puxa_escolhida_de_fora_do_corte():
+    """A escolha de baixa relevância (fora do top-N) é puxada de volta — senão
+    o destaque some e parece que a seleção não pegou (bug do site search)."""
+    todas = [_opt(str(i), 10.0 + i) for i in range(8)]    # 0..7
+    escolhida = todas[7]                                  # a última, fora do top-3
+    sel = _opt(escolhida.codigo_fornecedor, escolhida.preco, escolhida.marca)
+    vis = app._opcoes_visiveis(todas, 3, sel)
+    assert vis[0] is escolhida                            # entra no topo das visíveis
+    assert any(o.codigo_fornecedor == "0" for o in vis)   # top-N continua lá
+    assert any(app._mesma_selecao(o, sel) for o in vis)   # a escolha aparece
+
+
+def test_opcoes_visiveis_nao_duplica_quando_ja_visivel():
+    todas = [_opt(str(i), 10.0 + i) for i in range(8)]
+    sel = _opt("0", 10.0)                                 # já no top-3
+    vis = app._opcoes_visiveis(todas, 3, sel)
+    assert len(vis) == 3
+    assert sum(1 for o in vis if o.codigo_fornecedor == "0") == 1
+
+
+def test_opcoes_visiveis_sem_selecao_corta_normal():
+    todas = [_opt(str(i), 10.0 + i) for i in range(8)]
+    assert len(app._opcoes_visiveis(todas, 3, None)) == 3
+
+
 # === Sprint P1 / C1 — confirmar antes de descartar o pregão (P1.7) ===
 #
 # Testa a LÓGICA de detecção/limpeza diretamente sobre o session_state falso

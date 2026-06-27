@@ -578,6 +578,45 @@ def test_tela_historico_renderiza_com_pregao_sem_estourar(app_modulo, tmp_path):
     app.tela_historico()   # não deve levantar
 
 
+def test_atualizar_pregao_renomeia_orgao_e_numero(app_modulo, tmp_path):
+    """Editar o nome do pregão (lápis) atualiza órgão/número no banco."""
+    app = app_modulo
+    dbp = tmp_path / "pregoes.db"
+    app.st.session_state["orgao"] = "Velho Órgão"
+    app.st.session_state["numero"] = "00001/2026"
+    app.st.session_state["pdf_path"] = "a.pdf"
+    app._persistir_edital(_itens_fake(app, 1), {}, Path("a.xlsx"), markup=1.45)
+    with db.conectar(dbp) as c:
+        eid = c.execute("SELECT id FROM editais").fetchone()[0]
+
+    app._atualizar_pregao(eid, "Prefeitura Nova", "00099/2026")
+
+    with db.conectar(dbp) as c:
+        row = c.execute("SELECT orgao, numero_pregao FROM editais WHERE id=?",
+                        (eid,)).fetchone()
+    assert row["orgao"] == "Prefeitura Nova"
+    assert row["numero_pregao"] == "00099/2026"
+
+
+def test_atualizar_pregao_vazio_vira_null(app_modulo, tmp_path):
+    """Campos em branco viram NULL (o rótulo cai no neutro, sem linha vazia)."""
+    app = app_modulo
+    dbp = tmp_path / "pregoes.db"
+    app.st.session_state["orgao"] = "X"
+    app.st.session_state["numero"] = "1"
+    app.st.session_state["pdf_path"] = "a.pdf"
+    app._persistir_edital(_itens_fake(app, 1), {}, Path("a.xlsx"), markup=1.45)
+    with db.conectar(dbp) as c:
+        eid = c.execute("SELECT id FROM editais").fetchone()[0]
+
+    app._atualizar_pregao(eid, "   ", "")
+
+    with db.conectar(dbp) as c:
+        row = c.execute("SELECT orgao, numero_pregao FROM editais WHERE id=?",
+                        (eid,)).fetchone()
+    assert row["orgao"] is None and row["numero_pregao"] is None
+
+
 def test_persistir_edital_upsert_normaliza_chave(app_modulo, tmp_path):
     """A chave de match é normalizada (trim + casefold): '00006/2026' digitado
     com espaços/caixa diferente é o MESMO pregão — não cria edital novo."""

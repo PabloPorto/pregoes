@@ -980,27 +980,48 @@ def _excluir_pregao(edital_id: int) -> None:
             pass
 
 
-def _secao_excluir_pregao(edital_id: int) -> None:
-    """Botão 'Excluir pregão' com confirmação em dois passos (evita exclusão
-    acidental de algo irreversível)."""
-    st.divider()
-    chave = f"conf_excl_{edital_id}"
-    if st.session_state.get(chave):
+def _atualizar_pregao(edital_id: int, orgao: str, numero: str) -> None:
+    """Atualiza órgão/número do pregão — o 'nome' que aparece no histórico."""
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE editais SET orgao = ?, numero_pregao = ? WHERE id = ?",
+            ((orgao or "").strip() or None, (numero or "").strip() or None,
+             edital_id))
+
+
+def _forms_pregao(ed) -> None:
+    """Formulário de editar nome + confirmação de excluir, abertos SOB a linha
+    do pregão pelos ícones inline (lápis / lixeira). Os ícones ficam na própria
+    linha do pregão (ver tela_historico) — não é preciso expandir o card."""
+    eid = ed["id"]
+    k_edit, k_del = f"hist_edit_{eid}", f"conf_excl_{eid}"
+    if st.session_state.get(k_edit):
+        with st.form(f"form_edit_{eid}"):
+            st.caption("Editar identificação do pregão")
+            org = st.text_input("Órgão", value=ed["orgao"] or "")
+            num = st.text_input("Número do pregão", value=ed["numero_pregao"] or "")
+            cs, cc = st.columns(2)
+            if cs.form_submit_button("Salvar", type="primary", width="stretch"):
+                _atualizar_pregao(eid, org, num)
+                st.session_state.pop(k_edit, None)
+                st.rerun()
+            if cc.form_submit_button("Cancelar", width="stretch"):
+                st.session_state.pop(k_edit, None)
+                st.rerun()
+
+    if st.session_state.get(k_del):
         style.bloco_aviso(
             "Excluir este pregão e suas planilhas? <b>Não dá para desfazer.</b>",
             tipo="danger")
-        c1, c2 = st.columns(2)
-        if c1.button("Sim, excluir", key=f"excl_sim_{edital_id}",
+        cs, cc = st.columns(2)
+        if cs.button("Sim, excluir", key=f"excl_sim_{eid}",
                      type="primary", width="stretch"):
-            _excluir_pregao(edital_id)
-            st.session_state.pop(chave, None)
+            _excluir_pregao(eid)
+            st.session_state.pop(k_del, None)
             st.rerun()
-        if c2.button("Cancelar", key=f"excl_nao_{edital_id}", width="stretch"):
-            st.session_state.pop(chave, None)
+        if cc.button("Cancelar", key=f"excl_nao_{eid}", width="stretch"):
+            st.session_state.pop(k_del, None)
             st.rerun()
-    elif st.button("Excluir pregão", key=f"excl_{edital_id}", width="stretch"):
-        st.session_state[chave] = True
-        st.rerun()
 
 
 def tela_historico():
@@ -1059,57 +1080,67 @@ def tela_historico():
         rotulo = _rotulo_pregao(ed["orgao"], ed["numero_pregao"],
                                 ed["status"], ed["criado_em"])
         n_planilhas = ed["n_planilhas"] or 0
-        sufixo = (f" · {n_planilhas} planilha"
-                  + ("s" if n_planilhas != 1 else ""))
-        with st.expander(rotulo + sufixo, expanded=False):
-            if n_planilhas == 0:
-                style.bloco_aviso(
-                    "Nenhuma planilha registrada — gere novamente para "
-                    "rebaixar.",
-                    tipo="warning",
-                )
+        # Planilha mais recente (a que o ícone de download baixa, inline).
+        with get_conn() as conn:
+            ultima = conn.execute(
+                """
+                SELECT arquivo, n_itens, n_selecoes
+                FROM exports_log
+                WHERE edital_id = ?
+                ORDER BY criado_em DESC, id DESC
+                LIMIT 1
+                """,
+                (ed["id"],),
+            ).fetchone()
 
-            # Planilhas deste pregão, mais recente no topo (índice cobre isto).
-            with get_conn() as conn:
-                planilhas = conn.execute(
-                    """
-                    SELECT arquivo, n_itens, n_selecoes, criado_em
-                    FROM exports_log
-                    WHERE edital_id = ?
-                    ORDER BY criado_em DESC, id DESC
-                    """,
-                    (ed["id"],),
-                ).fetchall()
-
-            for i, pl in enumerate(planilhas):
-                arquivo = pl["arquivo"]
-                quando = _data_amigavel(pl["criado_em"])
-                st.caption(
-                    f"Gerada em {quando} · {pl['n_itens']} itens · "
-                    f"{pl['n_selecoes']} com preço/marca"
-                )
-                # Reconstrói o caminho AGORA (frozen-aware): nunca confiar num
-                # path absoluto gravado, que quebraria ao mover a pasta portável.
-                caminho = config.EXPORTS_DIR / arquivo
-                if caminho.exists():
-                    with open(caminho, "rb") as f:
-                        st.download_button(
-                            "Baixar planilha",
-                            data=f.read(),
-                            file_name=arquivo,
-                            mime=_MIME_XLSX,
-                            key=f"dl_{ed['id']}_{i}",
-                            width="stretch",
-                        )
+        # Linha do pregão: título + detalhe à esquerda; ícones INLINE à direita
+        # (editar nome, baixar, excluir) — sem precisar expandir o card.
+        with st.container(border=True):
+            c_info, c_edit, c_dl, c_del = st.columns(
+                [12, 1, 1, 1], vertical_alignment="center")
+            with c_info:
+                st.markdown(f"**{rotulo}**")
+                if ultima is not None:
+                    plural = "s" if n_planilhas != 1 else ""
+                    st.caption(
+                        f"{n_planilhas} planilha{plural} · {ultima['n_itens']} "
+                        f"itens · {ultima['n_selecoes']} com preço/marca")
                 else:
-                    style.bloco_aviso(
-                        "Esta planilha não está mais na pasta do programa "
-                        "(pode ter sido movida ou apagada). Gere de novo a "
-                        "partir do pregão.",
-                        tipo="warning",
-                    )
+                    st.caption("Nenhuma planilha registrada — gere de novo a "
+                               "partir do pregão.")
 
-            _secao_excluir_pregao(ed["id"])
+            k_edit = f"hist_edit_{ed['id']}"
+            k_del = f"conf_excl_{ed['id']}"
+            if c_edit.button("", icon=":material/edit:",
+                             key=f"btn_edit_{ed['id']}",
+                             help="Editar nome do pregão"):
+                st.session_state[k_edit] = not st.session_state.get(k_edit, False)
+                st.session_state.pop(k_del, None)
+                st.rerun()
+
+            # Caminho reconstruído AGORA (frozen-aware): nunca confiar num path
+            # absoluto gravado, que quebraria ao mover a pasta portável.
+            caminho = (config.EXPORTS_DIR / ultima["arquivo"]) if ultima else None
+            if caminho is not None and caminho.exists():
+                with open(caminho, "rb") as f:
+                    c_dl.download_button(
+                        "", data=f.read(), file_name=ultima["arquivo"],
+                        mime=_MIME_XLSX, key=f"dl_{ed['id']}",
+                        icon=":material/download:", help="Baixar planilha")
+            else:
+                c_dl.button(
+                    "", icon=":material/download:", disabled=True,
+                    key=f"dlx_{ed['id']}",
+                    help=("Arquivo não está na pasta — gere de novo a partir "
+                          "do pregão." if ultima else "Sem planilha para baixar."))
+
+            if c_del.button("", icon=":material/delete:",
+                            key=f"btn_del_{ed['id']}", help="Excluir pregão"):
+                st.session_state[k_del] = not st.session_state.get(k_del, False)
+                st.session_state.pop(k_edit, None)
+                st.rerun()
+
+            _forms_pregao(ed)
 
 
 # === Tela: CONFIGURAÇÕES ===
@@ -1831,6 +1862,31 @@ def _card_opcao(idx: int, pos: int, opcao, *, badge_html: str,
                 st.rerun()
 
 
+def _mesma_selecao(o, s) -> bool:
+    """True se a opção `o` é a MESMA escolha que a seleção `s` — identidade
+    visível de uma seleção: preço + marca + código do fornecedor. Usado para
+    marcar '✓ escolhido' e para GARANTIR que a escolha do operador apareça no
+    card mesmo quando tem relevância baixa contra a descrição do edital."""
+    return (s is not None and o.preco == s.preco and o.marca == s.marca
+            and o.codigo_fornecedor == s.codigo_fornecedor)
+
+
+def _opcoes_visiveis(opcoes_todas: list, max_exibidas: int, sel_atual) -> list:
+    """As `max_exibidas` opções mais relevantes a mostrar, SEMPRE incluindo a
+    ESCOLHIDA. Uma escolha de baixa relevância (ex.: busca manual no site num
+    edital de outro produto) caía fora do corte e sumia do card — então o
+    destaque voltava pra opção antiga e parecia que "a seleção não pegou"
+    (bug 2026-06-27). Aqui ela é puxada de volta para o topo das visíveis."""
+    opcoes = opcoes_todas[:max_exibidas]
+    if sel_atual is not None and not any(
+            _mesma_selecao(o, sel_atual) for o in opcoes):
+        escolhida = next(
+            (o for o in opcoes_todas if _mesma_selecao(o, sel_atual)), None)
+        if escolhida is not None:
+            opcoes = [escolhida, *opcoes]
+    return opcoes
+
+
 def _dedup_opcoes(opcoes: list) -> list:
     """Remove candidatos DUPLICADOS, preservando a ordem.
 
@@ -2384,9 +2440,13 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
         opcoes_todas = sorted(
             opcoes_todas, key=lambda o: _chave_default(item.descricao, o))
         n_total = len(opcoes_todas)
-        opcoes = opcoes_todas[:config.MAX_OPCOES_EXIBIDAS]
-        n_ocultas = n_total - len(opcoes)
         sel_atual = st.session_state.selecoes.get(idx)
+        # Sempre inclui a opção ESCOLHIDA nas visíveis (mesmo de baixa relevância,
+        # ex.: busca manual no site) — senão o destaque voltava pra antiga e
+        # parecia que a seleção não pegou (bug 2026-06-27, ver _opcoes_visiveis).
+        opcoes = _opcoes_visiveis(opcoes_todas, config.MAX_OPCOES_EXIBIDAS,
+                                  sel_atual)
+        n_ocultas = n_total - len(opcoes)
         nao_usar = idx in st.session_state.setdefault("itens_nao_usar", set())
 
         n_op = len(opcoes)
@@ -2452,9 +2512,7 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
                 preco_min = min(o.preco for o in opcoes_ordenadas)
 
                 def _esta_selecionado(o, s=sel_atual):
-                    return (s is not None and o.preco == s.preco
-                            and o.marca == s.marca
-                            and o.codigo_fornecedor == s.codigo_fornecedor)
+                    return _mesma_selecao(o, s)
 
                 # Badge de uma opção pela sua posição no ranking. "Sua escolha
                 # anterior" (retroalimentação) é o sinal MAIS forte; depois "no
