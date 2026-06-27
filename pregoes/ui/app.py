@@ -2349,32 +2349,51 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
                             and o.marca == s.marca
                             and o.codigo_fornecedor == s.codigo_fornecedor)
 
-                st.caption("Escolha a marca e o preço (sugerimos o melhor match):")
-                if n_ocultas > 0:
-                    st.caption(
-                        f"Mostrando as {len(opcoes)} opções mais relevantes "
-                        f"(+{n_ocultas} ocultas). Precisa de outra marca? Use "
-                        "**Buscar no meu catálogo** abaixo.")
-                for pos, o in enumerate(opcoes_ordenadas):
-                    escolhido = _esta_selecionado(o)
-                    # "Sua escolha anterior" (retroalimentação) é o sinal MAIS
-                    # forte — o próprio operador já resolveu este item antes.
-                    # Depois "Já no seu catálogo" (produto que ele compra, casado
-                    # pelo código do fornecedor).
+                # Badge de uma opção pela sua posição no ranking. "Sua escolha
+                # anterior" (retroalimentação) é o sinal MAIS forte; depois "no
+                # seu catálogo"; depois melhor match / mais barato.
+                def _badge_de(pos, o):
                     if getattr(o, "veio_por_aprendizado", False):
-                        badge_html = style.pill("✓ sua escolha anterior", "aprendido")
-                    elif getattr(o, "no_catalogo", False):
-                        badge_html = style.pill("✓ no seu catálogo", "catalogo")
-                    elif pos == 0:
-                        badge_html = style.pill("Melhor match", "match")
-                    elif o.preco == preco_min:
-                        badge_html = style.pill("Mais barato", "barato")
-                    else:
-                        badge_html = ""
-                    _card_opcao(
-                        idx, pos, o, badge_html=badge_html, escolhido=escolhido,
-                        on_escolher=lambda o=o: _escolher_opcao(idx, o),
-                    )
+                        return style.pill("✓ sua escolha anterior", "aprendido")
+                    if getattr(o, "no_catalogo", False):
+                        return style.pill("✓ no seu catálogo", "catalogo")
+                    if pos == 0:
+                        return style.pill("Melhor match", "match")
+                    if o.preco == preco_min:
+                        return style.pill("Mais barato", "barato")
+                    return ""
+
+                # Divulgação progressiva (redesign 2026-06): uma decisão óbvia por
+                # vez. A opção em DESTAQUE é a já escolhida (se houver) ou o melhor
+                # match; as demais ficam a UM clique, recolhidas. Toda a lógica de
+                # seleção/badge é a mesma — só muda a apresentação.
+                idx_destaque = next(
+                    (p for p, o in enumerate(opcoes_ordenadas)
+                     if _esta_selecionado(o)), 0)
+                o_dest = opcoes_ordenadas[idx_destaque]
+                st.caption("Sugerimos a melhor opção — confira e confirme:")
+                _card_opcao(
+                    idx, idx_destaque, o_dest,
+                    badge_html=_badge_de(idx_destaque, o_dest),
+                    escolhido=_esta_selecionado(o_dest),
+                    on_escolher=lambda o=o_dest: _escolher_opcao(idx, o),
+                )
+
+                outras = [(p, o) for p, o in enumerate(opcoes_ordenadas)
+                          if p != idx_destaque]
+                if outras:
+                    n = len(outras)
+                    rotulo = ("Ver outra opção de marca" if n == 1
+                              else f"Ver outras {n} opções de marca")
+                    if n_ocultas > 0:
+                        rotulo += f"  (+{n_ocultas} menos relevantes)"
+                    with st.expander(rotulo, expanded=False):
+                        for p, o in outras:
+                            _card_opcao(
+                                idx, p, o, badge_html=_badge_de(p, o),
+                                escolhido=_esta_selecionado(o),
+                                on_escolher=lambda o=o: _escolher_opcao(idx, o),
+                            )
 
             # Rede de segurança: buscar no catálogo interno do cliente — SEMPRE
             # disponível, inclusive quando não houve resultado nos fornecedores
