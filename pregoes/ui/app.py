@@ -1214,9 +1214,8 @@ def tela_configuracoes():
 def tela_busca_precos():
     style.stepper(PASSOS_FLUXO, 2)
     style.header_pagina(
-        "Busca de preços nos fornecedores",
-        "Consulta cada item nos fornecedores configurados e lista as marcas "
-        "disponíveis. Você escolhe qual marca entra na planilha.",
+        "Busca de preços",
+        "Escolha a marca e o preço de cada item.",
     )
 
     itens = st.session_state.get("itens_revisados") or []
@@ -1606,8 +1605,7 @@ def _mostrar_condicao_pagamento(fornecedores: list) -> None:
         else:
             falta.append(nome.capitalize())
     if configuradas:
-        st.caption("💳 Preços para a condição de pagamento → "
-                   + "   |   ".join(configuradas))
+        st.caption("Condição de pagamento — " + "  ·  ".join(configuradas))
     if falta:
         style.bloco_aviso(
             "Sem condição de pagamento configurada para <b>" + ", ".join(falta) +
@@ -1957,7 +1955,14 @@ def _buscar_no_catalogo(catalogo: list, consulta: str, limite: int = 6) -> list:
     return [por_id[pid] for _, _, pid in r]
 
 
-def _busca_catalogo_item(idx: int, item) -> None:
+def _secao_busca(dentro: bool, titulo: str):
+    """Seção de busca manual: um expander próprio quando isolada, ou só o
+    conteúdo (sem expander) quando embutida em 'Procurar de outro jeito'."""
+    import contextlib
+    return contextlib.nullcontext() if dentro else st.expander(titulo)
+
+
+def _busca_catalogo_item(idx: int, item, dentro: bool = False) -> None:
     """Busca MANUAL no catálogo interno do cliente, por item (rede de segurança
     quando a busca automática nos fornecedores não satisfaz — pedido do cliente).
 
@@ -1967,7 +1972,9 @@ def _busca_catalogo_item(idx: int, item) -> None:
     O preço da opção é cotado AO VIVO ao usar — ver _usar_do_catalogo.
     """
     catalogo = _carregar_catalogo_sessao()
-    with st.expander("🔍 Buscar no meu catálogo (produtos que já tenho)"):
+    with _secao_busca(dentro, "Buscar no meu catálogo (produtos que já tenho)"):
+        if dentro:
+            st.markdown("**No meu catálogo** · produtos que você já tem")
         if not catalogo:
             st.caption("Catálogo interno vazio — importe suas planilhas "
                        "históricas em Configurações para usar esta busca.")
@@ -2071,7 +2078,7 @@ def _usar_do_catalogo(idx: int, produto, forn: str, codigo: str) -> None:
     st.rerun()
 
 
-def _busca_site_item(idx: int, item) -> None:
+def _busca_site_item(idx: int, item, dentro: bool = False) -> None:
     """Busca MANUAL ao vivo no site dos fornecedores, por nome OU código
     (rede de segurança final — pedido do cliente 2026-06). Quando nem a busca
     automática nem o catálogo trazem o esperado, o operador digita o termo,
@@ -2082,7 +2089,9 @@ def _busca_site_item(idx: int, item) -> None:
         nome for nome in ("almeida", "dantas")
         if credenciais.carregar(nome) is not None
     ]
-    with st.expander("🌐 Buscar direto no site do fornecedor (nome ou código)"):
+    with _secao_busca(dentro, "Buscar direto no site do fornecedor (nome ou código)"):
+        if dentro:
+            st.markdown("**No site do fornecedor** · busca ao vivo, por nome ou código")
         if not fornecedores:
             st.caption("Configure as credenciais dos fornecedores em "
                        "Configurações para buscar direto no site.")
@@ -2232,7 +2241,7 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
     # Não bloqueia o fluxo: o operador pode prosseguir com o que deu certo.
     erros_busca = st.session_state.get("erros_busca") or []
     if erros_busca:
-        with st.expander(f"⚠️ Ver erros técnicos ({len(erros_busca)})"):
+        with st.expander(f"Ver erros técnicos ({len(erros_busca)})"):
             st.caption(
                 "Erros isolados durante a busca — esses itens ficaram sem "
                 "preço pelo fornecedor que falhou. Verifique se o site mudou "
@@ -2318,9 +2327,8 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
             # edital, sem capitalização nem corte) para julgar os candidatos.
             st.markdown(
                 "<div style='background:#f8fafc;border:1px solid #e2e8f0;"
-                "border-left:3px solid #1E40AF;border-radius:8px;"
-                "padding:0.6rem 0.85rem;margin-bottom:0.75rem;font-size:0.9rem;"
-                "color:#334155;line-height:1.5'>"
+                "border-radius:8px;padding:0.55rem 0.8rem;margin-bottom:0.75rem;"
+                "font-size:0.82rem;color:#64748b;line-height:1.5'>"
                 f"{html.escape(item.descricao or '')}</div>",
                 unsafe_allow_html=True,
             )
@@ -2395,15 +2403,13 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
                                 on_escolher=lambda o=o: _escolher_opcao(idx, o),
                             )
 
-            # Rede de segurança: buscar no catálogo interno do cliente — SEMPRE
-            # disponível, inclusive quando não houve resultado nos fornecedores
-            # (pedido do cliente 2026-06).
-            _busca_catalogo_item(idx, item)
-
-            # Rede de segurança final: buscar AO VIVO direto no site (nome ou
-            # código), escolhendo o fornecedor — quando nem a busca automática
-            # nem o catálogo trazem o esperado (pedido do cliente 2026-06).
-            _busca_site_item(idx, item)
+            # Rede de segurança CONSOLIDADA (redesign 2026-06): em vez de dois
+            # cards separados (catálogo + site), UMA seção discreta que reúne as
+            # duas buscas manuais — reduz a poluição da tela.
+            with st.expander("Não é essa? Procurar de outro jeito"):
+                _busca_catalogo_item(idx, item, dentro=True)
+                st.divider()
+                _busca_site_item(idx, item, dentro=True)
 
             # Opção de não usar este item
             sem_sel = sel_atual is None
