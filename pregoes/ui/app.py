@@ -1859,17 +1859,16 @@ def _painel_markup(selecoes: dict, itens: list) -> tuple[dict, set]:
         ncms, m_st, m_normal, overrides)
 
     st.caption(
-        f":green[{resumo['normal']} normais]  ·  "
-        f":blue[{resumo['st']} com Substituição Tributária]  ·  "
-        f":orange[{resumo['sem_ncm']} sem NCM identificado]")
+        f"{resumo['normal']} normais  ·  {resumo['st']} com Substituição "
+        f"Tributária  ·  {resumo['sem_ncm']} sem NCM")
 
     # O NCM mora na página de detalhe do fornecedor (não no card). Este botão
     # visita os produtos ESCOLHIDOS sem NCM e os classifica (cache por pregão).
     fetchaveis = [off for off in sem_ncm if getattr(selecoes.get(off), "url", None)]
     if fetchaveis:
         if st.button(
-                f"Identificar NCM de {len(fetchaveis)} item(ns) e classificar "
-                "Substituição Tributária", key="btn_ncm"):
+                f"Identificar NCM e classificar ({len(fetchaveis)} itens)",
+                key="btn_ncm"):
             _identificar_ncm(selecoes, fetchaveis)
             st.rerun()
 
@@ -2391,8 +2390,8 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
                           if p != idx_destaque]
                 if outras:
                     n = len(outras)
-                    rotulo = ("Ver outra opção de marca" if n == 1
-                              else f"Ver outras {n} opções de marca")
+                    rotulo = ("Ver outra opção" if n == 1
+                              else f"Ver outras {n} opções")
                     if n_ocultas > 0:
                         rotulo += f"  (+{n_ocultas} menos relevantes)"
                     with st.expander(rotulo, expanded=False):
