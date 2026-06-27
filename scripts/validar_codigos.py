@@ -11,18 +11,19 @@ Para cada item (código, descrição) das planilhas:
       DIFERENTE  — o código existe, mas é OUTRO produto (descrição não bate).
       NAO_EXISTE — o código não foi encontrado em nenhum fornecedor.
 
-SESSÃO ROBUSTA (achado de campo 2026-06-27): mantém UMA sessão logada por
-fornecedor e faz RE-LOGIN PERIÓDICO no MESMO navegador (não reinicia o Playwright
-— evita o bug de asyncio do sync API) + re-login ao detectar uma sequência de
-buscas vazias. Sem isso, a sessão DEGRADA ao longo de centenas de buscas e
-buscas vazias viram "não existe" FALSO.
+SEM LOGIN (achado de campo 2026-06-27): a busca `/busca?s={codigo}` mostra
+código, NOME e MARCA do produto SEM autenticar — só o PREÇO exige login. Como a
+validação só precisa de EXISTÊNCIA + DESCRIÇÃO, não logamos. Isso elimina o
+throttle de login, o re-login periódico e a degradação de sessão de auth que
+tornavam a abordagem anterior frágil (e davam "não existe" FALSO). O preço fica
+de fora (o sistema o busca ao vivo por código quando precisa).
 
 "Mesmo produto?" é decidido pelo Gemini (Camada 3), com fallback fuzzy.
 
 Uso:
     python scripts/validar_codigos.py "<dir>" [--limite N] [--saida DIR]
     python scripts/validar_codigos.py "<dir>" --recheck <relatorio.xlsx>
-        (re-valida SÓ os NAO_EXISTE do relatório, com a sessão robusta, e mescla)
+        (re-valida SÓ os NAO_EXISTE de um relatório e mescla com os já achados)
 """
 from __future__ import annotations
 
@@ -30,8 +31,11 @@ import argparse
 import glob
 import json
 import os
+import re
 import sys
 import time
+import urllib.parse
+import urllib.request
 from collections import Counter
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -44,15 +48,9 @@ from pregoes.importador import detectar_colunas, _parse_codigo
 from pregoes.normalizador import normalizar_descricao
 
 THRESHOLD_MATCH = 60          # fuzzy mínimo p/ "bate" (fallback do Gemini)
-RELOGAR_A_CADA = 120          # re-login periódico (refresca a sessão); poucos
-                              # logins de propósito — a conta faz throttle de
-                              # NOVOS logins, então o re-login é raro e o
-                              # detector de sequência-de-vazios cobre o resto.
-STREAK_VAZIO_RELOGIN = 8      # N vazios seguidos → re-login (sessão suspeita)
-# Pausa EXTRA entre buscas (além do rate-limiter de 2/s) — o run de ~1000 buscas
-# em 30 min limitou a conta no site (2026-06-27). Mais gentil = ~1 req/s, o site
-# tem tempo de respirar e não throttla. Rode o recheck só com a conta descansada.
-PAUSA_ENTRE_BUSCAS = 0.5
+# Pausa EXTRA entre buscas (além do rate-limiter) — gentil com o site (~1 req/s).
+# Sem login não há throttle de conta, mas mantemos o ritmo educado por IP.
+PAUSA_ENTRE_BUSCAS = 0.4
 
 
 # ----------------------------------------------------------------- Gemini ---
@@ -98,95 +96,50 @@ def _mesmo_produto(desc_plan, desc_site, marca_site):
         return None
 
 
-# --------------------------------------------------- sessão robusta por forn ---
-class _Sessao:
-    """Uma sessão logada, com re-login periódico no MESMO navegador."""
+# ------------------------------------------------- busca por código via HTTP ---
+# Os cards da busca `/busca?s={codigo}` são SERVER-RENDERED no HTML (sem XHR),
+# e aparecem SEM login (só o data-preco vem 0.00 deslogado). Então um GET cru +
+# parse do HTML resolve EXISTÊNCIA + NOME + MARCA: sem navegador, sem login, sem
+# throttle, e o MISS é instantâneo (0 cards) — nada de teto de espera por card.
+_BASE_URL = {"almeida": scraper._BASE_URL_ALMEIDA,
+             "dantas": scraper._BASE_URL_DANTAS}
+_RE_TAG_CARD = re.compile(r'<[^>]*\bdata-codigo-produto="[^"]*"[^>]*>')
+_RE_DATA_ATTR = re.compile(r'(data-[\w-]+)="([^"]*)"')
 
-    def __init__(self, fornecedor: str):
-        self.fornecedor = fornecedor
-        cred = credenciais.carregar(fornecedor)
-        if not cred:
-            raise RuntimeError(f"Sem credencial para {fornecedor}")
-        cls = {"almeida": scraper.AlmeidaDistribuidor,
-               "dantas": scraper.DantasDistribuidora}[fornecedor]
-        self.forn = cls(cred["email"], cred["senha"])
-        self.forn.__enter__()   # login inicial
-        self.n = 0
-        self.streak_vazio = 0
 
-    def _relogar(self):
-        # Logado, /entrar redireciona e não mostra o form. LIMPA os cookies
-        # (força logout) e loga de novo — sessão FRESCA, no mesmo navegador (sem
-        # reiniciar o Playwright → sem o bug de asyncio).
+def _buscar_codigo_http(codigo: str, fornecedor: str) -> list[dict]:
+    """GET na busca e extrai os cards (codigo/nome/marca) do HTML. 1 retry p/
+    descartar glitch de rede (vazio real volta vazio nos dois)."""
+    url = f"{_BASE_URL[fornecedor]}/busca?s={urllib.parse.quote_plus(str(codigo))}"
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    html = ""
+    for tentativa in (1, 2):
         try:
-            self.forn._context.clear_cookies()
-            self.forn._login(self.forn._page)
-            self.forn._page.wait_for_timeout(1500)   # deixa o redirect pós-login assentar
-            self.streak_vazio = 0
+            time.sleep(PAUSA_ENTRE_BUSCAS)   # educado com o site
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                html = resp.read().decode("utf-8", "ignore")
+            break
         except Exception:
-            pass
-
-    def buscar(self, codigo: str):
-        if self.n and self.n % RELOGAR_A_CADA == 0:
-            self._relogar()
-        elif self.streak_vazio >= STREAK_VAZIO_RELOGIN:
-            self._relogar()
-        self.n += 1
-        try:
-            self.forn._rate_limiter.acquire()
-            time.sleep(PAUSA_ENTRE_BUSCAS)   # gentil com o site (evita throttle)
-            res = self.forn._buscar_query(self.forn._page, str(codigo), "variacao")
-        except Exception:
-            self._relogar()   # sessão caiu → tenta refrescar e re-buscar 1x
-            try:
-                res = self.forn._buscar_query(self.forn._page, str(codigo), "variacao")
-            except Exception:
+            if tentativa == 2:
                 return []
-        self.streak_vazio = self.streak_vazio + 1 if not res else 0
-        return res
-
-    def fechar(self):
-        try:
-            self.forn.__exit__(None, None, None)
-        except Exception:
-            pass
-
-
-_POOL: dict = {}
-
-
-def _sessao(fornecedor: str) -> _Sessao:
-    if fornecedor not in _POOL:
-        _POOL[fornecedor] = _Sessao(fornecedor)
-    return _POOL[fornecedor]
-
-
-def _fechar_pool():
-    for s in _POOL.values():
-        s.fechar()
-    _POOL.clear()
-
-
-def _preaquecer_sessoes(fornecedores=("almeida", "dantas")) -> None:
-    """Abre as sessões do Playwright ANTES de qualquer load_workbook (openpyxl).
-
-    Na combinação 'imports do pregoes + openpyxl', abrir o openpyxl antes do
-    PRIMEIRO sync_playwright().start() às vezes deixa o ambiente asyncio num
-    estado que faz o Playwright recusar ('sync API inside the asyncio loop').
-    Estabelecer o Playwright primeiro evita o problema de forma robusta — uma
-    vez aberta, a sessão é reusada (o re-login periódico não chama start() de
-    novo). Falha de login aqui aborta cedo, com mensagem clara."""
-    for f in fornecedores:
-        _sessao(f)
+            time.sleep(1.0)
+    cards = []
+    for tag in _RE_TAG_CARD.findall(html):
+        a = dict(_RE_DATA_ATTR.findall(tag))
+        cod = (a.get("data-codigo-produto") or "").strip()
+        if cod:
+            cards.append({"codigo": cod,
+                          "nome": (a.get("data-nome") or "").strip(),
+                          "marca": (a.get("data-marca") or "").strip()})
+    return cards
 
 
 def _achar_no_site(codigo: str, fornecedor: str):
-    """Card cujo código BATE EXATAMENTE, ou None."""
-    res = _sessao(fornecedor).buscar(codigo)
+    """Card cujo código BATE EXATAMENTE com o buscado, ou None."""
     alvo = str(codigo).strip()
-    for r in (res or []):
-        if str(r.codigo_fornecedor).strip() == alvo:
-            return r
+    for c in _buscar_codigo_http(codigo, fornecedor):
+        if c["codigo"].strip() == alvo:
+            return c
     return None
 
 
@@ -234,12 +187,14 @@ def _validar_item(it: dict) -> dict:
     forn, r = encontrado
     score = fuzz.token_sort_ratio(
         normalizar_descricao(it["descricao"]),
-        normalizar_descricao(r.descricao_encontrada or ""))
-    mesmo = _mesmo_produto(it["descricao"], r.descricao_encontrada or "", r.marca)
+        normalizar_descricao(r["nome"]))
+    mesmo = _mesmo_produto(it["descricao"], r["nome"], r["marca"])
     ok = (mesmo if mesmo is not None else score >= THRESHOLD_MATCH)
+    # Sem login não há preço (vem 0.00) — fica de fora; o sistema busca o preço
+    # ao vivo por código quando precisa. O que vale aqui é existência+descrição.
     base.update(status="OK" if ok else "DIFERENTE", fornecedor=forn, score=score,
-                desc_site=r.descricao_encontrada, marca_site=r.marca,
-                preco_site=r.preco, codigo_site=r.codigo_fornecedor)
+                desc_site=r["nome"], marca_site=r["marca"],
+                preco_site=None, codigo_site=r["codigo"])
     return base
 
 
@@ -310,7 +265,6 @@ def main() -> None:
     os.makedirs(args.saida, exist_ok=True)
 
     if args.recheck:
-        _preaquecer_sessoes()   # Playwright ANTES do openpyxl (ver docstring)
         previos = _carregar_relatorio(args.recheck)
         por_chave = {(p["codigo"], p["forn_sufixo"] or ""): p for p in previos}
         a_rever = [p for p in previos if p["status"] == "NAO_EXISTE"]
@@ -338,11 +292,9 @@ def main() -> None:
                 print(f"  {i}/{len(a_rever)}  ({taxa:.1f}s/item, "
                       f"~{(len(a_rever)-i)*taxa/60:.0f}min) · RECUPERADOS até agora: {achou}",
                       flush=True)
-        _fechar_pool()
         _gravar_saidas(list(por_chave.values()), args.saida)
         return
 
-    _preaquecer_sessoes()   # Playwright ANTES do openpyxl (ver docstring)
     itens = _extrair_itens(args.diretorio)
     if args.limite:
         itens = itens[:args.limite]
@@ -363,7 +315,6 @@ def main() -> None:
             json.dump(resultados, open(ckpt, "w", encoding="utf-8"), ensure_ascii=False)
             dt = time.time() - t0; novos = i - len(feitos); taxa = dt / max(novos, 1)
             print(f"  {i}/{total}  ({taxa:.1f}s/item, ~{(total-i)*taxa/60:.0f}min)", flush=True)
-    _fechar_pool()
     _gravar_saidas(resultados, args.saida)
 
 
