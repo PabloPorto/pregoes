@@ -494,6 +494,23 @@ def _carregar_busca(page, url: str) -> None:
         pass   # nenhum card no prazo → sem resultado (evaluate devolve [])
 
 
+def _sem_duplicatas(resultados: list["ResultadoBusca"]) -> list["ResultadoBusca"]:
+    """Remove cards REPETIDOS que o site às vezes devolve na mesma busca (o
+    mesmo produto aparece em destaque + na listagem — achado de campo 2026-06-27).
+    Chave: código do fornecedor (único por produto); sem código, cai para
+    (descrição, marca, preço). Mantém a 1ª ocorrência, preservando a ordem."""
+    vistos: set = set()
+    out: list = []
+    for r in resultados:
+        chave = (r.codigo_fornecedor or "").strip() or (
+            r.descricao_encontrada, r.marca, r.preco)
+        if chave in vistos:
+            continue
+        vistos.add(chave)
+        out.append(r)
+    return out
+
+
 class AlmeidaDistribuidor:
     """
     Scraper de almeidadistribuidor.com.br.
@@ -726,7 +743,7 @@ class AlmeidaDistribuidor:
             r = _parse_card_attributes(attrs, confianca)
             if r is not None:
                 out.append(r)
-        return out
+        return _sem_duplicatas(out)
 
 
 # === Dantas ===
@@ -964,7 +981,7 @@ class DantasDistribuidora:
             r = _parse_card_dantas(attrs, confianca)
             if r is not None:
                 out.append(r)
-        return out
+        return _sem_duplicatas(out)
 
 
 # === Orquestrador em lote ===

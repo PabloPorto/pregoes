@@ -354,3 +354,22 @@ def test_carregar_busca_miss_nao_levanta():
             raise TimeoutError("nenhum card no prazo")
 
     scraper._carregar_busca(_Pg(), "https://x/busca?s=zzz")   # não pode levantar
+
+
+# === _sem_duplicatas: site às vezes devolve o mesmo card 2x (campo 2026-06-27) ===
+
+def test_sem_duplicatas_remove_card_repetido_por_codigo():
+    from pregoes.scraper import _sem_duplicatas, ResultadoBusca
+    def r(cod, p):
+        return ResultadoBusca("PLUZIE INTERRUPTOR 10A", "PLUZIE", p, cod,
+                              "variacao", "almeida")
+    out = _sem_duplicatas([r("38808", 3.40), r("38808", 3.40), r("99999", 5.0)])
+    assert [x.codigo_fornecedor for x in out] == ["38808", "99999"]  # dedup + ordem
+
+
+def test_sem_duplicatas_sem_codigo_cai_para_desc_marca_preco():
+    from pregoes.scraper import _sem_duplicatas, ResultadoBusca
+    def r(d, p):
+        return ResultadoBusca(d, "X", p, "", "variacao", "almeida")
+    out = _sem_duplicatas([r("CANO PVC", 2.0), r("CANO PVC", 2.0), r("CANO PVC", 9.0)])
+    assert len(out) == 2   # os dois idênticos colapsam; o de preço diferente fica
