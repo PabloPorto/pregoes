@@ -169,6 +169,10 @@ CHAVES_PREGAO = ("extracao", "df_editavel", "resultados_busca",
                  "usando_tabelas_docling", "mapeamento_tabela_idx",
                  "markup_overrides", "pregao_gerado_hash")
 
+# Passos do fluxo principal — alimentam o stepper de progresso no topo das telas
+# do fluxo (redesign UX 2026-06). "Planilha" é o passo-meta (concluído ao gerar).
+PASSOS_FLUXO = ["Edital", "Itens", "Preços", "Planilha"]
+
 
 def _limpar_pregao() -> None:
     """Descarta o estado do pregão atual da sessão."""
@@ -365,6 +369,7 @@ def _tentar_mapa_aprendido(resultado, conn, arquivo: str):
 
 # === Tela: UPLOAD ===
 def tela_upload():
+    style.stepper(PASSOS_FLUXO, 0)
     style.header_pagina(
         "Novo pregão",
         "Envie o PDF do edital para extração automática dos itens.",
@@ -438,6 +443,7 @@ def tela_revisao():
         ir_para("home")
         return
 
+    style.stepper(PASSOS_FLUXO, 1)
     style.header_pagina(
         "Revisão dos itens extraídos",
         "Confira o que foi lido do PDF, edite o que precisar e marque o que entra na planilha.",
@@ -1206,6 +1212,7 @@ def tela_configuracoes():
 
 # === Tela: BUSCA DE PREÇOS ===
 def tela_busca_precos():
+    style.stepper(PASSOS_FLUXO, 2)
     style.header_pagina(
         "Busca de preços nos fornecedores",
         "Consulta cada item nos fornecedores configurados e lista as marcas "

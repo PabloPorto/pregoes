@@ -441,6 +441,24 @@ div[class*="st-key-ppoptsel-"] {{
 .pp-pill--catalogo {{ background: #EDE9FE; color: #6D28A9; }}
 /* Âmbar/dourado: "memória" do sistema — a escolha que o operador já ensinou. */
 .pp-pill--aprendido {{ background: #FEF3C7; color: #92400E; }}
+
+/* Stepper — progresso do fluxo (Passo X de Y) no topo das telas. */
+.pp-stepper {{ display: flex; align-items: center; margin: 0.25rem 0 1.75rem; }}
+.pp-step {{ display: flex; flex-direction: column; align-items: center; gap: 6px; }}
+.pp-step-circle {{
+    width: 30px; height: 30px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.9rem; font-weight: 600;
+}}
+.pp-step-label {{ font-size: 0.78rem; white-space: nowrap; }}
+.pp-step--done .pp-step-circle {{ background: {PALETA['success_bg']}; color: {PALETA['success']}; }}
+.pp-step--done .pp-step-label {{ color: {PALETA['text_secondary']}; }}
+.pp-step--ativo .pp-step-circle {{ background: {PALETA['primary']}; color: #fff; box-shadow: 0 0 0 4px {PALETA['primary_light']}; }}
+.pp-step--ativo .pp-step-label {{ color: {PALETA['primary']}; font-weight: 600; }}
+.pp-step--pendente .pp-step-circle {{ background: {PALETA['bg']}; color: {PALETA['text_muted']}; border: 1px solid {PALETA['border']}; }}
+.pp-step--pendente .pp-step-label {{ color: {PALETA['text_muted']}; }}
+.pp-step-conector {{ flex: 1; height: 2px; background: {PALETA['border']}; margin: 0 6px 1.5rem; }}
+.pp-step-conector--done {{ flex: 1; height: 2px; background: {PALETA['success']}; margin: 0 6px 1.5rem; }}
 </style>
 """
 
@@ -459,6 +477,32 @@ def header_pagina(titulo: str, subtitulo: str | None = None) -> None:
         f'<div class="pp-header"><h1>{titulo}</h1>{sub}</div>',
         unsafe_allow_html=True,
     )
+
+
+def stepper(passos: list[str], atual: int) -> None:
+    """Indicador de progresso do fluxo ("Passo X de Y") no topo das telas.
+
+    Responde à pergunta nº1 do usuário leigo — "onde estou?". ``atual`` é o
+    índice 0-based do passo corrente: passos < atual saem como concluídos (✓),
+    o atual destacado, os demais pendentes. Só apresentação — não navega."""
+    partes: list[str] = []
+    for i, nome in enumerate(passos):
+        if i < atual:
+            estado, miolo = "done", "✓"
+        elif i == atual:
+            estado, miolo = "ativo", str(i + 1)
+        else:
+            estado, miolo = "pendente", str(i + 1)
+        partes.append(
+            f'<div class="pp-step pp-step--{estado}">'
+            f'<span class="pp-step-circle">{miolo}</span>'
+            f'<span class="pp-step-label">{nome}</span></div>'
+        )
+        if i < len(passos) - 1:
+            cls = "pp-step-conector--done" if i < atual else "pp-step-conector"
+            partes.append(f'<span class="{cls}"></span>')
+    st.markdown(f'<div class="pp-stepper">{"".join(partes)}</div>',
+                unsafe_allow_html=True)
 
 
 def badge(texto: str, tipo: TipoBadge = "neutro") -> str:
