@@ -44,7 +44,10 @@ from pregoes.importador import detectar_colunas, _parse_codigo
 from pregoes.normalizador import normalizar_descricao
 
 THRESHOLD_MATCH = 60          # fuzzy mínimo p/ "bate" (fallback do Gemini)
-RELOGAR_A_CADA = 60           # re-login periódico (refresca a sessão)
+RELOGAR_A_CADA = 120          # re-login periódico (refresca a sessão); poucos
+                              # logins de propósito — a conta faz throttle de
+                              # NOVOS logins, então o re-login é raro e o
+                              # detector de sequência-de-vazios cobre o resto.
 STREAK_VAZIO_RELOGIN = 8      # N vazios seguidos → re-login (sessão suspeita)
 # Pausa EXTRA entre buscas (além do rate-limiter de 2/s) — o run de ~1000 buscas
 # em 30 min limitou a conta no site (2026-06-27). Mais gentil = ~1 req/s, o site
@@ -162,6 +165,19 @@ def _fechar_pool():
     for s in _POOL.values():
         s.fechar()
     _POOL.clear()
+
+
+def _preaquecer_sessoes(fornecedores=("almeida", "dantas")) -> None:
+    """Abre as sessões do Playwright ANTES de qualquer load_workbook (openpyxl).
+
+    Na combinação 'imports do pregoes + openpyxl', abrir o openpyxl antes do
+    PRIMEIRO sync_playwright().start() às vezes deixa o ambiente asyncio num
+    estado que faz o Playwright recusar ('sync API inside the asyncio loop').
+    Estabelecer o Playwright primeiro evita o problema de forma robusta — uma
+    vez aberta, a sessão é reusada (o re-login periódico não chama start() de
+    novo). Falha de login aqui aborta cedo, com mensagem clara."""
+    for f in fornecedores:
+        _sessao(f)
 
 
 def _achar_no_site(codigo: str, fornecedor: str):
@@ -294,6 +310,7 @@ def main() -> None:
     os.makedirs(args.saida, exist_ok=True)
 
     if args.recheck:
+        _preaquecer_sessoes()   # Playwright ANTES do openpyxl (ver docstring)
         previos = _carregar_relatorio(args.recheck)
         por_chave = {(p["codigo"], p["forn_sufixo"] or ""): p for p in previos}
         a_rever = [p for p in previos if p["status"] == "NAO_EXISTE"]
@@ -325,6 +342,7 @@ def main() -> None:
         _gravar_saidas(list(por_chave.values()), args.saida)
         return
 
+    _preaquecer_sessoes()   # Playwright ANTES do openpyxl (ver docstring)
     itens = _extrair_itens(args.diretorio)
     if args.limite:
         itens = itens[:args.limite]
