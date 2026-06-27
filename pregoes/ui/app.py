@@ -183,7 +183,7 @@ def ir_para(tela: str):
 # em silêncio (auditoria 2026-06, achado alto nº 6).
 CHAVES_PREGAO = ("extracao", "df_editavel", "resultados_busca",
                  "selecoes", "pagina_busca", "itens_revisados",
-                 "itens_edital", "mapa_busca_edital",
+                 "itens_edital", "mapa_busca_edital", "itens_nao_usar",
                  "usando_tabelas_docling", "mapeamento_tabela_idx",
                  "markup_overrides", "pregao_gerado_hash")
 
@@ -961,6 +961,43 @@ def _rotulo_pregao(orgao: str | None, numero: str | None, status: str | None,
     return f"{cabeca} — {rotulo_status} em {quando}"
 
 
+def _excluir_pregao(edital_id: int) -> None:
+    """Exclui um pregão: apaga os .xlsx gerados + o registro do banco (ON DELETE
+    CASCADE remove os itens e o histórico de planilhas)."""
+    with get_conn() as conn:
+        arquivos = [r["arquivo"] for r in conn.execute(
+            "SELECT arquivo FROM exports_log WHERE edital_id = ?", (edital_id,))]
+        conn.execute("DELETE FROM editais WHERE id = ?", (edital_id,))
+    for arq in arquivos:
+        try:
+            (config.EXPORTS_DIR / arq).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+def _secao_excluir_pregao(edital_id: int) -> None:
+    """Botão 'Excluir pregão' com confirmação em dois passos (evita exclusão
+    acidental de algo irreversível)."""
+    st.divider()
+    chave = f"conf_excl_{edital_id}"
+    if st.session_state.get(chave):
+        style.bloco_aviso(
+            "Excluir este pregão e suas planilhas? <b>Não dá para desfazer.</b>",
+            tipo="danger")
+        c1, c2 = st.columns(2)
+        if c1.button("Sim, excluir", key=f"excl_sim_{edital_id}",
+                     type="primary", width="stretch"):
+            _excluir_pregao(edital_id)
+            st.session_state.pop(chave, None)
+            st.rerun()
+        if c2.button("Cancelar", key=f"excl_nao_{edital_id}", width="stretch"):
+            st.session_state.pop(chave, None)
+            st.rerun()
+    elif st.button("Excluir pregão", key=f"excl_{edital_id}", width="stretch"):
+        st.session_state[chave] = True
+        st.rerun()
+
+
 def tela_historico():
     """Lista os pregões processados e permite rebaixar as planilhas geradas.
 
@@ -974,8 +1011,7 @@ def tela_historico():
     """
     style.header_pagina(
         "Histórico de pregões",
-        "Pregões já processados e as planilhas geradas. Você pode baixar de novo "
-        "qualquer planilha que ainda esteja na pasta do programa.",
+        "Pregões processados e suas planilhas. Baixe de novo ou exclua.",
     )
 
     with get_conn() as conn:
@@ -997,6 +1033,19 @@ def tela_historico():
         )
         return
 
+    # Filtro por órgão/número do pregão.
+    filtro = st.text_input(
+        "Buscar pregão", value="", key="filtro_hist",
+        placeholder="Filtrar por órgão ou número do pregão…",
+        label_visibility="collapsed").strip().lower()
+    if filtro:
+        editais = [e for e in editais if filtro in _rotulo_pregao(
+            e["orgao"], e["numero_pregao"], e["status"], e["criado_em"]).lower()]
+        if not editais:
+            style.bloco_aviso(f"Nenhum pregão encontrado para “{filtro}”.",
+                              tipo="info")
+            return
+
     _MIME_XLSX = (
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
@@ -1014,7 +1063,6 @@ def tela_historico():
                     "rebaixar.",
                     tipo="warning",
                 )
-                continue
 
             # Planilhas deste pregão, mais recente no topo (índice cobre isto).
             with get_conn() as conn:
@@ -1055,6 +1103,8 @@ def tela_historico():
                         "partir do pregão.",
                         tipo="warning",
                     )
+
+            _secao_excluir_pregao(ed["id"])
 
 
 # === Tela: CONFIGURAÇÕES ===
@@ -1237,7 +1287,10 @@ def tela_configuracoes():
 
 # === Tela: BUSCA DE PREÇOS ===
 def tela_busca_precos():
-    style.stepper(PASSOS_FLUXO, 2)
+    # Passo 4 (Planilha) quando o pregão JÁ foi gerado neste estado; senão 3 (Preços).
+    _gerou = (st.session_state.get("pregao_gerado_hash") is not None
+              and st.session_state.get("pregao_gerado_hash") == _hash_pregao())
+    style.stepper(PASSOS_FLUXO, 3 if _gerou else 2)
     style.header_pagina(
         "Busca de preços",
         "Escolha a marca e o preço de cada item.",
@@ -1673,6 +1726,8 @@ def _escolher_opcao(idx: int, o) -> None:
         preco=o.preco, codigo_fornecedor=o.codigo_fornecedor, marca=o.marca,
         ncm=getattr(o, "ncm", None), url=getattr(o, "url", None),
         fornecedor=getattr(o, "fornecedor", None))
+    # Escolher um preço desfaz o "não usar" (se estava marcado).
+    st.session_state.get("itens_nao_usar", set()).discard(idx)
 
 
 def _numero_item_edital(item, idx: int) -> int:
@@ -2313,11 +2368,15 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
         opcoes = opcoes_todas[:config.MAX_OPCOES_EXIBIDAS]
         n_ocultas = n_total - len(opcoes)
         sel_atual = st.session_state.selecoes.get(idx)
+        nao_usar = idx in st.session_state.setdefault("itens_nao_usar", set())
 
         n_op = len(opcoes)
-        if not opcoes:
+        if nao_usar:
+            label_status = "sem preço (você marcou)"
+            tipo_status: style.TipoBadge = "neutro"
+        elif not opcoes:
             label_status = "Não encontrado"
-            tipo_status: style.TipoBadge = "danger"
+            tipo_status = "danger"
         elif any(o.confianca == "variacao" for o in opcoes):
             label_status = f"{n_op} a conferir"
             tipo_status = "warning"
@@ -2329,10 +2388,11 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
         # + "Item N" (em vez de "#N", que soava pouco profissional) + título
         # legível + status colorido.
         cor_status = {"success": "green", "warning": "orange",
-                      "danger": "red"}[tipo_status]
+                      "danger": "red", "neutro": "gray"}[tipo_status]
         icone_status = {"success": ":material/check_circle:",
                         "warning": ":material/help:",
-                        "danger": ":material/cancel:"}[tipo_status]
+                        "danger": ":material/cancel:",
+                        "neutro": ":material/block:"}[tipo_status]
         # Mostra o NÚMERO DO ITEM NO EDITAL (item.item_numero) — pedido do
         # cliente 2026-06: ele identifica "que produto é este no edital?" pelo
         # ID, igual ao da coluna ITEM da planilha. Fallback ao sequencial 1-based
@@ -2439,12 +2499,24 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
                 else:
                     _busca_catalogo_item(idx, item, dentro=True)
 
-            # Opção de não usar este item
-            sem_sel = sel_atual is None
-            if st.button(("✓ " if sem_sel else "") + "Não usar este item",
-                         key=f"naousar_{idx}", width="stretch"):
-                st.session_state.selecoes.pop(idx, None)
-                st.rerun()
+            # "Não usar este item" — marca EXPLICITAMENTE que o item fica sem
+            # preço na planilha, com confirmação visível (antes não dava sinal
+            # nenhum ao clicar e confundia o operador — feedback do cliente).
+            nao_usar_set = st.session_state.setdefault("itens_nao_usar", set())
+            if nao_usar:
+                style.bloco_aviso(
+                    "Este item ficará <b>sem preço</b> na planilha (em branco).",
+                    tipo="info")
+                if st.button("Voltar a usar este item", key=f"naousar_{idx}",
+                             width="stretch"):
+                    nao_usar_set.discard(idx)
+                    st.rerun()
+            else:
+                if st.button("Não usar este item (deixar sem preço)",
+                             key=f"naousar_{idx}", width="stretch"):
+                    nao_usar_set.add(idx)
+                    st.session_state.selecoes.pop(idx, None)
+                    st.rerun()
 
     st.divider()
     st.caption(f"{selecionados} de {total} itens com marca/preço selecionados.")

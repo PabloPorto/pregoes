@@ -399,13 +399,23 @@ def app_modulo(tmp_path, monkeypatch):
     config.EXPORTS_DIR.mkdir(exist_ok=True)
     db.init_db(dbp)
 
-    alvos = ("streamlit", "pregoes.db", "pregoes.ui.app")
+    alvos = ("streamlit", "pregoes.db", "pregoes.config", "pregoes.ui.app")
     originais = {m: sys.modules.get(m) for m in alvos}
+    _pkg = sys.modules.get("pregoes")
+    _attr_config = getattr(_pkg, "config", None) if _pkg is not None else None
 
     # Streamlit dublê + db REAL no lugar (o `db` do topo deste arquivo é o real,
     # com export_log_gravar). Garante o rebind correto no reimport de app.py.
     sys.modules["streamlit"] = _FakeStreamlit()
     sys.modules["pregoes.db"] = db
+    # Pino o config REAL que ESTE arquivo capturou no topo. test_fix_config.py
+    # reimporta pregoes.config e deixa OUTRO objeto em sys.modules; sem o pino, o
+    # app reimportado ligaria nesse outro config e o monkeypatch de DB_PATH/
+    # EXPORTS_DIR (feito sobre o config deste arquivo) não o alcançaria — o app
+    # gravaria/limparia arquivos na pasta REAL em vez da tmp do teste.
+    sys.modules["pregoes.config"] = config
+    if _pkg is not None:
+        _pkg.config = config
 
     # Remove o módulo (e o atributo no pacote pai) para forçar execução fresca
     # do corpo de app.py com o DB/tela deste teste.
@@ -422,6 +432,8 @@ def app_modulo(tmp_path, monkeypatch):
                 sys.modules.pop(m, None)
             else:
                 sys.modules[m] = orig
+        if _pkg is not None and _attr_config is not None:
+            _pkg.config = _attr_config
         # app.py ficará re-importado de forma limpa na próxima necessidade.
         sys.modules.pop("pregoes.ui.app", None)
         pacote_ui = sys.modules.get("pregoes.ui")
@@ -502,6 +514,68 @@ def test_persistir_edital_upsert_nao_duplica_mas_acrescenta_export(app_modulo, t
         arquivos = {r["arquivo"] for r in c.execute(
             "SELECT arquivo FROM exports_log")}
         assert arquivos == {"v1.xlsx", "v2.xlsx"}
+
+
+def test_excluir_pregao_remove_itens_exports_e_arquivo(app_modulo, tmp_path):
+    """Excluir um pregão apaga editais + itens + exports_log (ON DELETE CASCADE)
+    e remove o .xlsx gerado da pasta — sem afetar OUTROS pregões."""
+    app = app_modulo
+    dbp = tmp_path / "pregoes.db"
+
+    # Pregão A (será excluído) com arquivo físico em EXPORTS_DIR.
+    app.st.session_state["orgao"] = "Prefeitura A"
+    app.st.session_state["numero"] = "00010/2026"
+    app.st.session_state["pdf_path"] = "a.pdf"
+    (config.EXPORTS_DIR / "a.xlsx").write_bytes(b"xlsx")
+    app._persistir_edital(_itens_fake(app, 3), {0: _selecao(5.0)},
+                          Path("a.xlsx"), markup=1.45)
+
+    # Pregão B (deve sobreviver).
+    app.st.session_state["orgao"] = "Prefeitura B"
+    app.st.session_state["numero"] = "00011/2026"
+    app.st.session_state["pdf_path"] = "b.pdf"
+    app._persistir_edital(_itens_fake(app, 2), {}, Path("b.xlsx"), markup=1.45)
+
+    with db.conectar(dbp) as c:
+        eid_a = c.execute(
+            "SELECT id FROM editais WHERE numero_pregao = '00010/2026'"
+        ).fetchone()[0]
+
+    app._excluir_pregao(eid_a)
+
+    assert _contar(dbp, "editais") == 1            # só o B sobrou
+    assert _contar(dbp, "edital_itens") == 2       # 3 itens do A apagados (cascade)
+    assert _contar(dbp, "exports_log") == 1        # export do A apagado (cascade)
+    assert not (config.EXPORTS_DIR / "a.xlsx").exists()   # arquivo removido
+    with db.conectar(dbp) as c:
+        assert c.execute("SELECT numero_pregao FROM editais").fetchone()[0] == "00011/2026"
+
+
+def test_excluir_pregao_arquivo_ausente_nao_estoura(app_modulo, tmp_path):
+    """Excluir pregão cujo .xlsx já sumiu da pasta não levanta erro."""
+    app = app_modulo
+    dbp = tmp_path / "pregoes.db"
+    app.st.session_state["orgao"] = "Prefeitura C"
+    app.st.session_state["numero"] = "00012/2026"
+    app.st.session_state["pdf_path"] = "c.pdf"
+    app._persistir_edital(_itens_fake(app, 1), {}, Path("sumido.xlsx"), markup=1.45)
+
+    with db.conectar(dbp) as c:
+        eid = c.execute("SELECT id FROM editais").fetchone()[0]
+
+    app._excluir_pregao(eid)   # arquivo nunca existiu fisicamente
+    assert _contar(dbp, "editais") == 0
+
+
+def test_tela_historico_renderiza_com_pregao_sem_estourar(app_modulo, tmp_path):
+    """Fumaça: a tela Histórico (com filtro + botão excluir) renderiza sem erro
+    quando há pregão no banco — pega quebra na UI nova de filtro/exclusão."""
+    app = app_modulo
+    app.st.session_state["orgao"] = "Prefeitura A"
+    app.st.session_state["numero"] = "00001/2026"
+    app.st.session_state["pdf_path"] = "a.pdf"
+    app._persistir_edital(_itens_fake(app, 2), {}, Path("a.xlsx"), markup=1.45)
+    app.tela_historico()   # não deve levantar
 
 
 def test_persistir_edital_upsert_normaliza_chave(app_modulo, tmp_path):
