@@ -1553,6 +1553,50 @@ def cotar_por_codigo(fornecedor: str, codigo: str) -> Optional[ResultadoBusca]:
     return achados[0] if achados else None
 
 
+# === Sessões manuais REUTILIZÁVEIS (busca "Buscar no site ao vivo") ===
+# Antes, cada clique LOGAVA do zero (~15-20s de login). Aqui mantemos UMA sessão
+# logada por fornecedor e a REUSAMOS entre buscas: login só na 1ª; as seguintes
+# vão direto (~2-3s). Cache módulo-level — o app é LOCAL e single-user. NÃO afeta
+# a busca em LOTE (que tem seu próprio ciclo `with`). Em QUALQUER falha de reuso
+# (sessão expirada, cookie caiu, thread trocada) caímos para um login fresco —
+# pior caso = o comportamento de antes (otimização de UX 2026-06-27).
+_FORNECEDORES_VALIDOS = ("almeida", "dantas")
+_sessoes_vivas: dict = {}
+
+
+def _abrir_sessao_viva(fornecedor: str):
+    """Cria e LOGA uma sessão (ciclo manual, sem `with`). Levanta se faltar
+    credencial ou o login falhar (o __enter__ já limpa o navegador nesse caso)."""
+    # Resolve a classe em tempo de CHAMADA (não no import) para respeitar o
+    # monkeypatch dos testes que substitui Almeida/Dantas.
+    classes = {"almeida": AlmeidaDistribuidor, "dantas": DantasDistribuidora}
+    cls = classes.get(fornecedor)
+    if cls is None:
+        raise ValueError(f"Fornecedor desconhecido: {fornecedor!r}")
+    cred = credenciais.carregar(fornecedor)
+    if not cred:
+        raise RuntimeError(f"Sem credencial configurada para {fornecedor}.")
+    forn = cls(cred["email"], cred["senha"])
+    forn.__enter__()   # login (sobe o navegador)
+    return forn
+
+
+def _fechar_sessao_viva(fornecedor: str) -> None:
+    forn = _sessoes_vivas.pop(fornecedor, None)
+    if forn is not None:
+        try:
+            forn.__exit__(None, None, None)
+        except Exception:
+            pass
+
+
+def fechar_sessoes_vivas() -> None:
+    """Fecha TODAS as sessões manuais em cache. Chamar ao iniciar um novo pregão
+    para não deixar um navegador aberto à toa."""
+    for fornecedor in list(_sessoes_vivas):
+        _fechar_sessao_viva(fornecedor)
+
+
 def buscar_no_site(
     fornecedor: str, termo: str, limite: int = 10
 ) -> list[ResultadoBusca]:
@@ -1560,33 +1604,48 @@ def buscar_no_site(
 
     Rede de segurança final (pedido do cliente 2026-06): quando nem a busca
     automática nem o catálogo trazem o que o operador espera, ele digita o termo
-    e busca direto no site, escolhendo o fornecedor. Também é a mitigação para
-    casos em que o filtro automático erra (ex.: alicate).
+    e busca direto no site, escolhendo o fornecedor.
 
     Diferente da busca automática (`buscar`), NÃO aplica o filtro de relevância:
-    devolve os cards CRUS do site (até `limite`) para o operador julgar — é o
-    ponto: ver exatamente o que o site retorna. O preço é o ATUAL do site.
+    devolve os cards CRUS do site (até `limite`) para o operador julgar. O preço
+    é o ATUAL do site.
 
-    Contrato de falhas idêntico a `cotar_por_codigo`:
+    PERF: REUSA a sessão logada entre buscas (ver bloco acima) — login só na 1ª.
+
+    Contrato de falhas:
     - Retorna a lista (possivelmente vazia) quando o site responde.
-    - **Levanta exceção** se login/navegador/rede falhar (transitório) — o
-      chamador avisa e o operador re-tenta.
+    - **Levanta exceção** se login/navegador/rede falhar — o chamador avisa e o
+      operador re-tenta.
     """
     termo = (termo or "").strip()
     if not termo:
         return []
-    classes = {"almeida": AlmeidaDistribuidor, "dantas": DantasDistribuidora}
-    cls = classes.get(fornecedor)
-    if not cls:
+    if fornecedor not in _FORNECEDORES_VALIDOS:
         raise ValueError(f"Fornecedor desconhecido: {fornecedor!r}")
-    cred = credenciais.carregar(fornecedor)
-    if not cred:
-        raise RuntimeError(f"Sem credencial configurada para {fornecedor}.")
-    with cls(cred["email"], cred["senha"]) as forn:
+
+    def _consultar(forn):
         forn._rate_limiter.acquire()
-        # confiança 'variacao' — é match manual, não verificado por texto.
-        brutos = forn._buscar_query(forn._page, termo, "variacao")
-    return brutos[:max(1, limite)]
+        # confiança 'variacao' — match manual, não verificado por texto.
+        return forn._buscar_query(forn._page, termo, "variacao")
+
+    # 1) REUSA a sessão logada, se houver — é o ganho de velocidade.
+    forn = _sessoes_vivas.get(fornecedor)
+    if forn is not None:
+        try:
+            return _consultar(forn)[:max(1, limite)]
+        except Exception:
+            _logger.info("sessão manual de %s caiu — relogando", fornecedor)
+            _fechar_sessao_viva(fornecedor)
+
+    # 2) Sem cache (ou caiu): loga FRESCO, cacheia e busca. Se a busca já falhar
+    #    na sessão nova, descarta (não deixa sessão quebrada no cache) e propaga.
+    forn = _abrir_sessao_viva(fornecedor)
+    _sessoes_vivas[fornecedor] = forn
+    try:
+        return _consultar(forn)[:max(1, limite)]
+    except Exception:
+        _fechar_sessao_viva(fornecedor)
+        raise
 
 
 # === Fase 4: NCM sob demanda (o NCM mora só na página de DETALHE) ===

@@ -693,3 +693,63 @@ def test_orq_falha_num_item_nao_contamina_o_proximo(banco, monkeypatch):
         [forn], usar_llm_judge=False)
     assert lote.resultados.get(1), "o 2º item deve ter resultado apesar da falha no 1º"
     assert any(e.indice_item == 0 for e in lote.erros), "a falha do 1º item virou ErroBusca"
+
+
+# === Sessões manuais reutilizáveis (otimização de perf 2026-06-27) ==========
+
+@pytest.fixture(autouse=True)
+def _limpa_sessoes_vivas_cache():
+    """O cache _sessoes_vivas é módulo-level — limpar entre testes evita que uma
+    sessão fake de um teste vaze para o próximo."""
+    import pregoes.scraper as _s
+    _s._sessoes_vivas.clear()
+    yield
+    _s._sessoes_vivas.clear()
+
+
+def test_busca_no_site_reusa_sessao_logada(monkeypatch):
+    """2ª busca REUSA a sessão — não instancia/loga de novo (o ganho de perf)."""
+    import pregoes.scraper as scraper
+    n_inst = {"n": 0}
+    Base = _fake_forn_site([("ALICATE", "M", 10.0, "A1")])
+
+    class _Conta(Base):
+        def __init__(self, *a):
+            n_inst["n"] += 1
+            super().__init__(*a)
+
+    monkeypatch.setattr(scraper, "AlmeidaDistribuidor", _Conta)
+    monkeypatch.setattr(scraper.credenciais, "carregar",
+                        lambda f: {"email": "x", "senha": "y"})
+    scraper.buscar_no_site("almeida", "alicate")            # 1ª: loga
+    out = scraper.buscar_no_site("almeida", "alicate")      # 2ª: reusa
+    assert n_inst["n"] == 1, "deveria reusar a sessão, não relogar"
+    assert [o.codigo_fornecedor for o in out] == ["A1"]
+
+
+def test_busca_no_site_sessao_em_cache_caida_reloga(monkeypatch):
+    """Sessão em cache que FALHA na busca → descarta + reloga fresco (fallback —
+    pior caso = comportamento de antes)."""
+    import pregoes.scraper as scraper
+
+    class _RL:
+        def acquire(self):
+            return None
+
+    class _Morta:
+        _page = object()
+        _rate_limiter = _RL()
+
+        def _buscar_query(self, *a):
+            raise RuntimeError("sessão morta")
+
+        def __exit__(self, *a):
+            return False
+
+    scraper._sessoes_vivas["almeida"] = _Morta()
+    monkeypatch.setattr(scraper, "AlmeidaDistribuidor",
+                        _fake_forn_site([("X", "M", 1.0, "C1")]))
+    monkeypatch.setattr(scraper.credenciais, "carregar",
+                        lambda f: {"email": "x", "senha": "y"})
+    out = scraper.buscar_no_site("almeida", "alicate")     # reusa morta → reloga
+    assert [o.codigo_fornecedor for o in out] == ["C1"]

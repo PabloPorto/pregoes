@@ -196,6 +196,13 @@ def _limpar_pregao() -> None:
     """Descarta o estado do pregão atual da sessão."""
     for k in CHAVES_PREGAO:
         st.session_state.pop(k, None)
+    # Fecha as sessões manuais ao vivo em cache (navegador logado): um novo
+    # pregão começa do zero e não herda navegador/sessão do anterior.
+    try:
+        from pregoes import scraper as _scraper
+        _scraper.fechar_sessoes_vivas()
+    except Exception:
+        pass
 
 
 def _tem_pregao_em_andamento() -> bool:
