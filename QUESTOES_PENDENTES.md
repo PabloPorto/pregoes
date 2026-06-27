@@ -763,3 +763,28 @@ espaço, avaliar rotação opcional (manter N últimos por pregão) — futuro, 
 deste escopo.
 
 **Status.** Aceita. Sem ação por ora.
+
+### Q18. Deduplicação de itens repetidos + limitação do "modelo de proposta" — 🟢 ABERTA, parcial
+
+**Contexto (avança a Q6 — 2º edital real).** Muitos editais trazem a lista de
+itens **duas vezes**: o **Termo de Referência** (com preço) e o **Modelo de
+Proposta** (em branco). Visto no *Edital 011 - 2026 (Gurjão/PB)*: 580 linhas /
+53% de confiança, sendo **100% dos "duvidosos" cópias** dos itens já lidos —
+só ~305 itens únicos. O cliente relata que essa duplicação é **recorrente**.
+
+**Entregue (v1.0.15).** `extrator._deduplicar_itens` colapsa cópias do mesmo
+item por chave `(item_numero, descrição normalizada)`, mantendo a leitura mais
+completa e preservando a ordem do edital; quantidades válidas distintas (mesmo
+item em lotes diferentes) ficam separadas. Resultado no Edital 011: **305
+itens / 100%**, itens distintos de descrição idêntica (#150/#151) preservados.
+
+**Limitação registrada (não corrigida).** O Modelo de Proposta às vezes tem uma
+coluna **MARCA/MODELO a mais** (7 colunas), e o mapeamento de cabeçalho não a
+reconhece — as colunas saem **deslocadas** (a quantidade cai no campo de preço).
+Hoje a **dedup mascara** isso (descarta a cópia desalinhada quando existe a cópia
+boa do termo de referência). **Risco residual:** um edital que traga SÓ o modelo
+de proposta (sem a tabela com preço) sairia com esses itens mal-parseados.
+**Default provisório:** aceitar (raro — editais quase sempre têm o termo de
+referência). **Resolver se aparecer:** ensinar o detector de cabeçalho a mapear
+a coluna MARCA/MODELO (alinhar UNIDADE/QUANTIDADE/PREÇO corretamente na tabela
+de 7 colunas).

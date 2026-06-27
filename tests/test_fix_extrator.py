@@ -161,3 +161,56 @@ def test_numero_unico_com_espacos_nas_pontas_segue_valido():
 def test_para_int_tambem_rejeita_celula_com_dois_numeros():
     from pregoes.extrator import _para_int
     assert _para_int("10\n20") is None
+
+
+# === Deduplicação de itens repetidos (achado de campo 2026-06-25) ===========
+
+def _it_dedup(num, desc, q, u, v):
+    from pregoes.extrator import ItemExtraido
+    return ItemExtraido(item_numero=num, descricao=desc, unidade=u,
+                        quantidade=q, valor_referencia=v)
+
+
+def test_dedup_colapsa_copia_mal_parseada_mantendo_a_boa():
+    """Termo de referência (bom) + modelo de proposta desalinhado (mesma chave)
+    → fica 1 item, com a leitura COMPLETA."""
+    from pregoes.extrator import _deduplicar_itens
+    bom = _it_dedup(31, "BASCULANTE ANODIZADO", 20, "M2", 280)
+    blank = _it_dedup(31, "BASCULANTE ANODIZADO", None, "", 20)  # desalinhado
+    out = _deduplicar_itens([bom, blank])
+    assert len(out) == 1
+    assert (out[0].quantidade, out[0].unidade, out[0].valor_referencia) == (20, "M2", 280)
+
+
+def test_dedup_nao_funde_itens_distintos_de_mesma_descricao():
+    """SKUs diferentes (#150/#151) com descrição idêntica mas CÓDIGO e preço
+    diferentes NÃO podem ser fundidos."""
+    from pregoes.extrator import _deduplicar_itens
+    a = _it_dedup(150, "LACA SELADORA PARA MADEIRA", 50, "UN", 120)
+    b = _it_dedup(151, "LACA SELADORA PARA MADEIRA", 50, "UN", 40)
+    out = _deduplicar_itens([a, b])
+    assert len(out) == 2
+    assert {i.valor_referencia for i in out} == {120, 40}
+
+
+def test_dedup_mesmo_codigo_quantidades_distintas_mantem_separado():
+    """Mesmo item em LOTES diferentes (mesmo código/descrição, quantidades
+    distintas) são linhas distintas — não funde."""
+    from pregoes.extrator import _deduplicar_itens
+    a = _it_dedup(5, "CIMENTO CP-II 50KG", 500, "SC", 30)
+    b = _it_dedup(5, "CIMENTO CP-II 50KG", 300, "SC", 30)
+    out = _deduplicar_itens([a, b])
+    assert len(out) == 2
+    assert {i.quantidade for i in out} == {500, 300}
+
+
+def test_dedup_preserva_ordem_e_pega_a_melhor_copia_mesmo_vindo_depois():
+    """A melhor cópia mantém a POSIÇÃO da 1ª ocorrência (ordem do edital), mesmo
+    que a boa apareça depois da ruim."""
+    from pregoes.extrator import _deduplicar_itens
+    blank = _it_dedup(1, "ITEM A", None, "", 10)    # ruim, vem 1º
+    outro = _it_dedup(2, "ITEM B", 3, "UN", 7)
+    bom = _it_dedup(1, "ITEM A", 10, "UN", 5)       # boa, vem depois
+    out = _deduplicar_itens([blank, outro, bom])
+    assert [i.item_numero for i in out] == [1, 2]    # ordem preservada
+    assert out[0].quantidade == 10                   # manteve a cópia boa

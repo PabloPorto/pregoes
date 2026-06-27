@@ -430,6 +430,65 @@ _THRESHOLD_LINHA_EXTRAIDA = 0.7
 _THRESHOLD_LINHA_DUVIDOSA = 0.4
 
 
+def _score_item(it: "ItemExtraido") -> float:
+    """Score de completude/plausibilidade de um item (reusa score_linha)."""
+    return score_linha(it.descricao, it.quantidade, it.unidade,
+                       it.valor_referencia).score
+
+
+def _deduplicar_itens(itens: list["ItemExtraido"]) -> list["ItemExtraido"]:
+    """Colapsa cópias do MESMO item, mantendo a leitura mais completa.
+
+    Editais frequentemente repetem a lista de itens — o Termo de Referência (COM
+    preço) e o Modelo de Proposta (em branco), este às vezes com layout diferente
+    (uma coluna MARCA/MODELO a mais) que sai DESALINHADO e cai em "duvidoso". Sem
+    dedup, a planilha sai com o DOBRO de linhas, metade ruim (recorrente em
+    campo, 2026-06-25).
+
+    Identidade de duplicata: ``(item_numero, descrição normalizada)``. Exigir o
+    MESMO código E a MESMA descrição evita fundir itens DISTINTOS de descrição
+    idêntica (ex.: SKUs #150 e #151 "LACA SELADORA", códigos e preços diferentes).
+    Salvaguarda: se um grupo tem QUANTIDADES válidas diferentes, são linhas
+    distintas (mesmo item em lotes diferentes) e ficam SEPARADAS — uma por
+    quantidade. Dentro de um grupo, mantém a cópia de MAIOR score (mais campos
+    preenchidos), na posição da 1ª ocorrência (preserva a ordem do edital, mesmo
+    que a melhor cópia apareça depois)."""
+    if len(itens) < 2:
+        return list(itens)
+    grupos: dict = {}   # (num, desc_norm) -> list[(ordem, item)]
+    for ordem, it in enumerate(itens):
+        grupos.setdefault((it.item_numero, _normaliza(it.descricao)), []).append(
+            (ordem, it))
+
+    saida: list[tuple[int, "ItemExtraido"]] = []
+    for copias in grupos.values():
+        # Quantidades VÁLIDAS distintas → linhas distintas (lotes); senão são
+        # cópias do mesmo item (incl. a cópia mal-parseada, com qtd=None).
+        qtds = {it.quantidade for _, it in copias
+                if it.quantidade is not None and it.quantidade > 0}
+        if len(qtds) <= 1:
+            ordem0 = min(o for o, _ in copias)
+            melhor = max(copias, key=lambda oi: _score_item(oi[1]))[1]
+            saida.append((ordem0, melhor))
+        else:
+            por_qtd: dict = {}   # qtd -> (ordem0, melhor_item)
+            for o, it in copias:
+                q = it.quantidade
+                if q is None or q <= 0:
+                    continue   # cópia sem qtd válida quando há melhores: descarta
+                cur = por_qtd.get(q)
+                if cur is None:
+                    por_qtd[q] = (o, it)
+                elif _score_item(it) > _score_item(cur[1]):
+                    por_qtd[q] = (min(cur[0], o), it)
+                else:
+                    por_qtd[q] = (min(cur[0], o), cur[1])
+            saida.extend(por_qtd.values())
+
+    saida.sort(key=lambda oi: oi[0])
+    return [it for _, it in saida]
+
+
 def processar_tabelas_brutas(
     tabelas_brutas: list[_TabelaBruta],
     arquivo: str,
@@ -491,23 +550,31 @@ def processar_tabelas_brutas(
 
     resultado.mapa_colunas_detectado = blocos_aceitos[0][0].mapa
 
-    n_extraidos = 0
-    n_duvidosos = 0
+    # Coleta os itens de todos os blocos aceitos e DEDUPLICA cópias do mesmo item
+    # ANTES de classificar — editais repetem a lista (termo de referência +
+    # modelo de proposta), e a cópia em branco às vezes sai desalinhada e
+    # inflaria a planilha com o dobro de linhas, metade "duvidosa" (campo
+    # 2026-06-25). Assim a confiança reflete os itens ÚNICOS.
+    candidatos: list[ItemExtraido] = []
     for bloco in blocos_aceitos:
         for cand in bloco:
-            for item in cand.itens:
-                sc = score_linha(item.descricao, item.quantidade, item.unidade,
-                                  item.valor_referencia).score
-                if sc >= _THRESHOLD_LINHA_EXTRAIDA:
-                    item.confianca = "extraido"
-                    n_extraidos += 1
-                elif sc >= _THRESHOLD_LINHA_DUVIDOSA:
-                    item.confianca = "duvidoso"
-                    n_duvidosos += 1
-                else:
-                    # Descartado: lixo claro (placeholder, prefixo, etc.)
-                    continue
-                resultado.itens.append(item)
+            candidatos.extend(cand.itens)
+    itens_unicos = _deduplicar_itens(candidatos)
+
+    n_extraidos = 0
+    n_duvidosos = 0
+    for item in itens_unicos:
+        sc = score_linha(item.descricao, item.quantidade, item.unidade,
+                          item.valor_referencia).score
+        if sc >= _THRESHOLD_LINHA_EXTRAIDA:
+            item.confianca = "extraido"
+            n_extraidos += 1
+        elif sc >= _THRESHOLD_LINHA_DUVIDOSA:
+            item.confianca = "duvidoso"
+            n_duvidosos += 1
+        else:
+            continue   # lixo claro (placeholder, prefixo, etc.)
+        resultado.itens.append(item)
 
     total_aceitos = n_extraidos + n_duvidosos
     resultado.confianca_global = (n_extraidos / total_aceitos) if total_aceitos else 0.0
