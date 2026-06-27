@@ -38,7 +38,7 @@ def _raiz_bundle() -> Path:
 # Versão do aplicativo — aparece na sidebar e no log de boot. Sem ela, o
 # suporte remoto fica às cegas sobre o que o cliente está rodando (auditoria
 # 2026-06). Bump a cada .exe entregue ao cliente.
-VERSAO_APP = "1.0.20"
+VERSAO_APP = "1.0.21"
 
 # Estrutura de diretórios
 BASE_DIR = _raiz_gravavel()
@@ -73,6 +73,10 @@ MARKUP_DEFAULT = 1.45               # Multiplicador padrão (= MARKUP_NORMAL; re
 # margem de formação de preço é diferente. Defaults editáveis por pregão na UI.
 MARKUP_NORMAL = 1.45                # item SEM substituição tributária
 MARKUP_ST = 1.30                    # item COM ST (NCM consta no Anexo 05 do estado)
+# Acordo comercial com a Dantas: o preço trazido do site da Dantas entra com
+# este desconto no CUSTO (coluna L). O markup incide sobre o custo já com
+# desconto. Almeida e catálogo não recebem (decisão do cliente 2026-06-27).
+DESCONTO_DANTAS = 0.17              # 17% de desconto no custo dos itens da Dantas
 PERC_OPERACIONAL = 0.03             # 3% operacional
 PERC_COMISSAO = 0.05                # 5% comissão
 PERC_IMPOSTOS_FEDERAIS = 0.07       # 7% impostos federais

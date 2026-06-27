@@ -54,8 +54,25 @@ class SelecaoFornecedor:
     # Fornecedor da opção escolhida (almeida/dantas). Gravado direto na seleção
     # para o aprendizado saber a origem SEM re-casar por (preço,código,marca) —
     # o re-match falhava em silêncio (float/espaço) e descartava o aprendizado
-    # (achado QA 2026-06). Opcional: o exportador não usa; só a retroalimentação.
+    # (achado QA 2026-06). Usado também pelo desconto Dantas (ver eh_dantas).
     fornecedor: str | None = None
+
+
+def eh_dantas(sel: "SelecaoFornecedor") -> bool:
+    """True se a seleção é do fornecedor Dantas — que recebe o desconto
+    comercial de 17% no custo (config.DESCONTO_DANTAS)."""
+    return (getattr(sel, "fornecedor", None) or "").strip().lower() == "dantas"
+
+
+def _preco_com_desconto(sel: "SelecaoFornecedor"):
+    """Preço base para a coluna L: o custo trazido do site, JÁ com o desconto
+    Dantas quando aplicável. Preço ausente/0/não-finito passa intacto (célula
+    vazia = sem preço). Arredonda a 2 casas (centavos) — ex.: 5,00 → 4,15."""
+    preco = sel.preco
+    if (eh_dantas(sel) and isinstance(preco, (int, float))
+            and math.isfinite(preco) and preco > 0):
+        return round(preco * (1 - config.DESCONTO_DANTAS), 2)
+    return preco
 
 
 # Faixa de linhas que o template já tem prontas
@@ -255,7 +272,11 @@ def exportar(
         # T e U são texto raspado do site do fornecedor → mesma neutralização.
         sel = selecoes.get(offset)
         if sel is not None:
-            ws[f"L{linha}"] = sel.preco
+            # Desconto Dantas (acordo comercial): o custo trazido do site da
+            # Dantas entra com 17% off na coluna L. O markup das fórmulas incide
+            # sobre esse custo já descontado — oferta mais competitiva, margem
+            # preservada. Almeida/catálogo não recebem desconto.
+            ws[f"L{linha}"] = _preco_com_desconto(sel)
             _escrever_texto(ws[f"T{linha}"], sel.codigo_fornecedor)
             _escrever_texto(ws[f"U{linha}"], sel.marca)
 

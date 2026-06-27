@@ -23,7 +23,7 @@ import pandas as pd
 from pregoes import config, credenciais, erros, mapeamento_manual
 from pregoes.ranking import bonus_codigo as _bonus_codigo
 from pregoes.extrator import extrair_com_pipeline
-from pregoes.exportador import exportar
+from pregoes.exportador import exportar, eh_dantas
 from pregoes.db import init_db, get_conn
 from pregoes.ui import style
 
@@ -815,6 +815,11 @@ def _gerar_excel(itens: list, markup: float, selecoes: dict,
     style.bloco_aviso(f"Planilha gerada: <code>{destino.name}</code>", tipo="success")
     if selecoes:
         st.caption(f"Inclui preço/marca/código para {len(selecoes)} de {len(itens)} itens.")
+        n_dantas = sum(1 for s in selecoes.values() if eh_dantas(s))
+        if n_dantas:
+            pct = int(round(config.DESCONTO_DANTAS * 100))
+            st.caption(f"Desconto Dantas de {pct}% aplicado no custo de "
+                       f"{n_dantas} {'item' if n_dantas == 1 else 'itens'} da Dantas.")
     with open(destino, "rb") as f:
         st.download_button(
             "Baixar planilha matriz",
@@ -1973,6 +1978,20 @@ def _painel_markup(selecoes: dict, itens: list) -> tuple[dict, set]:
     # da planilha. Assim a coluna não mente quando os dois markups são iguais
     # (achado QA M1): item normal por NCM nunca é marcado ST.
     com_st = tributacao.com_st_de_ncms(ncms, m_st, m_normal, overrides)
+
+    # Aviso amigável do desconto Dantas (acordo comercial): os itens escolhidos
+    # da Dantas saem com 17% de desconto no custo, já aplicado na planilha.
+    n_dantas = sum(1 for s in selecoes.values() if eh_dantas(s))
+    if n_dantas:
+        pct = int(round(config.DESCONTO_DANTAS * 100))
+        um = n_dantas == 1
+        style.bloco_aviso(
+            f"<b>Desconto Dantas:</b> {n_dantas} "
+            f"{'item escolhido é' if um else 'itens escolhidos são'} da Dantas e "
+            f"{'sairá' if um else 'sairão'} com {pct}% de desconto no custo, "
+            f"já incluído na planilha.",
+            tipo="info")
+
     return markups, com_st
 
 
