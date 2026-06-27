@@ -50,8 +50,26 @@ _log = logconf.get_logger("ui")
 # do cliente e precisa saber QUAL build gerou cada rastro.
 _log.info("Pregões v%s iniciado", config.VERSAO_APP)
 
-# Inicializa/migra o banco no primeiro load
-init_db()
+# Inicializa/migra o banco no primeiro load — COM proteção contra corrupção.
+def _abrir_banco() -> None:
+    """Abre/migra o banco no boot. Se ele estiver CORROMPIDO (queda de energia,
+    .exe morto, pendrive ejetado), NÃO derruba o app com stack cru: mostra uma
+    mensagem clara e para, orientando restaurar um backup. Mesma classe de
+    blindagem das credenciais (achado da auditoria de confiabilidade 2026-06)."""
+    try:
+        init_db()
+    except Exception:
+        _log.exception("falha ao abrir/migrar o banco no boot")
+        style.bloco_aviso(
+            "Não consegui abrir o banco de dados — ele pode estar corrompido. "
+            "Restaure a cópia mais recente da pasta <b>data/backups</b> "
+            "(renomeie para <b>pregoes.db</b>) e abra o app de novo. Se o "
+            "problema persistir, fale com o suporte.",
+            tipo="danger")
+        st.stop()
+
+
+_abrir_banco()
 
 # Backup diário automático (1 por dia; rotação cuida do volume).
 if "backup_feito" not in st.session_state:

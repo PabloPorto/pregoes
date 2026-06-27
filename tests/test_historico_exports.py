@@ -688,3 +688,16 @@ def test_gerar_excel_exporta_edital_inteiro_preco_so_nos_buscados(app_modulo):
     # Preço (col L) só no item de edital 0 (único buscado E selecionado).
     assert ws["L5"].value == 7.0
     assert all(ws[f"L{ln}"].value is None for ln in (6, 7, 8, 9)), "preço vazou p/ não-selecionado"
+
+
+def test_abrir_banco_corrompido_nao_derruba_o_app(app_modulo, monkeypatch):
+    """Boot resiliente (achado da auditoria 2026-06): banco CORROMPIDO no boot
+    (init_db levanta) NÃO propaga stack cru — o app mostra mensagem clara e para
+    gracioso. Mesma classe de blindagem já aplicada às credenciais."""
+    app = app_modulo
+
+    def _boom(*a, **k):
+        raise sqlite3.DatabaseError("database disk image is malformed")
+
+    monkeypatch.setattr(app, "init_db", _boom)
+    app._abrir_banco()   # NÃO pode propagar a exceção
