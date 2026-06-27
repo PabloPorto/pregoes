@@ -246,8 +246,10 @@ def _gravar_saidas(resultados: list, saida: str) -> None:
     rel = os.path.join(saida, f"validacao_codigos_{ts}.xlsx")
     wb.save(rel)
 
+    # Header "PRECO" (não "PRECO_REFERENCIA"): o importador mapeia "referencia"
+    # para valor_ref (ignorado no histórico); "preco" é o que vira precos_historico.
     wb2 = Workbook(); ws2 = wb2.active; ws2.title = "catalogo_limpo"
-    ws2.append(["DESCRICAO", "CODIGO", "MARCA", "FORNECEDOR", "PRECO_REFERENCIA"])
+    ws2.append(["DESCRICAO", "CODIGO", "MARCA", "FORNECEDOR", "PRECO"])
     n_ok = 0
     for r in resultados:
         if r["status"] != "OK":
