@@ -1990,8 +1990,6 @@ def _busca_catalogo_item(idx: int, item, dentro: bool = False) -> None:
     """
     catalogo = _carregar_catalogo_sessao()
     with _secao_busca(dentro, "Buscar no meu catálogo (produtos que já tenho)"):
-        if dentro:
-            st.markdown("**No meu catálogo** · produtos que você já tem")
         if not catalogo:
             st.caption("Catálogo interno vazio — importe suas planilhas "
                        "históricas em Configurações para usar esta busca.")
@@ -2107,8 +2105,6 @@ def _busca_site_item(idx: int, item, dentro: bool = False) -> None:
         if credenciais.carregar(nome) is not None
     ]
     with _secao_busca(dentro, "Buscar direto no site do fornecedor (nome ou código)"):
-        if dentro:
-            st.markdown("**No site do fornecedor** · busca ao vivo, por nome ou código")
         if not fornecedores:
             st.caption("Configure as credenciais dos fornecedores em "
                        "Configurações para buscar direto no site.")
@@ -2420,13 +2416,21 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
                                 on_escolher=lambda o=o: _escolher_opcao(idx, o),
                             )
 
-            # Rede de segurança CONSOLIDADA (redesign 2026-06): em vez de dois
-            # cards separados (catálogo + site), UMA seção discreta que reúne as
-            # duas buscas manuais — reduz a poluição da tela.
+            # Rede de segurança (redesign 2026-06-27): UMA seção com um SELETOR de
+            # onde procurar — mostra só uma busca por vez. Antes, catálogo e site
+            # vinham empilhados (dois campos abertos) e o operador não sabia em
+            # qual estava buscando (feedback do cliente). O seletor deixa explícito.
             with st.expander("Não é essa? Procurar de outro jeito"):
-                _busca_catalogo_item(idx, item, dentro=True)
-                st.divider()
-                _busca_site_item(idx, item, dentro=True)
+                fonte = st.segmented_control(
+                    "Onde procurar este item?",
+                    ["Meus produtos", "Site do fornecedor"],
+                    default="Meus produtos",
+                    key=f"fonte_busca_{idx}",
+                )
+                if fonte == "Site do fornecedor":
+                    _busca_site_item(idx, item, dentro=True)
+                else:
+                    _busca_catalogo_item(idx, item, dentro=True)
 
             # Opção de não usar este item
             sem_sel = sel_atual is None
