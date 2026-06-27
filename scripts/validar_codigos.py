@@ -46,6 +46,10 @@ from pregoes.normalizador import normalizar_descricao
 THRESHOLD_MATCH = 60          # fuzzy mínimo p/ "bate" (fallback do Gemini)
 RELOGAR_A_CADA = 60           # re-login periódico (refresca a sessão)
 STREAK_VAZIO_RELOGIN = 8      # N vazios seguidos → re-login (sessão suspeita)
+# Pausa EXTRA entre buscas (além do rate-limiter de 2/s) — o run de ~1000 buscas
+# em 30 min limitou a conta no site (2026-06-27). Mais gentil = ~1 req/s, o site
+# tem tempo de respirar e não throttla. Rode o recheck só com a conta descansada.
+PAUSA_ENTRE_BUSCAS = 0.5
 
 
 # ----------------------------------------------------------------- Gemini ---
@@ -127,6 +131,7 @@ class _Sessao:
         self.n += 1
         try:
             self.forn._rate_limiter.acquire()
+            time.sleep(PAUSA_ENTRE_BUSCAS)   # gentil com o site (evita throttle)
             res = self.forn._buscar_query(self.forn._page, str(codigo), "variacao")
         except Exception:
             self._relogar()   # sessão caiu → tenta refrescar e re-buscar 1x
