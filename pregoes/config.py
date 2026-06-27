@@ -38,7 +38,7 @@ def _raiz_bundle() -> Path:
 # Versão do aplicativo — aparece na sidebar e no log de boot. Sem ela, o
 # suporte remoto fica às cegas sobre o que o cliente está rodando (auditoria
 # 2026-06). Bump a cada .exe entregue ao cliente.
-VERSAO_APP = "1.0.16"
+VERSAO_APP = "1.0.17"
 
 # Estrutura de diretórios
 BASE_DIR = _raiz_gravavel()
@@ -95,7 +95,13 @@ SCRAPER_TIMEOUT_SEGUNDOS = 30
 # 2026-06-25), então um HIT retorna instantâneo; este teto só é pago num MISS
 # (nenhum card = sem resultado). Substitui o antigo sleep FIXO de 1,5s +
 # networkidle, que desperdiçava ~2,9s POR REQUISIÇÃO (52% do tempo era sleep).
-SCRAPER_ESPERA_CARDS_MS = 1500
+#
+# Valor: 1000ms. Como o card aparece em ~0,05s, isto é uma margem de ~20× — só
+# acelera os MISSES (que cascateiam várias queries). SE uma re-rodada limpa
+# mostrar COBERTURA menor que a esperada (o A/B com 1500ms achou 30/31), o
+# primeiro suspeito é este teto: volte para 1500. Abaixar mais exige validar
+# (rodar scripts/ab_busca.py comparando coberturas) — não baixe no escuro.
+SCRAPER_ESPERA_CARDS_MS = 1000
 # Máximo de candidatos retornados por (item, fornecedor). Calibrado em
 # 2026-05-27 após operador reportar que 47-60 candidatos por item poluía
 # a UI. Top-N por relevância (depois por preço) é suficiente — o restante
