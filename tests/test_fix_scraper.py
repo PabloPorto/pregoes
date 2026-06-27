@@ -318,3 +318,39 @@ def test_esperar_sessao_false_se_cookies_nunca_vem():
         def wait_for_timeout(self, ms): pass
 
     assert scraper._esperar_sessao(_Ctx(), _Pg(), timeout_s=1) is False
+
+
+# === _carregar_busca: espera ATIVA pelos cards (otimização de perf 2026-06-25) ===
+
+def test_carregar_busca_usa_domcontentloaded_e_espera_os_cards():
+    """Em vez de networkidle + sleep fixo de 1,5s: domcontentloaded + espera o
+    seletor dos cards (server-rendered → hit instantâneo)."""
+    from pregoes import scraper
+    ch = {}
+
+    class _Pg:
+        def goto(self, url, **kw):
+            ch["goto"] = (url, kw.get("wait_until"))
+
+        def wait_for_selector(self, sel, **kw):
+            ch["wait"] = (sel, kw.get("state"), kw.get("timeout"))
+
+    scraper._carregar_busca(_Pg(), "https://x/busca?s=cimento")
+    assert ch["goto"][1] == "domcontentloaded"       # NÃO networkidle
+    assert ch["wait"][0] == scraper._SEL_CARD         # espera o card
+    assert ch["wait"][1] == "attached"
+
+
+def test_carregar_busca_miss_nao_levanta():
+    """MISS (nenhum card): wait_for_selector estoura timeout → _carregar_busca
+    engole e segue (o evaluate do chamador devolve [], sem derrubar a busca)."""
+    from pregoes import scraper
+
+    class _Pg:
+        def goto(self, url, **kw):
+            pass
+
+        def wait_for_selector(self, sel, **kw):
+            raise TimeoutError("nenhum card no prazo")
+
+    scraper._carregar_busca(_Pg(), "https://x/busca?s=zzz")   # não pode levantar

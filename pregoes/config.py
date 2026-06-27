@@ -38,7 +38,7 @@ def _raiz_bundle() -> Path:
 # Versão do aplicativo — aparece na sidebar e no log de boot. Sem ela, o
 # suporte remoto fica às cegas sobre o que o cliente está rodando (auditoria
 # 2026-06). Bump a cada .exe entregue ao cliente.
-VERSAO_APP = "1.0.15"
+VERSAO_APP = "1.0.16"
 
 # Estrutura de diretórios
 BASE_DIR = _raiz_gravavel()
@@ -90,6 +90,12 @@ MAX_OPCOES_EXIBIDAS = 4
 
 # === Scraping ===
 SCRAPER_TIMEOUT_SEGUNDOS = 30
+# Teto da ESPERA ATIVA pelos cards de produto na página de busca. Os cards são
+# server-rendered (presentes ~0,05s após o domcontentloaded — benchmark de campo
+# 2026-06-25), então um HIT retorna instantâneo; este teto só é pago num MISS
+# (nenhum card = sem resultado). Substitui o antigo sleep FIXO de 1,5s +
+# networkidle, que desperdiçava ~2,9s POR REQUISIÇÃO (52% do tempo era sleep).
+SCRAPER_ESPERA_CARDS_MS = 1500
 # Máximo de candidatos retornados por (item, fornecedor). Calibrado em
 # 2026-05-27 após operador reportar que 47-60 candidatos por item poluía
 # a UI. Top-N por relevância (depois por preço) é suficiente — o restante

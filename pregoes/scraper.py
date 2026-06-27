@@ -469,6 +469,31 @@ def _esperar_sessao(context, page, timeout_s: int = 15) -> bool:
     return False
 
 
+# Seletor dos cards de produto na página de busca (mesmo nos dois sites). Usado
+# tanto na ESPERA ATIVA (`_carregar_busca`) quanto no `page.evaluate` que lê os
+# atributos data-* — DEVEM casar.
+_SEL_CARD = ".product-card__info[data-codigo-produto]"
+
+
+def _carregar_busca(page, url: str) -> None:
+    """Abre a página de busca e ESPERA ATIVAMENTE os cards aparecerem — em vez do
+    sleep FIXO de 1,5s + ``networkidle``, que torrava ~2,9s POR REQUISIÇÃO
+    (benchmark de campo 2026-06-25: 52% do tempo era sleep cego).
+
+    Os cards são server-rendered: já estão no DOM ~0,05s após o
+    ``domcontentloaded``, então um HIT retorna instantâneo. Num MISS (nenhum
+    card = sem resultado) cai no teto curto ``SCRAPER_ESPERA_CARDS_MS`` e segue —
+    o ``evaluate`` do chamador devolve ``[]`` SEM perder preço por sair cedo
+    demais (a espera garante que, se houver cards, eles já renderizaram)."""
+    page.goto(url, wait_until="domcontentloaded",
+              timeout=config.SCRAPER_TIMEOUT_SEGUNDOS * 1000)
+    try:
+        page.wait_for_selector(_SEL_CARD, state="attached",
+                               timeout=config.SCRAPER_ESPERA_CARDS_MS)
+    except Exception:
+        pass   # nenhum card no prazo → sem resultado (evaluate devolve [])
+
+
 class AlmeidaDistribuidor:
     """
     Scraper de almeidadistribuidor.com.br.
@@ -672,8 +697,7 @@ class AlmeidaDistribuidor:
         """Faz uma busca crua usando a página recebida e retorna até N
         resultados parseados (sem filtro de relevância — caller filtra)."""
         url = f"{_BASE_URL_ALMEIDA}/busca?s={quote_plus(query)}"
-        page.goto(url, wait_until="networkidle", timeout=config.SCRAPER_TIMEOUT_SEGUNDOS * 1000)
-        page.wait_for_timeout(1_500)
+        _carregar_busca(page, url)
 
         # Pega todos os cards e seus atributos data-* num único round-trip
         # ao browser. Mais barato que `.locator().all()` + `.get_attribute()`
@@ -914,8 +938,7 @@ class DantasDistribuidora:
 
     def _buscar_query(self, page, query: str, confianca: str) -> list[ResultadoBusca]:
         url = f"{_BASE_URL_DANTAS}/busca?s={quote_plus(query)}"
-        page.goto(url, wait_until="networkidle", timeout=config.SCRAPER_TIMEOUT_SEGUNDOS * 1000)
-        page.wait_for_timeout(1_500)
+        _carregar_busca(page, url)
 
         cards_attrs = page.evaluate("""
             () => {
