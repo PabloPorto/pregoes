@@ -50,6 +50,34 @@ python -m playwright install chromium || (
     pause & exit /b 1
 )
 
+REM 3b. Garante o .streamlit\config.toml. A pasta comeca com ponto e o Finder
+REM      do Mac a ESCONDE, entao costuma NAO ir junto ao copiar o pen drive e o
+REM      PyInstaller aborta por nao achar o arquivo (campo 2026-06). Recria aqui
+REM      se faltar — mesmo conteudo do repo (tema + loopback).
+if not exist ".streamlit\config.toml" (
+    if not exist ".streamlit" mkdir ".streamlit"
+    (
+        echo [theme]
+        echo base = "light"
+        echo primaryColor = "#1E40AF"
+        echo backgroundColor = "#F8FAFC"
+        echo secondaryBackgroundColor = "#FFFFFF"
+        echo textColor = "#0F172A"
+        echo font = "sans serif"
+        echo [server]
+        echo address = "127.0.0.1"
+        echo headless = true
+        echo runOnSave = true
+        echo fileWatcherType = "auto"
+        echo [browser]
+        echo gatherUsageStats = false
+        echo [client]
+        echo showErrorDetails = "none"
+        echo toolbarMode = "minimal"
+    ) > ".streamlit\config.toml"
+    echo [build] .streamlit\config.toml criado automaticamente.
+)
+
 REM 4. Build
 pyinstaller pregoes.spec --noconfirm --clean || (echo [ERRO] PyInstaller falhou. & pause & exit /b 1)
 
