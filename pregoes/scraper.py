@@ -356,6 +356,11 @@ class _RateLimiter:
 
 _SEL_FORMA = 'select[name="id_forma_pagamento_preferencia"]'
 _SEL_PRAZO = 'select[name="id_condicao_pagamento_preferencia"]'
+# A aplicação roda UMA vez (re-abrir o modal várias vezes seguidas dispara a
+# instabilidade do site). A VERIFICAÇÃO relê a forma salva — e essa leitura (a
+# parte instável, mas read-only) é que re-tenta, pois evita o sucesso FALSO do
+# código antigo (logava 'aplicada' sem conferir → preço saía na condição errada).
+_PAG_LEITURAS_VERIF = 3
 
 
 def _abrir_modal_preferencias(page) -> bool:
@@ -388,50 +393,95 @@ def _abrir_modal_preferencias(page) -> bool:
     return False
 
 
-def _aplicar_preferencia_pagamento(page, fornecedor: str) -> None:
-    """Aplica a condição de pagamento configurada para `fornecedor` na sessão.
+def _forma_salva(page, base_url: str) -> Optional[str]:
+    """Lê o VALUE da forma de pagamento atualmente SALVA na conta (re-navega +
+    reabre o modal). É a VERIFICAÇÃO real de que a condição pegou — o site às
+    vezes não persiste o 'Confirmar'. Re-tenta a LEITURA (a parte instável, mas
+    read-only): devolve o 1º valor NÃO-VAZIO lido, ou None se não conseguiu
+    (vazio = modal não assentou; não é uma forma de verdade)."""
+    for _ in range(_PAG_LEITURAS_VERIF):
+        try:
+            page.goto(base_url, wait_until="networkidle",
+                      timeout=config.SCRAPER_TIMEOUT_SEGUNDOS * 1000)
+            if _abrir_modal_preferencias(page):
+                # O <select> popula o value via JS DEPOIS de abrir o modal — em
+                # leitura rápida ele lê '' (vazio) antes de assentar. Espera o
+                # value ficar não-vazio antes de ler (campo 2026-06-27, Almeida).
+                try:
+                    page.wait_for_function(
+                        "s => { const e = document.querySelector(s);"
+                        " return !!(e && e.value); }",
+                        arg=_SEL_FORMA, timeout=3_000)
+                except Exception:
+                    pass
+                valor = page.eval_on_selector(_SEL_FORMA, "el => el.value")
+                if valor:
+                    return valor
+        except Exception:
+            pass
+        page.wait_for_timeout(1_200)
+    return None
 
-    Degrada graciosamente: sem preferência configurada, ou se o modal/select não
-    aparecer, NÃO mexe — segue no default do site (comportamento anterior, zero
-    regressão). NUNCA levanta exceção (não pode derrubar o login)."""
+
+def _aplicar_preferencia_pagamento(page, fornecedor: str) -> None:
+    """Aplica a condição de pagamento configurada e CONFIRMA que pegou.
+
+    Por que CONFERIR relendo a forma: o site às vezes NÃO persiste o clique
+    'Confirmar' (modal instável — campo 2026-06-27, Dantas). O código antigo
+    logava 'aplicada' sem verificar, então os preços saíam na condição ERRADA
+    (ex.: PIX em vez de banco) EM SILÊNCIO. Agora a função é HONESTA: confirma,
+    ou avisa que não pegou, ou avisa que não deu pra conferir — nunca mente.
+
+    A aplicação roda UMA vez (reabrir o modal em sequência rápida dispara a
+    instabilidade do site); só a LEITURA de verificação re-tenta. Degrada
+    gracioso: NUNCA levanta (não pode derrubar o login); sem preferência
+    configurada, não mexe (segue no default do site)."""
     pref = credenciais.carregar_preferencia_pagamento(fornecedor)
     if not pref or not pref.get("forma_value") or not pref.get("prazo_value"):
         return
     base_url = config.FORNECEDORES.get(fornecedor)
     if not base_url:
         return
+    alvo, alvo_txt = pref["forma_value"], pref.get("forma_texto")
     try:
         page.goto(base_url, wait_until="networkidle",
                   timeout=config.SCRAPER_TIMEOUT_SEGUNDOS * 1000)
         if not _abrir_modal_preferencias(page):
-            _logger.warning(
-                "Condição de pagamento (%s): não abri o modal de preferências — "
-                "seguindo no default do site.", fornecedor)
+            _logger.warning("Condição de pagamento (%s): não abri o modal — "
+                            "preços podem sair no default do site. Confira.",
+                            fornecedor)
             return
-        _select_visivel(page, _SEL_FORMA, pref["forma_value"], pref.get("forma_texto"))
-        # A forma re-renderiza o <select> de Condição/Prazo via JS (mostra/oculta
-        # e popula) de forma ASSÍNCRONA. Esperamos o re-render ASSENTAR e só então
-        # checamos a visibilidade ATUAL: o prazo só existe para boleto/cartão; PIX
-        # e PAGAMENTO ANTECIPADO o ocultam. Aplicar prazo num select que vai ser
-        # ocultado travava ~60s e voltava preço no default (achado de campo
-        # 2026-06: forma PIX não tem prazo).
+        _select_visivel(page, _SEL_FORMA, alvo, alvo_txt)
+        # A forma re-renderiza o <select> de Prazo via JS de forma ASSÍNCRONA: o
+        # prazo só existe para boleto/cartão; PIX e PAGAMENTO ANTECIPADO o ocultam.
+        # Esperamos o re-render assentar e checamos a visibilidade ATUAL (aplicar
+        # prazo num select que vai sumir travava ~60s; campo 2026-06).
         page.wait_for_timeout(1_200)
-        tem_prazo = bool(pref.get("prazo_value")
-                         and page.locator(f"{_SEL_PRAZO}:visible").count())
-        if tem_prazo:
+        if pref.get("prazo_value") and page.locator(f"{_SEL_PRAZO}:visible").count():
             _select_visivel(page, _SEL_PRAZO, pref["prazo_value"], pref.get("prazo_texto"))
         botao = page.get_by_role("button", name="Confirmar")
         if not botao.count():
             botao = page.get_by_text("Confirmar", exact=False)
         botao.first.click(timeout=5_000)
         page.wait_for_timeout(2_500)   # sessão atualiza (PHPSESSID/token)
-        _logger.info("Condição de pagamento aplicada (%s): %s | %s", fornecedor,
-                     pref.get("forma_texto"),
-                     pref.get("prazo_texto") if tem_prazo else "(forma sem prazo)")
     except Exception as exc:
-        _logger.warning(
-            "Não consegui aplicar a condição de pagamento em %s (%s) — seguindo "
-            "no default do site.", fornecedor, type(exc).__name__)
+        _logger.warning("Falha ao aplicar a condição de pagamento em %s (%s) — "
+                        "preços podem sair no default do site. Confira.",
+                        fornecedor, type(exc).__name__)
+        return
+    # CONFERE o que REALMENTE ficou salvo na conta.
+    salva = _forma_salva(page, base_url)
+    if salva == alvo:
+        _logger.info("Condição de pagamento CONFIRMADA (%s): forma %s",
+                     fornecedor, alvo_txt)
+    elif salva is None:
+        _logger.warning("Apliquei a condição em %s, mas NÃO consegui CONFERIR "
+                        "(modal instável) — confira se o preço saiu em %s.",
+                        fornecedor, alvo_txt)
+    else:
+        _logger.warning("Condição em %s NÃO pegou: a conta ficou na forma '%s', "
+                        "não na configurada '%s' (%s) — preços podem sair "
+                        "errados. Confira.", fornecedor, salva, alvo, alvo_txt)
 
 
 def _select_visivel(page, seletor: str, value: str, texto: str | None,

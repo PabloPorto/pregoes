@@ -174,3 +174,56 @@ def test_fornecedor_desconhecido_nao_quebra(monkeypatch):
     page = _FakePage()
     scraper._aplicar_preferencia_pagamento(page, "inexistente")
     assert page.gotos == []   # sem base_url → não faz nada
+
+
+# --- VERIFICAÇÃO pós-aplicação (campo 2026-06-27): o código antigo logava
+# 'aplicada' SEM conferir, e o preço saía na condição errada em silêncio (ex.:
+# Dantas configurada em banco, preço vinha PIX). Agora relê a forma salva e é
+# HONESTO: confirma / avisa que não pegou / avisa que não deu pra conferir.
+
+_PREF = {"forma_value": "001", "forma_texto": "BANCO DO BRASIL",
+         "prazo_value": "1", "prazo_texto": "A VISTA"}
+
+
+def _capturar_logs(monkeypatch):
+    msgs: list = []
+
+    def _wrap(orig):
+        def w(m, *a, **k):
+            msgs.append((m % a) if a else m)
+            return orig(m, *a, **k)
+        return w
+
+    monkeypatch.setattr(scraper._logger, "info", _wrap(scraper._logger.info))
+    monkeypatch.setattr(scraper._logger, "warning", _wrap(scraper._logger.warning))
+    return msgs
+
+
+def test_verifica_confirma_quando_forma_salva_bate(monkeypatch):
+    monkeypatch.setattr(scraper.credenciais, "carregar_preferencia_pagamento",
+                        lambda f: _PREF)
+    monkeypatch.setattr(scraper, "_forma_salva", lambda page, base: "001")  # pegou
+    msgs = _capturar_logs(monkeypatch)
+    scraper._aplicar_preferencia_pagamento(_FakePage(), "dantas")
+    assert any("CONFIRMADA" in m for m in msgs)
+
+
+def test_verifica_avisa_quando_forma_salva_diverge(monkeypatch):
+    monkeypatch.setattr(scraper.credenciais, "carregar_preferencia_pagamento",
+                        lambda f: _PREF)
+    # a conta ficou em PIX2 (não no banco configurado) → preço sairia errado
+    monkeypatch.setattr(scraper, "_forma_salva", lambda page, base: "PIX2")
+    msgs = _capturar_logs(monkeypatch)
+    scraper._aplicar_preferencia_pagamento(_FakePage(), "dantas")
+    assert any("NÃO pegou" in m for m in msgs)
+    assert not any("CONFIRMADA" in m for m in msgs)
+
+
+def test_verifica_avisa_quando_nao_consegue_ler(monkeypatch):
+    monkeypatch.setattr(scraper.credenciais, "carregar_preferencia_pagamento",
+                        lambda f: _PREF)
+    monkeypatch.setattr(scraper, "_forma_salva", lambda page, base: None)  # leitura falhou
+    msgs = _capturar_logs(monkeypatch)
+    scraper._aplicar_preferencia_pagamento(_FakePage(), "dantas")
+    assert any("CONFERIR" in m for m in msgs)
+    assert not any("CONFIRMADA" in m for m in msgs)
