@@ -54,29 +54,31 @@ REM 3b. Garante o .streamlit\config.toml. A pasta comeca com ponto e o Finder
 REM      do Mac a ESCONDE, entao costuma NAO ir junto ao copiar o pen drive e o
 REM      PyInstaller aborta por nao achar o arquivo (campo 2026-06). Recria aqui
 REM      se faltar — mesmo conteudo do repo (tema + loopback).
-if not exist ".streamlit\config.toml" (
-    if not exist ".streamlit" mkdir ".streamlit"
-    (
-        echo [theme]
-        echo base = "light"
-        echo primaryColor = "#1E40AF"
-        echo backgroundColor = "#F8FAFC"
-        echo secondaryBackgroundColor = "#FFFFFF"
-        echo textColor = "#0F172A"
-        echo font = "sans serif"
-        echo [server]
-        echo address = "127.0.0.1"
-        echo headless = true
-        echo runOnSave = true
-        echo fileWatcherType = "auto"
-        echo [browser]
-        echo gatherUsageStats = false
-        echo [client]
-        echo showErrorDetails = "none"
-        echo toolbarMode = "minimal"
-    ) > ".streamlit\config.toml"
-    echo [build] .streamlit\config.toml criado automaticamente.
-)
+REM      (Sem if(...) aninhado: cmd quebra o bloco com o ')' interno. Usamos
+REM       'goto' para pular quando o arquivo ja existe.)
+if exist ".streamlit\config.toml" goto :config_ok
+if not exist ".streamlit" mkdir ".streamlit"
+(
+    echo [theme]
+    echo base = "light"
+    echo primaryColor = "#1E40AF"
+    echo backgroundColor = "#F8FAFC"
+    echo secondaryBackgroundColor = "#FFFFFF"
+    echo textColor = "#0F172A"
+    echo font = "sans serif"
+    echo [server]
+    echo address = "127.0.0.1"
+    echo headless = true
+    echo runOnSave = true
+    echo fileWatcherType = "auto"
+    echo [browser]
+    echo gatherUsageStats = false
+    echo [client]
+    echo showErrorDetails = "none"
+    echo toolbarMode = "minimal"
+) > ".streamlit\config.toml"
+echo [build] .streamlit\config.toml criado automaticamente.
+:config_ok
 
 REM 4. Build
 pyinstaller pregoes.spec --noconfirm --clean || (echo [ERRO] PyInstaller falhou. & pause & exit /b 1)
