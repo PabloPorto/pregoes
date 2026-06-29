@@ -187,6 +187,11 @@ CHAVES_PREGAO = ("extracao", "df_editavel", "resultados_busca",
                  "usando_tabelas_docling", "mapeamento_tabela_idx",
                  "markup_overrides", "pregao_gerado_hash")
 
+# O rascunho (autosave anti-apagão) salva o estado do pregão (CHAVES_PREGAO) MAIS
+# os metadados que ficam fora dele (órgão/número/PDF) e a tela atual — para
+# restaurar EXATAMENTE onde o operador parou.
+_CHAVES_RASCUNHO = CHAVES_PREGAO + ("orgao", "numero", "pdf_path", "tela")
+
 # Passos do fluxo principal — alimentam o stepper de progresso no topo das telas
 # do fluxo (redesign UX 2026-06). "Planilha" é o passo-meta (concluído ao gerar).
 PASSOS_FLUXO = ["Edital", "Itens", "Preços", "Planilha"]
@@ -196,6 +201,9 @@ def _limpar_pregao() -> None:
     """Descarta o estado do pregão atual da sessão."""
     for k in CHAVES_PREGAO:
         st.session_state.pop(k, None)
+    # Começar um novo pregão DESCARTA o backup do anterior (escolha explícita do
+    # operador). Um apagão NÃO chama isto, então o rascunho sobrevive p/ o boot.
+    _limpar_rascunho()
     # Fecha as sessões manuais ao vivo em cache (navegador logado): um novo
     # pregão começa do zero e não herda navegador/sessão do anterior.
     try:
@@ -798,6 +806,10 @@ def _gerar_excel(itens: list, markup: float, selecoes: dict,
         # próxima geração.
         try:
             _persistir_edital(itens, selecoes, destino, markup)
+            # Trabalho salvo DE VERDADE (arquivo + banco + histórico) → descarta
+            # o rascunho. Se o persist falhou (except abaixo), MANTÉM o rascunho:
+            # se cair antes de re-gerar, o operador recupera o trabalho.
+            _limpar_rascunho()
         except Exception:
             _log.exception("falha ao salvar o histórico do pregão (planilha OK)")
             style.bloco_aviso(
@@ -1755,6 +1767,91 @@ def _hash_pregao() -> str:
     return hashlib.sha256(repr(partes).encode("utf-8")).hexdigest()
 
 
+# === Rascunho: autosave anti-apagão do pregão em andamento + recuperação ===
+
+def _assinatura_rascunho() -> str:
+    """Assinatura barata do estado em andamento — muda quando há ALGO novo a
+    salvar. Combina o hash dos insumos (itens+seleções+markup) com a contagem
+    de resultados da busca (que o hash não cobre) e os metadados."""
+    ss = st.session_state
+    n_result = sum(len(v or [])
+                   for v in (ss.get("resultados_busca") or {}).values())
+    return f"{_hash_pregao()}:{n_result}:{ss.get('orgao')}:{ss.get('numero')}"
+
+
+def _salvar_rascunho() -> None:
+    """Autosave: grava o snapshot do pregão SE algo mudou (assinatura). No-op
+    quando não há pregão em andamento, ou enquanto uma recuperação está PENDENTE
+    (não sobrescreve o rascunho recuperável até o operador decidir)."""
+    if not _tem_pregao_em_andamento() or st.session_state.get("_rascunho_disponivel"):
+        return
+    assinatura = _assinatura_rascunho()
+    if st.session_state.get("_rascunho_assin") == assinatura:
+        return
+    from pregoes import rascunho
+    estado = {k: st.session_state[k] for k in _CHAVES_RASCUNHO
+              if k in st.session_state}
+    rascunho.salvar(estado)
+    st.session_state["_rascunho_assin"] = assinatura
+
+
+def _limpar_rascunho() -> None:
+    """Remove o rascunho do disco e os controles em memória."""
+    from pregoes import rascunho
+    rascunho.limpar()
+    for k in ("_rascunho_assin", "_rascunho_disponivel"):
+        st.session_state.pop(k, None)
+
+
+def _restaurar_rascunho(estado: dict) -> None:
+    """Repõe o estado salvo na sessão — EXATAMENTE como estava (mesmos itens,
+    busca, seleções, markup). A partir daí o motor opera idêntico a uma busca
+    nova, pois a session_state fica idêntica."""
+    for k, v in estado.items():
+        st.session_state[k] = v
+    st.session_state.pop("_rascunho_disponivel", None)
+    st.session_state["_rascunho_assin"] = _assinatura_rascunho()
+
+
+def _verificar_rascunho_no_boot() -> None:
+    """Uma vez por sessão: se há um rascunho salvo de antes (apagão) e a sessão
+    atual está VAZIA, sinaliza para oferecer a recuperação."""
+    if st.session_state.get("_rascunho_checado"):
+        return
+    st.session_state["_rascunho_checado"] = True
+    from pregoes import rascunho
+    if not _tem_pregao_em_andamento() and rascunho.existe():
+        st.session_state["_rascunho_disponivel"] = True
+
+
+def _banner_rascunho() -> None:
+    """Faixa de recuperação: oferece continuar o pregão da sessão anterior."""
+    if not st.session_state.get("_rascunho_disponivel"):
+        return
+    from pregoes import rascunho
+    estado = rascunho.carregar()
+    if not estado:
+        st.session_state.pop("_rascunho_disponivel", None)
+        return
+    n = len(estado.get("itens_edital") or estado.get("itens_revisados") or [])
+    nome = estado.get("numero") or estado.get("orgao") or "sem identificação"
+    detalhe = f"{n} {'itens' if n != 1 else 'item'}"
+    if estado.get("resultados_busca"):
+        detalhe += " · busca de preços já feita"
+    style.bloco_aviso(
+        f"<b>Recuperar pregão em andamento?</b> Encontrei um trabalho não "
+        f"finalizado de antes ({nome} · {detalhe}). Continue de onde parou ou "
+        "comece do zero.", tipo="info")
+    c1, c2 = st.columns(2)
+    if c1.button("Continuar de onde parei", type="primary", width="stretch",
+                 key="rasc_continuar"):
+        _restaurar_rascunho(estado)
+        st.rerun()
+    if c2.button("Começar do zero", width="stretch", key="rasc_zero"):
+        _limpar_rascunho()
+        st.rerun()
+
+
 def _escolher_opcao(idx: int, o) -> None:
     """Registra a marca/preço que o operador escolheu para um item."""
     from pregoes.exportador import SelecaoFornecedor
@@ -2407,26 +2504,17 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
 
     st.divider()
 
-    # Paginação simples
+    # Paginação simples. A NAVEGAÇÃO (Anterior/Próxima) fica no FIM da lista
+    # (pedido do cliente 2026-06-27) e some quando há só 1 página — no topo era
+    # só ruído. Aqui em cima fica só o cálculo da fatia atual.
     POR_PAGINA = 20
     n_paginas = (total + POR_PAGINA - 1) // POR_PAGINA
     if "pagina_busca" not in st.session_state:
         st.session_state.pagina_busca = 0
-    pag = st.session_state.pagina_busca
+    pag = min(st.session_state.pagina_busca, max(0, n_paginas - 1))
+    st.session_state.pagina_busca = pag
     inicio = pag * POR_PAGINA
     fim = min(inicio + POR_PAGINA, total)
-
-    pcol1, pcol2, pcol3 = st.columns([1, 2, 1])
-    with pcol1:
-        if st.button("◀ Anterior", disabled=(pag == 0)):
-            st.session_state.pagina_busca = max(0, pag - 1)
-            st.rerun()
-    with pcol2:
-        st.caption(f"Página {pag + 1} de {n_paginas} — itens {inicio + 1}–{fim}")
-    with pcol3:
-        if st.button("Próxima ▶", disabled=(pag >= n_paginas - 1)):
-            st.session_state.pagina_busca = min(n_paginas - 1, pag + 1)
-            st.rerun()
 
     # Lista de itens da página atual
     for idx in range(inicio, fim):
@@ -2594,6 +2682,21 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
                     nao_usar_set.add(idx)
                     st.session_state.selecoes.pop(idx, None)
                     st.rerun()
+
+    # Navegação de páginas — no FIM da lista, e só quando há mais de uma página.
+    if n_paginas > 1:
+        pcol1, pcol2, pcol3 = st.columns([1, 2, 1])
+        with pcol1:
+            if st.button("◀ Anterior", disabled=(pag == 0), key="pag_ant"):
+                st.session_state.pagina_busca = max(0, pag - 1)
+                st.rerun()
+        with pcol2:
+            st.caption(f"Página {pag + 1} de {n_paginas} — itens {inicio + 1}–{fim}")
+        with pcol3:
+            if st.button("Próxima ▶", disabled=(pag >= n_paginas - 1),
+                         key="pag_prox"):
+                st.session_state.pagina_busca = min(n_paginas - 1, pag + 1)
+                st.rerun()
 
     st.divider()
     st.caption(f"{selecionados} de {total} itens com marca/preço selecionados.")
@@ -3028,7 +3131,12 @@ TELAS = {
 }
 
 _renderizar_sidebar()
+# Recuperação anti-apagão: oferece restaurar um pregão não finalizado de antes
+# (faixa no topo), e ao fim de cada render salva o rascunho do que está em curso.
+_verificar_rascunho_no_boot()
+_banner_rascunho()
 TELAS[st.session_state.tela]()
+_salvar_rascunho()
 
 # Confirmação de "Novo pregão" — aberta aqui, no nível superior do script
 # (fora do `with st.sidebar`), para o modal não renderizar dentro da sidebar.

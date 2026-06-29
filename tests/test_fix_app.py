@@ -646,3 +646,62 @@ def test_escolher_opcao_grava_selecao():
     sel = ss["selecoes"][3]
     assert sel.preco == 12.5 and sel.marca == "DECA" and sel.fornecedor == "almeida"
     ss.clear()
+
+
+# === Rascunho anti-apagão: autosave + recuperação (nível app) ===============
+
+def test_rascunho_salva_apagao_e_restaura_identico(monkeypatch, tmp_path):
+    """Simula um apagão: autosava o pregão em andamento, ZERA a memória e
+    restaura — itens, busca e seleções idênticos, e volta na tela onde parou
+    (é o que faz o motor seguir 'igual à primeira busca')."""
+    from pregoes import rascunho
+    from pregoes.exportador import SelecaoFornecedor
+    from pregoes.extrator import ItemExtraido
+    monkeypatch.setattr(rascunho, "CAMINHO", tmp_path / "rascunho.pkl")
+    ss = app.st.session_state
+    ss.clear()
+    itens = [ItemExtraido(item_numero=1, descricao="LUVA", quantidade=2.0)]
+    ss["itens_edital"] = itens
+    ss["itens_revisados"] = itens
+    ss["resultados_busca"] = {0: []}                 # busca de preços já feita
+    ss["selecoes"] = {0: SelecaoFornecedor(preco=8.32, codigo_fornecedor="9185",
+                                           marca="M", fornecedor="dantas")}
+    ss["orgao"] = "Prefeitura"; ss["numero"] = "001/2026"; ss["tela"] = "busca"
+
+    app._salvar_rascunho()
+    assert rascunho.existe()                          # gravou no disco
+
+    ss.clear(); ss["tela"] = "home"                   # APAGÃO: memória zerada
+    estado = rascunho.carregar()
+    assert estado is not None
+    app._restaurar_rascunho(estado)
+    assert ss["itens_revisados"][0].descricao == "LUVA"
+    assert ss["selecoes"][0].codigo_fornecedor == "9185"
+    assert ss["tela"] == "busca"                      # volta onde parou
+    ss.clear()
+
+
+def test_rascunho_nao_salva_sem_pregao_em_andamento(monkeypatch, tmp_path):
+    from pregoes import rascunho
+    monkeypatch.setattr(rascunho, "CAMINHO", tmp_path / "rascunho.pkl")
+    app.st.session_state.clear()                      # nada em andamento
+    app._salvar_rascunho()
+    assert not (tmp_path / "rascunho.pkl").exists()   # não cria rascunho à toa
+
+
+def test_rascunho_nao_sobrescreve_enquanto_recuperacao_pendente(monkeypatch, tmp_path):
+    """Com a faixa de recuperação pendente, o autosave NÃO sobrescreve o
+    rascunho recuperável — senão começar algo novo apagaria o que se recupera."""
+    from pregoes import rascunho
+    from pregoes.exportador import SelecaoFornecedor
+    monkeypatch.setattr(rascunho, "CAMINHO", tmp_path / "rascunho.pkl")
+    rascunho.salvar({"itens_edital": [], "selecoes": {0: "ANTIGO"}})
+    ss = app.st.session_state
+    ss.clear()
+    ss["_rascunho_disponivel"] = True                 # recuperação pendente
+    ss["itens_revisados"] = [1]                       # operador mexeu em algo
+    ss["selecoes"] = {0: SelecaoFornecedor(preco=1.0, codigo_fornecedor="X",
+                                           marca="Y", fornecedor="almeida")}
+    app._salvar_rascunho()
+    assert rascunho.carregar()["selecoes"][0] == "ANTIGO"   # disco intocado
+    ss.clear()
