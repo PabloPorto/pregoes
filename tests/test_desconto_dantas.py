@@ -38,6 +38,34 @@ def test_selecao_sem_fornecedor_nao_descontada(tmp_path):
     assert _L5(tmp_path, sel) == 5.0
 
 
+# === Sufixo "D" no código dos itens da Dantas (coluna T) — pedido do cliente
+# 2026-06-27: identificar a origem direto na planilha. Mesma convenção do
+# importador (sufixo D = Dantas), então a retroalimentação atribui a origem certa.
+
+def _T5(tmp_path, sel):
+    destino = tmp_path / "m.xlsx"
+    exportar(_itens(1), selecoes={0: sel}, destino=destino)
+    return load_workbook(destino).active["T5"].value
+
+
+def test_codigo_dantas_recebe_sufixo_D(tmp_path):
+    sel = SelecaoFornecedor(preco=5.0, codigo_fornecedor="9185", marca="A",
+                            fornecedor="dantas")
+    assert _T5(tmp_path, sel) == "9185D"
+
+
+def test_codigo_almeida_fica_sem_sufixo(tmp_path):
+    sel = SelecaoFornecedor(preco=5.0, codigo_fornecedor="37215", marca="A",
+                            fornecedor="almeida")
+    assert _T5(tmp_path, sel) == "37215"
+
+
+def test_codigo_dantas_vazio_nao_vira_so_D(tmp_path):
+    sel = SelecaoFornecedor(preco=5.0, codigo_fornecedor="", marca="A",
+                            fornecedor="dantas")
+    assert not _T5(tmp_path, sel)   # sem código → não inventa um "D" solto
+
+
 def test_desconto_compoe_com_markup_st(tmp_path):
     # Item Dantas COM ST: custo descontado em L E markup 1,30 na fórmula G.
     sel = {0: SelecaoFornecedor(preco=10.0, codigo_fornecedor="1", marca="A",

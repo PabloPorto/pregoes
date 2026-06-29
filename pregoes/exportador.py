@@ -277,7 +277,14 @@ def exportar(
             # sobre esse custo já descontado — oferta mais competitiva, margem
             # preservada. Almeida/catálogo não recebem desconto.
             ws[f"L{linha}"] = _preco_com_desconto(sel)
-            _escrever_texto(ws[f"T{linha}"], sel.codigo_fornecedor)
+            # Marca "D" no código dos itens da DANTAS para o operador identificar
+            # a origem direto na planilha (pedido do cliente 2026-06-27). Almeida
+            # fica como veio. Mantém a convenção do importador (sufixo D = Dantas),
+            # então a retroalimentação continua atribuindo a origem certa.
+            codigo = sel.codigo_fornecedor
+            if codigo and eh_dantas(sel):
+                codigo = f"{codigo}D"
+            _escrever_texto(ws[f"T{linha}"], codigo)
             _escrever_texto(ws[f"U{linha}"], sel.marca)
 
         # Markup POR ITEM (Fase 4) — sobrescreve a fórmula G SÓ desta linha
