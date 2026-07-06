@@ -232,16 +232,23 @@ def _chamar_llm_em_lotes(
         lote = normas[inicio:inicio + _LOTE_MAX]
         itens = [{"id": i, "texto": n} for i, n in enumerate(lote)]
         prompt = PROMPT.format(itens=json.dumps(itens, ensure_ascii=False))
-        try:
-            resp = client.models.generate_content(model=modelo, contents=prompt)
-            arr = _parse_array(resp.text or "")
-        except Exception:
-            # Lote falhou (quota/rede) — os outros seguem; estes viram
-            # fallback local. Loga para diagnóstico (não silencioso).
+        arr = None
+        erro = "?"
+        for _tentativa in (1, 2):   # 1 retry: soluço de rede/quota momentânea
+            try:
+                resp = client.models.generate_content(model=modelo, contents=prompt)
+                arr = _parse_array(resp.text or "")
+                break
+            except Exception as exc:
+                erro = f"{type(exc).__name__}: {str(exc)[:160]}"
+        if arr is None:
+            # Lote falhou mesmo com retry — os outros seguem; estes viram
+            # fallback local. A CAUSA vai no log: antes era engolida e o campo
+            # mostrava falha recorrente sem dizer por quê (auditoria 2026-07).
             from .logconf import get_logger
             get_logger("alinhador").warning(
-                "Lote de canonização falhou (%d itens) — virou fallback local.",
-                len(lote))
+                "Lote de canonização falhou (%d itens) após 2 tentativas — "
+                "virou fallback local. Causa: %s", len(lote), erro)
             continue
         for obj in arr:
             try:

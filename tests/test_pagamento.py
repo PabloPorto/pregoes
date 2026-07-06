@@ -262,3 +262,49 @@ def test_verify_first_precheck_falho_nao_impede_aplicacao(monkeypatch):
     scraper._aplicar_preferencia_pagamento(page, "dantas")   # não levanta
     assert page.selects and page.clicks, "aplicou normalmente"
     assert any("CONFIRMADA" in m for m in msgs)
+
+
+# --- STATUS devolvido p/ a UI (2026-07-06): o aviso agora aparece NA TELA ----
+
+def test_status_sem_config(monkeypatch):
+    monkeypatch.setattr(scraper.credenciais, "carregar_preferencia_pagamento",
+                        lambda f: None)
+    assert scraper._aplicar_preferencia_pagamento(_FakePage(), "almeida") == \
+        ("sem_config", None)
+
+
+def test_status_confirmada_verify_first(monkeypatch):
+    monkeypatch.setattr(scraper.credenciais, "carregar_preferencia_pagamento",
+                        lambda f: _PREF)
+    monkeypatch.setattr(scraper, "_forma_salva", lambda page, base, **k: "001")
+    assert scraper._aplicar_preferencia_pagamento(_FakePage(), "dantas") == \
+        ("confirmada", "BANCO DO BRASIL")
+
+
+def test_status_nao_pegou(monkeypatch):
+    monkeypatch.setattr(scraper.credenciais, "carregar_preferencia_pagamento",
+                        lambda f: _PREF)
+    monkeypatch.setattr(scraper, "_forma_salva", lambda page, base, **k: "PIX2")
+    status, forma = scraper._aplicar_preferencia_pagamento(_FakePage(), "dantas")
+    assert status == "nao_pegou" and forma == "BANCO DO BRASIL"
+
+
+def test_status_nao_conferida(monkeypatch):
+    monkeypatch.setattr(scraper.credenciais, "carregar_preferencia_pagamento",
+                        lambda f: _PREF)
+    monkeypatch.setattr(scraper, "_forma_salva", lambda page, base, **k: None)
+    assert scraper._aplicar_preferencia_pagamento(_FakePage(), "dantas")[0] == \
+        "nao_conferida"
+
+
+def test_status_falhou_em_erro(monkeypatch):
+    monkeypatch.setattr(scraper.credenciais, "carregar_preferencia_pagamento",
+                        lambda f: _PREF)
+    monkeypatch.setattr(scraper, "_forma_salva", lambda page, base, **k: None)
+
+    class _BoomPage:
+        def goto(self, *a, **k):
+            raise RuntimeError("rede caiu")
+
+    assert scraper._aplicar_preferencia_pagamento(_BoomPage(), "dantas")[0] == \
+        "falhou"

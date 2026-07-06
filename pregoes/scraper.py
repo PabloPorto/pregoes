@@ -325,25 +325,29 @@ def _parse_card_attributes(attrs: dict, confianca: str) -> Optional[ResultadoBus
 
 
 class _RateLimiter:
-    """Rate limiter serial — intervalo mínimo entre requests.
+    """Rate limiter com LOCK — intervalo mínimo entre requests do fornecedor.
 
-    Não precisa de lock porque o scraper é serial agora (commit ____).
-    Mantém o uso para não sobrecarregar os sites parceiros: guarda
-    timestamp da última chamada e dorme se a próxima vem cedo demais.
+    Com o paralelismo por item (2026-07) várias threads compartilham o mesmo
+    limiter; o lock garante a cadência GLOBAL por fornecedor (dormir segurando
+    o lock é proposital: enfileira os demais exatamente no ritmo permitido).
+    Continua respeitando os sites parceiros: pool grande não aumenta req/s.
     """
 
     def __init__(self, max_req_por_segundo: float):
+        import threading as _th
         self._min_intervalo = 1.0 / max_req_por_segundo if max_req_por_segundo > 0 else 0.0
         self._ultimo = 0.0
+        self._lock = _th.Lock()
 
     def acquire(self) -> None:
-        agora = time.monotonic()
-        espera = self._min_intervalo - (agora - self._ultimo)
-        if espera > 0:
-            time.sleep(espera)
-            self._ultimo = time.monotonic()
-        else:
-            self._ultimo = agora
+        with self._lock:
+            agora = time.monotonic()
+            espera = self._min_intervalo - (agora - self._ultimo)
+            if espera > 0:
+                time.sleep(espera)
+                self._ultimo = time.monotonic()
+            else:
+                self._ultimo = agora
 
 
 # === Condição de pagamento (Forma + Prazo) ===
@@ -426,8 +430,13 @@ def _forma_salva(page, base_url: str,
     return None
 
 
-def _aplicar_preferencia_pagamento(page, fornecedor: str) -> None:
+def _aplicar_preferencia_pagamento(page, fornecedor: str) -> tuple:
     """Aplica a condição de pagamento configurada e CONFIRMA que pegou.
+
+    Devolve ``(status, forma_texto)`` para a UI mostrar NA TELA quando não
+    confirmar (antes o aviso ia só pro log e o operador não via — auditoria
+    2026-07): ``confirmada`` | ``nao_pegou`` | ``nao_conferida`` | ``falhou``
+    | ``sem_config``.
 
     Por que CONFERIR relendo a forma: o site às vezes NÃO persiste o clique
     'Confirmar' (modal instável — campo 2026-06-27, Dantas). O código antigo
@@ -441,10 +450,10 @@ def _aplicar_preferencia_pagamento(page, fornecedor: str) -> None:
     configurada, não mexe (segue no default do site)."""
     pref = credenciais.carregar_preferencia_pagamento(fornecedor)
     if not pref or not pref.get("forma_value") or not pref.get("prazo_value"):
-        return
+        return ("sem_config", None)
     base_url = config.FORNECEDORES.get(fornecedor)
     if not base_url:
-        return
+        return ("sem_config", None)
     alvo, alvo_txt = pref["forma_value"], pref.get("forma_texto")
     # VERIFY-FIRST (perf, campo 2026-07): a condição é PERSISTENTE na conta —
     # na maioria dos logins ela JÁ está certa. Conferir antes (1 leitura) pula a
@@ -454,7 +463,7 @@ def _aplicar_preferencia_pagamento(page, fornecedor: str) -> None:
         if _forma_salva(page, base_url, leituras=1) == alvo:
             _logger.info("Condição de pagamento CONFIRMADA (%s): forma %s "
                          "(já estava configurada)", fornecedor, alvo_txt)
-            return
+            return ("confirmada", alvo_txt)
     except Exception:
         pass
     try:
@@ -464,7 +473,7 @@ def _aplicar_preferencia_pagamento(page, fornecedor: str) -> None:
             _logger.warning("Condição de pagamento (%s): não abri o modal — "
                             "preços podem sair no default do site. Confira.",
                             fornecedor)
-            return
+            return ("falhou", alvo_txt)
         _select_visivel(page, _SEL_FORMA, alvo, alvo_txt)
         # A forma re-renderiza o <select> de Prazo via JS de forma ASSÍNCRONA: o
         # prazo só existe para boleto/cartão; PIX e PAGAMENTO ANTECIPADO o ocultam.
@@ -482,7 +491,7 @@ def _aplicar_preferencia_pagamento(page, fornecedor: str) -> None:
         _logger.warning("Falha ao aplicar a condição de pagamento em %s (%s) — "
                         "preços podem sair no default do site. Confira.",
                         fornecedor, type(exc).__name__)
-        return
+        return ("falhou", alvo_txt)
     # CONFERE o que REALMENTE ficou salvo na conta.
     try:
         salva = _forma_salva(page, base_url)
@@ -491,14 +500,17 @@ def _aplicar_preferencia_pagamento(page, fornecedor: str) -> None:
     if salva == alvo:
         _logger.info("Condição de pagamento CONFIRMADA (%s): forma %s",
                      fornecedor, alvo_txt)
+        return ("confirmada", alvo_txt)
     elif salva is None:
         _logger.warning("Apliquei a condição em %s, mas NÃO consegui CONFERIR "
                         "(modal instável) — confira se o preço saiu em %s.",
                         fornecedor, alvo_txt)
+        return ("nao_conferida", alvo_txt)
     else:
         _logger.warning("Condição em %s NÃO pegou: a conta ficou na forma '%s', "
                         "não na configurada '%s' (%s) — preços podem sair "
                         "errados. Confira.", fornecedor, salva, alvo, alvo_txt)
+        return ("nao_pegou", alvo_txt)
 
 
 def _select_visivel(page, seletor: str, value: str, texto: str | None,
@@ -797,7 +809,7 @@ class AlmeidaDistribuidor:
             # Aplica a condição de pagamento configurada (Forma+Prazo) na sessão,
             # senão o preço vem da condição default do site. Gracioso: sem config
             # ou modal ausente → segue no default (não derruba o login).
-            _aplicar_preferencia_pagamento(self._page, self.nome)
+            self._pagamento_status = _aplicar_preferencia_pagamento(self._page, self.nome)
             # Cookies extraídos DEPOIS do pagamento: a condição vive na sessão
             # do servidor, e o header pronto habilita o transporte HTTP das
             # consultas (Fase 2 de perf; falha aqui só desliga o atalho).
@@ -1089,7 +1101,7 @@ class DantasDistribuidora:
             # Aplica a condição de pagamento configurada (Forma+Prazo) na sessão,
             # senão o preço vem da condição default do site. Gracioso: sem config
             # ou modal ausente → segue no default (não derruba o login).
-            _aplicar_preferencia_pagamento(self._page, self.nome)
+            self._pagamento_status = _aplicar_preferencia_pagamento(self._page, self.nome)
             # Cookies extraídos DEPOIS do pagamento: a condição vive na sessão
             # do servidor, e o header pronto habilita o transporte HTTP das
             # consultas (Fase 2 de perf; falha aqui só desliga o atalho).
@@ -1317,7 +1329,7 @@ def buscar_precos_para_itens(
     usar_canonico: bool = True,
     usar_llm_judge: bool = True,
     diagnostico: Optional[LogDiagnostico] = None,
-    max_workers: Optional[int] = None,  # aceito mas ignorado (compat. legacy)
+    max_workers: Optional[int] = None,  # itens em paralelo (ver docstring)
 ) -> ResultadoLote:
     """Busca em batch SERIAL com cache TTL=2d, Camada 0 (catálogo) e
     coleta de erros.
@@ -1328,11 +1340,15 @@ def buscar_precos_para_itens(
     3. Caminho atual: busca textual em N camadas (descrição/keywords)
     4. Aprendizado (Camada 4) — não aqui; consultado no orquestrador da UI
 
-    Por que serial: Playwright sync API atrela o browser à thread que
-    chamou `sync_playwright().start()`. Tentar paralelizar com
-    ThreadPoolExecutor gera `greenlet.error: Cannot switch to a different
-    thread` (visto em produção em 2026-05-27). Para retomar paralelismo,
-    refatorar para `playwright.async_api`.
+    PARALELISMO POR ITEM (2026-07-06): quando TODOS os fornecedores têm
+    transporte HTTP (`_http_cookie`), os itens rodam num pool de threads
+    (`max_workers` ou config.SCRAPER_POOL_SIZE) — consultas HTTP são
+    thread-safe. Os workers ficam em modo `_http_only` e NUNCA tocam o
+    Playwright (que é preso à thread dona — o greenlet error de 2026-05-27);
+    item cuja sessão HTTP expirar volta numa 2ª passada SERIAL com o
+    fallback de navegador. Callback de progresso SEMPRE dispara na thread
+    de quem chamou. Diagnóstico ligado ou fornecedor sem HTTP → serial
+    (comportamento histórico, idêntico).
 
     Erros isolados (timeout, layout mudou) **não** quebram batch — vão
     para `ResultadoLote.erros` que a UI mostra num painel.
@@ -1355,8 +1371,8 @@ def buscar_precos_para_itens(
             com o que cada camada fez por item × fornecedor. Use com
             `pregoes.diagnostico.exportar_xlsx` para gerar a planilha de
             análise. Não altera o algoritmo — só observação.
-        max_workers: ignorado (mantido na assinatura para compat. com
-            chamadores antigos que ainda passam o argumento).
+        max_workers: nº de itens em paralelo quando o transporte HTTP
+            está ativo (default: config.SCRAPER_POOL_SIZE). 1 força serial.
     """
     resultados: dict[int, list[ResultadoBusca]] = {}
     erros: list[ErroBusca] = []
@@ -1434,227 +1450,336 @@ def buscar_precos_para_itens(
         for f in fornecedores
     }
 
-    try:
-        for idx, item in enumerate(itens):
-            bag: list[ResultadoBusca] = []
-            desc_norm = normalizar_descricao(item.descricao)
+    def _processar_item(idx: int, item, conn):
+        """Pipeline COMPLETO de um item (aprendizado → cache → código →
+        textual → judge) contra a conexão RECEBIDA (a da thread, no modo
+        paralelo). Devolve (bag, erros_item, stats) — nenhum estado
+        compartilhado é mutado aqui (thread-safe por construção)."""
+        erros_item: list[ErroBusca] = []
+        stats = {"cache_hits": 0, "cache_misses": 0, "codigo_hits": 0,
+                 "llm_judge_hits": 0}
+        bag: list[ResultadoBusca] = []
+        desc_norm = normalizar_descricao(item.descricao)
 
-            # Log do item (diagnóstico)
-            log_item = None
-            if diagnostico is not None:
-                log_item = diagnostico.get_item(
-                    idx=idx,
-                    descricao=item.descricao or "",
-                    desc_norm=desc_norm,
-                    keywords=keywords(item.descricao or ""),
-                )
-
-            # Camada 0: descobre o produto canônico UMA vez por item (não
-            # por fornecedor). Pode falhar em catálogo vazio ou item sem
-            # correspondência — segue normal.
-            match = None
-            if catalogo:
-                try:
-                    match = melhor_match(
-                        item.descricao, catalogo,
-                        canonico_edital=canon_itens.get(item.descricao),
-                    )
-                except Exception:
-                    match = None
-
-            for forn in fornecedores:
-                # Log por (item, fornecedor) — preenchido ao longo do loop
-                log_forn = None
-                if log_item is not None:
-                    log_forn = LogItemFornecedor(fornecedor=forn.nome)
-                    log_item.por_fornecedor.append(log_forn)
-
-                # Camada 4 (APRENDIZADO) — consultada ANTES do cache: a escolha
-                # que o operador ENSINOU tem precedência sobre qualquer resultado
-                # cru de busca/cache. Sem isto, um item repetido dentro da janela
-                # de cache (2 dias) voltava com o "melhor match" textual em vez da
-                # escolha A do operador — a retroalimentação ficava enjaulada
-                # atrás do cache (feedback do cliente 2026-06; é a inteligência
-                # central do produto). Casa por descrição exata normalizada
-                # (rápido, indexado) ou, se não, por reuso FUZZY (descrição
-                # parecida + dimensão compatível). O resultado é recuperado por
-                # CÓDIGO (preço ao vivo) logo abaixo.
-                codigo_aprendido = None
-                if conn is not None and desc_norm:
-                    try:
-                        aprendido = db.aprendido_buscar(conn, desc_norm, forn.nome)
-                        if aprendido is None and aprendidos_lista:
-                            aprendido = melhor_aprendido_fuzzy(
-                                item.descricao, forn.nome, aprendidos_lista)
-                        if aprendido is not None:
-                            codigo_aprendido = aprendido["codigo_fornecedor"]
-                    except Exception:
-                        codigo_aprendido = None
-                if log_forn is not None and codigo_aprendido:
-                    log_forn.aprendido_codigo = codigo_aprendido
-
-                # 1. Cache de descrição (camada mais barata) — só quando NÃO há
-                # escolha aprendida para esta descrição. Item aprendido pula o
-                # cache de propósito (acima): a escolha do operador vence o
-                # resultado cru. Payload VAZIO é tratado como miss: "não achei"
-                # não se distingue de falha transitória — honrar "[]" por 2 dias
-                # virava "Não encontrado" persistente na hora do pregão
-                # (auditoria 2026-06, achado alto nº 5).
-                if (not codigo_aprendido and conn is not None
-                        and usar_cache and desc_norm):
-                    payload = db.cache_buscar(conn, desc_norm, forn.nome)
-                    encontrados_cache = (
-                        _payload_to_resultados(payload, forn.nome)
-                        if payload is not None else []
-                    )
-                    if encontrados_cache:
-                        cache_hits += 1
-                        if log_forn is not None:
-                            log_forn.cache_hit = True
-                        bag.extend(encontrados_cache)
-                        if log_forn is not None:
-                            _registrar_candidatos_finais(
-                                log_forn, encontrados_cache, item.descricao,
-                                veio_por_codigo=False, aprovado_judge=False,
-                            )
-                        continue
-                    cache_misses += 1
-
-                # Camada 0: matcher contra catálogo
-                if log_forn is not None and match is not None:
-                    log_forn.catalogo_produto_id = match.produto.produto_id
-                    log_forn.catalogo_score = float(match.score)
-                    log_forn.catalogo_codigo = match.codigo_para(forn.nome)
-
-                # 2. Busca por código (determinística): o APRENDIZADO (acima) tem
-                # prioridade; senão, o código do catálogo (Camada 0). Só dispara
-                # se há código para este fornecedor E o scraper suporta
-                # `buscar_por_codigo` (mocks antigos não).
-                codigo = codigo_aprendido or (
-                    match.codigo_para(forn.nome) if match else None
-                )
-                buscar_codigo = getattr(forn, "buscar_por_codigo", None)
-                encontrados: list[ResultadoBusca] = []
-                veio_por_codigo = False
-                if codigo and callable(buscar_codigo):
-                    try:
-                        encontrados = buscar_codigo(codigo) or []
-                    except Exception as exc:
-                        # Falha na busca por código não bloqueia — registra
-                        # e cai pra busca textual abaixo.
-                        erros.append(ErroBusca(
-                            indice_item=idx,
-                            fornecedor=forn.nome,
-                            descricao_resumo=(item.descricao or "")[:60],
-                            mensagem=f"buscar_por_codigo({codigo}): "
-                                     f"{type(exc).__name__}: {exc}",
-                        ))
-                        encontrados = []
-                    # Salvaguarda: o produto trazido pelo código tem que casar
-                    # com o que esperávamos. Referência = descrição canônica
-                    # do catálogo (veio do matcher) ou do edital (veio de
-                    # aprendizado). Se não casa, o código/fornecedor está
-                    # errado — descarta e cai na busca textual.
-                    if encontrados:
-                        desc_ref = (
-                            match.produto.descricao_canonica
-                            if (match and not codigo_aprendido)
-                            else item.descricao
-                        )
-                        rel_cod = relevancia(
-                            desc_ref, encontrados[0].descricao_encontrada)
-                        if rel_cod < _RELEVANCIA_SALVAGUARDA_CODIGO:
-                            encontrados = []   # produto sem relação — descarta
-                    if encontrados:
-                        veio_por_codigo = True
-                        codigo_hits += 1
-                        # Origem "aprendizado": a UI pré-seleciona e mostra
-                        # "✓ sua escolha anterior" (retroalimentação VISÍVEL).
-                        # ResultadoBusca é frozen → recria com a marca de origem.
-                        if codigo_aprendido:
-                            encontrados = [
-                                replace(r, veio_por_aprendizado=True)
-                                for r in encontrados
-                            ]
-                        if log_forn is not None:
-                            log_forn.veio_por_codigo = True
-
-                # 3. Fallback: busca textual (caminho atual / Camadas 1+2+3
-                # internas do scraper).
-                if not encontrados:
-                    try:
-                        _kw = {}
-                        if suporta_log.get(forn.nome) and log_forn is not None:
-                            _kw["_log"] = log_forn
-                        if suporta_idx.get(forn.nome) and idx_codigo:
-                            _kw["idx_codigo"] = idx_codigo
-                        encontrados = forn.buscar(item.descricao, **_kw)
-                    except Exception as exc:
-                        erros.append(ErroBusca(
-                            indice_item=idx,
-                            fornecedor=forn.nome,
-                            descricao_resumo=(item.descricao or "")[:60],
-                            mensagem=f"{type(exc).__name__}: {exc}",
-                        ))
-                        continue
-
-                bag.extend(encontrados)
-                if log_forn is not None:
-                    _registrar_candidatos_finais(
-                        log_forn, encontrados, item.descricao,
-                        veio_por_codigo=veio_por_codigo, aprovado_judge=False,
-                    )
-
-                # 4. Grava no cache — exceto quando veio por código ou
-                # quando NÃO achou nada. Cache por descrição não casa bem
-                # com resultado por código (vários itens do edital com
-                # descrições diferentes podem apontar pro mesmo produto).
-                # E resultado VAZIO nunca entra no cache: um logout/soluço
-                # do site no meio do lote viraria "Não encontrado" por 2
-                # dias (auditoria 2026-06, achado alto nº 5). O custo é
-                # re-buscar os legitimamente inexistentes a cada rodada —
-                # aceitável e mais seguro.
-                if (conn is not None and usar_cache and desc_norm
-                        and encontrados and not veio_por_codigo):
-                    payload = json.dumps(
-                        [asdict(r) for r in encontrados], ensure_ascii=False
-                    )
-                    db.cache_gravar(conn, desc_norm, forn.nome, payload)
-
-            # Camada 3: LLM judge sob demanda.
-            # Dispara só quando o item caiu no fallback "top 3 variação"
-            # (sinal de falha das Camadas 1+2 textuais). Não dispara se
-            # já há resultado 'exato' — sinal de match confiável.
-            todos_variacao = bool(bag) and all(
-                r.confianca == "variacao" for r in bag
+        # Log do item (diagnóstico)
+        log_item = None
+        if diagnostico is not None:
+            log_item = diagnostico.get_item(
+                idx=idx,
+                descricao=item.descricao or "",
+                desc_norm=desc_norm,
+                keywords=keywords(item.descricao or ""),
             )
-            if usar_llm_judge and todos_variacao:
-                judge_n_entrada = len(bag)
-                bag_judged = _aplicar_llm_judge(item.descricao, bag, conn)
+
+        # Camada 0: descobre o produto canônico UMA vez por item (não
+        # por fornecedor). Pode falhar em catálogo vazio ou item sem
+        # correspondência — segue normal.
+        match = None
+        if catalogo:
+            try:
+                match = melhor_match(
+                    item.descricao, catalogo,
+                    canonico_edital=canon_itens.get(item.descricao),
+                )
+            except Exception:
+                match = None
+
+        for forn in fornecedores:
+            # Log por (item, fornecedor) — preenchido ao longo do loop
+            log_forn = None
+            if log_item is not None:
+                log_forn = LogItemFornecedor(fornecedor=forn.nome)
+                log_item.por_fornecedor.append(log_forn)
+
+            # Camada 4 (APRENDIZADO) — consultada ANTES do cache: a escolha
+            # que o operador ENSINOU tem precedência sobre qualquer resultado
+            # cru de busca/cache. Sem isto, um item repetido dentro da janela
+            # de cache (2 dias) voltava com o "melhor match" textual em vez da
+            # escolha A do operador — a retroalimentação ficava enjaulada
+            # atrás do cache (feedback do cliente 2026-06; é a inteligência
+            # central do produto). Casa por descrição exata normalizada
+            # (rápido, indexado) ou, se não, por reuso FUZZY (descrição
+            # parecida + dimensão compatível). O resultado é recuperado por
+            # CÓDIGO (preço ao vivo) logo abaixo.
+            codigo_aprendido = None
+            if conn is not None and desc_norm:
+                try:
+                    aprendido = db.aprendido_buscar(conn, desc_norm, forn.nome)
+                    if aprendido is None and aprendidos_lista:
+                        aprendido = melhor_aprendido_fuzzy(
+                            item.descricao, forn.nome, aprendidos_lista)
+                    if aprendido is not None:
+                        codigo_aprendido = aprendido["codigo_fornecedor"]
+                except Exception:
+                    codigo_aprendido = None
+            if log_forn is not None and codigo_aprendido:
+                log_forn.aprendido_codigo = codigo_aprendido
+
+            # 1. Cache de descrição (camada mais barata) — só quando NÃO há
+            # escolha aprendida para esta descrição. Item aprendido pula o
+            # cache de propósito (acima): a escolha do operador vence o
+            # resultado cru. Payload VAZIO é tratado como miss: "não achei"
+            # não se distingue de falha transitória — honrar "[]" por 2 dias
+            # virava "Não encontrado" persistente na hora do pregão
+            # (auditoria 2026-06, achado alto nº 5).
+            if (not codigo_aprendido and conn is not None
+                    and usar_cache and desc_norm):
+                payload = db.cache_buscar(conn, desc_norm, forn.nome)
+                encontrados_cache = (
+                    _payload_to_resultados(payload, forn.nome)
+                    if payload is not None else []
+                )
+                if encontrados_cache:
+                    stats["cache_hits"] += 1
+                    if log_forn is not None:
+                        log_forn.cache_hit = True
+                    bag.extend(encontrados_cache)
+                    if log_forn is not None:
+                        _registrar_candidatos_finais(
+                            log_forn, encontrados_cache, item.descricao,
+                            veio_por_codigo=False, aprovado_judge=False,
+                        )
+                    continue
+                stats["cache_misses"] += 1
+
+            # Camada 0: matcher contra catálogo
+            if log_forn is not None and match is not None:
+                log_forn.catalogo_produto_id = match.produto.produto_id
+                log_forn.catalogo_score = float(match.score)
+                log_forn.catalogo_codigo = match.codigo_para(forn.nome)
+
+            # 2. Busca por código (determinística): o APRENDIZADO (acima) tem
+            # prioridade; senão, o código do catálogo (Camada 0). Só dispara
+            # se há código para este fornecedor E o scraper suporta
+            # `buscar_por_codigo` (mocks antigos não).
+            codigo = codigo_aprendido or (
+                match.codigo_para(forn.nome) if match else None
+            )
+            buscar_codigo = getattr(forn, "buscar_por_codigo", None)
+            encontrados: list[ResultadoBusca] = []
+            veio_por_codigo = False
+            if codigo and callable(buscar_codigo):
+                try:
+                    encontrados = buscar_codigo(codigo) or []
+                except SessaoHTTPExpirou:
+                    raise   # paralelo: item volta pela via do navegador
+                except Exception as exc:
+                    # Falha na busca por código não bloqueia — registra
+                    # e cai pra busca textual abaixo.
+                    erros_item.append(ErroBusca(
+                        indice_item=idx,
+                        fornecedor=forn.nome,
+                        descricao_resumo=(item.descricao or "")[:60],
+                        mensagem=f"buscar_por_codigo({codigo}): "
+                                 f"{type(exc).__name__}: {exc}",
+                    ))
+                    encontrados = []
+                # Salvaguarda: o produto trazido pelo código tem que casar
+                # com o que esperávamos. Referência = descrição canônica
+                # do catálogo (veio do matcher) ou do edital (veio de
+                # aprendizado). Se não casa, o código/fornecedor está
+                # errado — descarta e cai na busca textual.
+                if encontrados:
+                    desc_ref = (
+                        match.produto.descricao_canonica
+                        if (match and not codigo_aprendido)
+                        else item.descricao
+                    )
+                    rel_cod = relevancia(
+                        desc_ref, encontrados[0].descricao_encontrada)
+                    if rel_cod < _RELEVANCIA_SALVAGUARDA_CODIGO:
+                        encontrados = []   # produto sem relação — descarta
+                if encontrados:
+                    veio_por_codigo = True
+                    stats["codigo_hits"] += 1
+                    # Origem "aprendizado": a UI pré-seleciona e mostra
+                    # "✓ sua escolha anterior" (retroalimentação VISÍVEL).
+                    # ResultadoBusca é frozen → recria com a marca de origem.
+                    if codigo_aprendido:
+                        encontrados = [
+                            replace(r, veio_por_aprendizado=True)
+                            for r in encontrados
+                        ]
+                    if log_forn is not None:
+                        log_forn.veio_por_codigo = True
+
+            # 3. Fallback: busca textual (caminho atual / Camadas 1+2+3
+            # internas do scraper).
+            if not encontrados:
+                try:
+                    _kw = {}
+                    if suporta_log.get(forn.nome) and log_forn is not None:
+                        _kw["_log"] = log_forn
+                    if suporta_idx.get(forn.nome) and idx_codigo:
+                        _kw["idx_codigo"] = idx_codigo
+                    encontrados = forn.buscar(item.descricao, **_kw)
+                except SessaoHTTPExpirou:
+                    raise   # paralelo: item volta pela via do navegador
+                except Exception as exc:
+                    erros_item.append(ErroBusca(
+                        indice_item=idx,
+                        fornecedor=forn.nome,
+                        descricao_resumo=(item.descricao or "")[:60],
+                        mensagem=f"{type(exc).__name__}: {exc}",
+                    ))
+                    continue
+
+            bag.extend(encontrados)
+            if log_forn is not None:
+                _registrar_candidatos_finais(
+                    log_forn, encontrados, item.descricao,
+                    veio_por_codigo=veio_por_codigo, aprovado_judge=False,
+                )
+
+            # 4. Grava no cache — exceto quando veio por código ou
+            # quando NÃO achou nada. Cache por descrição não casa bem
+            # com resultado por código (vários itens do edital com
+            # descrições diferentes podem apontar pro mesmo produto).
+            # E resultado VAZIO nunca entra no cache: um logout/soluço
+            # do site no meio do lote viraria "Não encontrado" por 2
+            # dias (auditoria 2026-06, achado alto nº 5). O custo é
+            # re-buscar os legitimamente inexistentes a cada rodada —
+            # aceitável e mais seguro.
+            if (conn is not None and usar_cache and desc_norm
+                    and encontrados and not veio_por_codigo):
+                payload = json.dumps(
+                    [asdict(r) for r in encontrados], ensure_ascii=False
+                )
+                db.cache_gravar(conn, desc_norm, forn.nome, payload)
+
+        # Camada 3: LLM judge sob demanda.
+        # Dispara só quando o item caiu no fallback "top 3 variação"
+        # (sinal de falha das Camadas 1+2 textuais). Não dispara se
+        # já há resultado 'exato' — sinal de match confiável.
+        todos_variacao = bool(bag) and all(
+            r.confianca == "variacao" for r in bag
+        )
+        if usar_llm_judge and todos_variacao:
+            judge_n_entrada = len(bag)
+            bag_judged = _aplicar_llm_judge(item.descricao, bag, conn)
+            if log_item is not None:
+                # Marca em todos os logs por_fornecedor que houve julgamento
+                for lf in log_item.por_fornecedor:
+                    lf.judge_chamado = True
+                    lf.judge_n_candidatos_entrada = judge_n_entrada
+            if bag_judged is not None:
+                bag = bag_judged
+                stats["llm_judge_hits"] += 1
                 if log_item is not None:
-                    # Marca em todos os logs por_fornecedor que houve julgamento
-                    for lf in log_item.por_fornecedor:
-                        lf.judge_chamado = True
-                        lf.judge_n_candidatos_entrada = judge_n_entrada
-                if bag_judged is not None:
-                    bag = bag_judged
-                    llm_judge_hits += 1
-                    if log_item is not None:
-                        # Reescreve candidatos_finais marcando aprovados
-                        _marcar_aprovados_judge(log_item, bag_judged, item.descricao)
+                    # Reescreve candidatos_finais marcando aprovados
+                    _marcar_aprovados_judge(log_item, bag_judged, item.descricao)
 
-            resultados[idx] = bag
 
-            # Commit incremental: persiste já o cache deste item. Sem isto, uma
-            # interrupção no meio do lote (operador fecha a janela, queda de
-            # rede, timeout) descartaria TODAS as buscas da rodada — meia hora
-            # de trabalho perdida. Com WAL o custo por commit é baixo; o ganho
-            # é a re-busca retomar do cache de onde parou.
-            if conn is not None:
-                conn.commit()
 
-            if progresso_callback is not None:
-                progresso_callback(idx + 1, total, (item.descricao or "")[:60])
+        return bag, erros_item, stats
+
+    def _absorver(idx: int, bag, erros_item, stats) -> None:
+        nonlocal cache_hits, cache_misses, codigo_hits, llm_judge_hits
+        resultados[idx] = bag
+        erros.extend(erros_item)
+        cache_hits += stats["cache_hits"]
+        cache_misses += stats["cache_misses"]
+        codigo_hits += stats["codigo_hits"]
+        llm_judge_hits += stats["llm_judge_hits"]
+
+    # Quantos itens processar EM PARALELO. Serial (1) quando: diagnóstico
+    # ligado (objeto compartilhado), algum fornecedor sem transporte HTTP
+    # (o fallback tocaria o Playwright fora da thread dona → greenlet), ou
+    # max_workers=1. Fakes de teste não têm _http_cookie → caminho serial
+    # IDÊNTICO ao histórico (zero regressão por construção).
+    workers = 1
+    if diagnostico is None and fornecedores and all(
+            getattr(f, "_http_cookie", None) for f in fornecedores):
+        workers = max(1, min(max_workers or config.SCRAPER_POOL_SIZE or 1,
+                             total))
+
+    try:
+        if workers <= 1:
+            for idx, item in enumerate(itens):
+                bag, erros_item, stats = _processar_item(idx, item, conn)
+                _absorver(idx, bag, erros_item, stats)
+                # Commit incremental: uma interrupção no meio do lote não
+                # descarta o cache dos itens já buscados (WAL = commit barato).
+                if conn is not None:
+                    conn.commit()
+                if progresso_callback is not None:
+                    progresso_callback(idx + 1, total,
+                                       (item.descricao or "")[:60])
+        else:
+            import threading
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+
+            # Conexão SQLite POR THREAD (sqlite3 proíbe cruzar threads; WAL
+            # serializa as escritas). Fechadas no finally.
+            _local = threading.local()
+            _conns_extra: list = []
+            _lk = threading.Lock()
+
+            def _conn_da_thread():
+                c = getattr(_local, "conn", None)
+                if c is None and (usar_cache or usar_catalogo):
+                    c = db.conectar()
+                    _local.conn = c
+                    with _lk:
+                        _conns_extra.append(c)
+                return c
+
+            def _no_worker(idx: int, item):
+                c = _conn_da_thread()
+                try:
+                    bag, erros_item, stats = _processar_item(idx, item, c)
+                    if c is not None:
+                        c.commit()
+                    return ("ok", idx, item, bag, erros_item, stats)
+                except SessaoHTTPExpirou:
+                    # Sessão HTTP caiu p/ este item: volta depois, SERIAL,
+                    # pela via do navegador (fallback preservado).
+                    return ("navegador", idx, item, None, None, None)
+
+            # Workers só usam HTTP — nunca tocam o Playwright de outra thread.
+            _http_only_antes = {f.nome: getattr(f, "_http_only", False)
+                                for f in fornecedores}
+            for f in fornecedores:
+                f._http_only = True
+            pendentes_navegador: list = []
+            feitos = 0
+            try:
+                with ThreadPoolExecutor(max_workers=workers) as ex:
+                    futs = [ex.submit(_no_worker, idx, item)
+                            for idx, item in enumerate(itens)]
+                    for fut in as_completed(futs):
+                        status, idx, item, bag, erros_item, stats = fut.result()
+                        if status == "navegador":
+                            pendentes_navegador.append((idx, item))
+                            continue
+                        _absorver(idx, bag, erros_item, stats)
+                        feitos += 1
+                        if progresso_callback is not None:
+                            # No fio de quem chamou (as_completed roda aqui):
+                            # seguro para a UI (Streamlit não é thread-safe).
+                            progresso_callback(feitos, total,
+                                               (item.descricao or "")[:60])
+            finally:
+                for f in fornecedores:
+                    f._http_only = _http_only_antes.get(f.nome, False)
+                for c in _conns_extra:
+                    try:
+                        c.commit()
+                        c.close()
+                    except Exception:
+                        pass
+
+            # 2ª passada: itens cuja sessão HTTP expirou — SERIAL, na thread
+            # dona do Playwright, com o fallback de navegador liberado.
+            for idx, item in pendentes_navegador:
+                bag, erros_item, stats = _processar_item(idx, item, conn)
+                _absorver(idx, bag, erros_item, stats)
+                if conn is not None:
+                    conn.commit()
+                feitos += 1
+                if progresso_callback is not None:
+                    progresso_callback(feitos, total,
+                                       (item.descricao or "")[:60])
 
         if conn is not None:
             conn.commit()

@@ -798,3 +798,31 @@ def test_mesclar_incremental_respeita_nao_usar():
     assert 0 not in ss["selecoes"], "'não usar' não ganha default"
     assert ss["resultados_busca"][0], "mas o resultado fica disponível"
     ss.clear()
+
+
+# === Aviso NA TELA quando a condição de pagamento não confirmou ==============
+
+def test_avisos_pagamento_so_para_status_ruins():
+    class _F:
+        def __init__(self, status):
+            self._pagamento_status = status
+    sessoes = {
+        "almeida": _F(("confirmada", "PIX")),
+        "dantas": _F(("nao_pegou", "BANCO DO BRASIL")),
+    }
+    avisos = app._avisos_pagamento_de(sessoes)
+    assert "almeida" not in avisos, "confirmada não gera alerta"
+    assert "Dantas" in avisos["dantas"] and "BANCO DO BRASIL" in avisos["dantas"]
+
+
+def test_avisos_pagamento_nao_conferida_e_sem_status():
+    class _F:
+        def __init__(self, status=None):
+            if status:
+                self._pagamento_status = status
+    avisos = app._avisos_pagamento_de({
+        "almeida": _F(("nao_conferida", "PIX")),
+        "dantas": _F(),                        # sessão antiga sem o atributo
+    })
+    assert "confirmar" in avisos["almeida"].lower()
+    assert "dantas" not in avisos, "sem status = sem_config = sem alerta"

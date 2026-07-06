@@ -38,7 +38,7 @@ def _raiz_bundle() -> Path:
 # Versão do aplicativo — aparece na sidebar e no log de boot. Sem ela, o
 # suporte remoto fica às cegas sobre o que o cliente está rodando (auditoria
 # 2026-06). Bump a cada .exe entregue ao cliente.
-VERSAO_APP = "1.0.28"
+VERSAO_APP = "1.0.29"
 
 # Estrutura de diretórios
 BASE_DIR = _raiz_gravavel()
@@ -112,9 +112,10 @@ SCRAPER_ESPERA_CARDS_MS = 1000
 # é ruído de "produto da mesma categoria mas dimensão muito diferente".
 SCRAPER_MAX_CANDIDATOS_POR_FORNECEDOR = 5
 SCRAPER_RETRY = 2
-# Pool de páginas Playwright por fornecedor — paraleliza as buscas
-# em um lote. 4 é equilíbrio: ganho linear até ~5 antes do site começar
-# a competir por sessões. Acima de 5 não compensa.
+# Itens buscados EM PARALELO por fornecedor (threads de consultas HTTP —
+# 2026-07). O rate limiter global por fornecedor continua valendo (2 req/s),
+# então o pool encurta a espera de rede, não a cadência no site. 4 é
+# equilíbrio; 1 desliga o paralelismo por item.
 SCRAPER_POOL_SIZE = 4
 # Throttling: máximo de buscas iniciadas por segundo POR FORNECEDOR.
 # Respeita os parceiros — não confunda com pool_size (paralelismo).

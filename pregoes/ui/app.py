@@ -1409,6 +1409,11 @@ def tela_busca_precos():
                     "Abra no Excel/LibreOffice, anote `correto`/`errado`/`aceitavel` "
                     "na coluna **Avaliação** da aba **Resumo** e devolva para calibrar."
                 )
+        # Condição de pagamento não confirmada: o operador PRECISA ver isso
+        # onde revisa os preços (o log é invisível para ele).
+        for _aviso in (st.session_state.get("avisos_pagamento") or {}).values():
+            style.bloco_aviso(_aviso, tipo="warning")
+
         # Re-busca INCREMENTAL (perf, campo 2026-07): busca SÓ os itens sem
         # preço, mantendo resultados e escolhas já feitas. É seguro porque a
         # lista de itens não mudou nesta tela (os índices são estáveis); a
@@ -1494,6 +1499,29 @@ def tela_busca_precos():
         _executar_busca(itens, fornecedores_disponiveis,
                         salvar_diagnostico=salvar_diag)
         st.rerun()
+
+
+def _avisos_pagamento_de(sessoes: dict) -> dict:
+    """Alertas para a TELA quando a condição de pagamento de um fornecedor NÃO
+    ficou confirmada na sessão (antes o aviso ia só pro log e o operador não
+    via que os preços podiam estar na condição errada — risco financeiro)."""
+    avisos: dict = {}
+    for nome, forn in sessoes.items():
+        status, forma = (getattr(forn, "_pagamento_status", None)
+                         or ("sem_config", None))
+        rotulo = nome.capitalize()
+        forma_txt = f" (configurada: {forma})" if forma else ""
+        if status == "nao_pegou":
+            avisos[nome] = (
+                f"<b>Atenção — {rotulo}:</b> a condição de pagamento NÃO foi "
+                f"aplicada{forma_txt}. Os preços podem estar na condição errada "
+                "do site. Confira um item conhecido antes de gerar a planilha.")
+        elif status in ("nao_conferida", "falhou"):
+            avisos[nome] = (
+                f"<b>Atenção — {rotulo}:</b> não consegui confirmar a condição "
+                f"de pagamento{forma_txt}. Os preços PODEM estar na condição "
+                "errada. Confira um item conhecido antes de gerar a planilha.")
+    return avisos
 
 
 def _buscar_fornecedores_paralelo(itens_alvo: list, sessoes: dict,
@@ -1735,6 +1763,10 @@ def _executar_busca(itens: list, fornecedores_nomes: list[str],
             sessoes[nome] = obter_sessao_viva(nome)
         except Exception as exc:
             _registrar_falha_grave(nome, exc)
+
+    # Condição de pagamento não confirmada vira alerta NA TELA de resultados
+    # (persiste na sessão; a próxima busca recalcula).
+    st.session_state["avisos_pagamento"] = _avisos_pagamento_de(sessoes)
 
     # --- PARALELO (Fase 2 de perf): 1 thread por fornecedor, consultas via
     # HTTP (thread-safe). Requer TODAS as sessões com transporte HTTP; o modo
