@@ -59,18 +59,31 @@ def main() -> None:
         html = scraper._http_get(
             f"{base}/busca?s={termo.replace(' ', '+')}", forn._http_cookie)
         frag = _anonimizar(_fragmento_cards(html))
-        for indicio in ("@", "cnpj"):
-            resto = frag.lower().count(indicio) - frag.lower().count("example.com")
-            if indicio == "@" and resto > 0:
-                raise SystemExit(f"ABORTADO: sobrou '@' não anonimizado em {forn_nome}")
+        # PII: só e-mails REAIS contam ("@context"/"@type" do JSON-LD são
+        # marcadores do schema.org, benignos).
+        import re as _re
+        sobras = [m for m in _re.findall(r"[\w.+-]+@[\w-]+\.[\w.]+", frag)
+                  if "example.com" not in m]
+        if sobras:
+            raise SystemExit(f"ABORTADO: e-mail não anonimizado em {forn_nome}: {sobras[:2]}")
         (DESTINO / f"{forn_nome}_busca_logada.html").write_text(frag, encoding="utf-8")
         vazio = scraper._http_get(
             f"{base}/busca?s={TERMO_VAZIO}", forn._http_cookie)
         meio = len(vazio) // 2
         (DESTINO / f"{forn_nome}_busca_vazia.html").write_text(
             _anonimizar(vazio[max(0, meio - 15000):meio + 15000]), encoding="utf-8")
+        # Página de DETALHE (onde mora o "Código NCM" — contrato do
+        # consultar_ncms por HTTP). Pega a URL do 1º card e fatia ao redor.
+        cards = scraper._cards_do_html(html, 10)
+        url_prod = next((c["url"] for c in cards if c.get("url")), None)
+        if url_prod:
+            det = scraper._http_get(url_prod, "")
+            i_ncm = det.find("digo NCM")
+            ini_d = max(0, (i_ncm if i_ncm > 0 else len(det) // 2) - 2500)
+            (DESTINO / f"{forn_nome}_detalhe.html").write_text(
+                _anonimizar(det[ini_d:ini_d + 5000]), encoding="utf-8")
         print(f"{forn_nome}: fixtures gravadas "
-              f"({len(frag)//1024}KB cards + vazia)")
+              f"({len(frag)//1024}KB cards + vazia + detalhe)")
     scraper.fechar_sessoes_vivas()
 
 

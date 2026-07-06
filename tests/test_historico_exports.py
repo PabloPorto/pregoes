@@ -85,8 +85,9 @@ def test_init_db_do_zero_cria_exports_log_e_indice(tmp_path, monkeypatch):
     with db.conectar(dbp) as c:
         assert _tabela_existe(c, "exports_log")
         assert _indice_existe(c, "idx_exports_edital")
-        # init_db aplica migrations → head atual (2 com a v2 presente).
-        assert migrations._versao_atual(c) == 2
+        # init_db aplica migrations → head atual (3 com a v3 ncm_cache).
+        assert _tabela_existe(c, "ncm_cache")
+        assert migrations._versao_atual(c) == 3
 
 
 def test_migration_v2_sobe_banco_v1_popular_sem_perder_dados(tmp_path, monkeypatch):
@@ -106,11 +107,12 @@ def test_migration_v2_sobe_banco_v1_popular_sem_perder_dados(tmp_path, monkeypat
         c.commit()
 
     versao = migrations.migrate(dbp)
-    assert versao == 2
+    assert versao == 3   # v1 → head atual (v2 exports_log + v3 ncm_cache)
 
     with db.conectar(dbp) as c:
-        # Aditivo: a tabela nova existe e os dados antigos continuam lá.
+        # Aditivo: as tabelas novas existem e os dados antigos continuam lá.
         assert _tabela_existe(c, "exports_log")
+        assert _tabela_existe(c, "ncm_cache")
         assert _indice_existe(c, "idx_exports_edital")
         assert c.execute("SELECT COUNT(*) FROM produtos").fetchone()[0] == 1
         assert c.execute("SELECT COUNT(*) FROM editais").fetchone()[0] == 1
@@ -123,8 +125,8 @@ def test_migration_v2_idempotente(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DB_PATH", dbp)
 
     _schema_v1_sem_exports(dbp)
-    assert migrations.migrate(dbp) == 2
-    assert migrations.migrate(dbp) == 2  # 2ª vez: no-op
+    assert migrations.migrate(dbp) == 3
+    assert migrations.migrate(dbp) == 3  # 2ª vez: no-op
     with db.conectar(dbp) as c:
         # Só UMA linha registrando a v2 (não reaplicou).
         n_v2 = c.execute(
@@ -146,13 +148,15 @@ def test_migration_v2_cria_backup_pre_migration(tmp_path, monkeypatch):
     assert backups, "migrate deveria ter criado um backup pre-migration"
 
 
-def test_migrations_head_e_dois():
-    """Contrato: o head das MIGRATIONS é 2 (futuras começam em 3)."""
+def test_migrations_head_e_tres():
+    """Contrato: o head das MIGRATIONS é 3 (futuras começam em 4)."""
     head = max([migrations.BASELINE_VERSION] + [m[0] for m in migrations.MIGRATIONS])
-    assert head == 2
-    # A DDL e a função da v2 estão expostas no módulo (espelho de db.SCHEMA).
+    assert head == 3
+    # DDLs e funções expostas no módulo (espelho de db.SCHEMA).
     assert "exports_log" in migrations._DDL_EXPORTS_LOG
     assert callable(migrations._v2_exports_log)
+    assert "ncm_cache" in migrations._DDL_NCM_CACHE
+    assert callable(migrations._v3_ncm_cache)
 
 
 # === export_log_gravar ===

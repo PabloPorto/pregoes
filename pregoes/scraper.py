@@ -2064,41 +2064,59 @@ def buscar_no_site(
 
 # === Fase 4: NCM sob demanda (o NCM mora só na página de DETALHE) ===
 
-def consultar_ncms(pedidos, *, progresso=None) -> dict:
-    """Busca o NCM dos produtos ESCOLHIDOS, visitando a página de detalhe.
+RE_NCM_HTML = re.compile(r"C[óo]digo NCM[:\s]*([\d.]{4,})")
 
-    O card de busca não traz o NCM (confirmado em Almeida e Dantas) — ele está
-    só na página do produto (``Código NCM: ...``). Aqui, para os itens que o
-    operador escolheu, agrupamos por fornecedor, logamos UMA vez em cada e
-    visitamos a URL de cada produto, extraindo o NCM com
-    ``tributacao.ncm_de_texto``.
+
+def _extrair_ncm_html(html: str, codigo) -> "tuple[str, str | None]":
+    """Classifica a página de detalhe baixada por HTTP:
+    - ("ok", ncm)   → NCM achado (definitivo)
+    - ("ok", None)  → é a página do PRODUTO (código confere) mas SEM NCM
+                      (definitivo — igual ao navegador visitando e não achando)
+    - ("erro", None)→ ambíguo/quebrado → o navegador decide (fallback)."""
+    m = RE_NCM_HTML.search(html)
+    if m:
+        return ("ok", tributacao.normalizar_ncm(m.group(1)))
+    cod = str(codigo or "").strip()
+    if cod and f"digo: {cod}" in html:   # "Código: NNNN" da página de produto
+        return ("ok", None)
+    return ("erro", None)
+
+
+def consultar_ncms(pedidos, *, progresso=None) -> dict:
+    """Busca o NCM dos produtos ESCOLHIDOS — rápido e sem login (2026-07).
+
+    O NCM mora na página de DETALHE do produto (o card de busca não traz) e é
+    PÚBLICO (verificado nos 2 fornecedores) e imutável por sessão/pagamento.
+    Pipeline em 3 camadas, espelho da busca de preços:
+
+    1. **Cache durável** (``ncm_cache`` por fornecedor+código): produto já
+       consultado em QUALQUER pregão responde instantâneo, para sempre.
+    2. **HTTP em paralelo** (pool de threads, sem login): GET da página de
+       detalhe + extração do "Código NCM". Resultado definitivo entra no cache.
+    3. **Fallback navegador** (serial, sessão logada REUSADA via
+       ``obter_sessao_viva``) só para o que o HTTP não resolveu.
 
     Args:
-        pedidos: lista de ``(chave, fornecedor, url)`` dos produtos escolhidos.
-        progresso: callback opcional ``(feitos, total)`` para barra na UI.
+        pedidos: lista de ``(chave, fornecedor, url)`` ou
+            ``(chave, fornecedor, url, codigo)`` — o código habilita o cache
+            durável (tuplas antigas seguem funcionando, só sem cache).
+        progresso: callback ``(feitos, total)`` — SEMPRE na thread chamadora.
 
-    Retorna ``(ncms, falhas)``:
-    - ``ncms``: ``{chave: ncm|None}`` só dos itens REALMENTE visitados. ``None``
-      aqui é definitivo ("visitei a página e ela não traz NCM") — seguro de
-      cachear.
-    - ``falhas``: conjunto de chaves que NÃO puderam ser consultadas (login do
-      fornecedor falhou, navegador não subiu, ou o ``goto`` deu timeout). São
-      transitórias — o chamador NÃO deve cacheá-las e deve permitir re-tentar.
-
-    Separar os dois é o que evita o "cache negativo": antes, uma falha de login
-    virava ``None`` indistinguível de "produto sem NCM", o operador não sabia
-    por que nada foi classificado e o re-clique não re-tentava (auditoria
-    2026-06, mesmo padrão do cache de busca / bloco 3).
+    Retorna ``(ncms, falhas)`` com o MESMO contrato de antes:
+    - ``ncms[chave] = ncm|None`` só para resultados DEFINITIVOS (cacheáveis);
+    - ``falhas`` = transitórias (rede/login) — re-tentáveis, nunca cacheadas.
     """
-    from collections import defaultdict
+    import threading
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    por_forn = defaultdict(list)
-    for chave, forn, url in pedidos:
+    norm = []
+    for p in pedidos:
+        chave, forn, url = p[0], p[1], p[2]
+        codigo = p[3] if len(p) > 3 else None
         if url:
-            por_forn[forn].append((chave, url))
+            norm.append((chave, forn, url, codigo))
 
-    classes = {"almeida": AlmeidaDistribuidor, "dantas": DantasDistribuidora}
-    total = sum(len(v) for v in por_forn.values())
+    total = len(norm)
     feitos = 0
     ncms: dict = {}
     falhas: set = set()
@@ -2109,29 +2127,99 @@ def consultar_ncms(pedidos, *, progresso=None) -> dict:
         if progresso:
             progresso(feitos, total)
 
-    for forn, lista in por_forn.items():
-        cred = credenciais.carregar(forn)
-        cls = classes.get(forn)
-        if not cred or not cls:
-            for chave, _ in lista:
-                falhas.add(chave)
-                _avancar()
-            continue
+    conn = None
+    try:
         try:
-            with cls(cred["email"], cred["senha"]) as scraper:
-                for chave, url in lista:
-                    try:
-                        scraper._page.goto(url, wait_until="networkidle",
-                                           timeout=config.SCRAPER_TIMEOUT_SEGUNDOS * 1000)
-                        scraper._page.wait_for_timeout(500)
-                        txt = scraper._page.evaluate("() => document.body.innerText")
-                        ncms[chave] = tributacao.ncm_de_texto(txt)  # str|None definitivo
-                    except Exception:
-                        falhas.add(chave)            # transitório — re-tentável
-                    _avancar()
+            conn = db.conectar()
         except Exception:
-            # Login/navegador falhou para este fornecedor — todos ficam pendentes.
-            for chave, _ in lista:
-                falhas.add(chave)
+            conn = None   # sem banco → sem cache durável; o resto funciona
+
+        # 1) Cache durável (thread principal — barato).
+        restantes = []
+        for chave, forn, url, codigo in norm:
+            hit = None
+            if conn is not None and codigo:
+                try:
+                    hit = db.ncm_cache_buscar(conn, forn, codigo)
+                except Exception:
+                    hit = None
+            if hit is not None:
+                ncms[chave] = hit[1]
                 _avancar()
+            else:
+                restantes.append((chave, forn, url, codigo))
+
+        # 2) HTTP sem login, em paralelo (thread-safe; educado com o site).
+        pendentes_navegador = []
+
+        def _via_http(item):
+            chave, forn, url, codigo = item
+            time.sleep(0.3)
+            try:
+                html = _http_get(url, "")
+            except Exception:
+                return (item, "erro", None)
+            status, ncm = _extrair_ncm_html(html, codigo)
+            return (item, status, ncm)
+
+        if restantes:
+            with ThreadPoolExecutor(
+                    max_workers=min(config.SCRAPER_POOL_SIZE or 1,
+                                    len(restantes))) as ex:
+                futs = [ex.submit(_via_http, it) for it in restantes]
+                for fut in as_completed(futs):
+                    item, status, ncm = fut.result()
+                    chave, forn, url, codigo = item
+                    if status == "ok":
+                        ncms[chave] = ncm
+                        if conn is not None and codigo:
+                            try:
+                                db.ncm_cache_gravar(conn, forn, codigo, ncm)
+                            except Exception:
+                                pass
+                        _avancar()
+                    else:
+                        pendentes_navegador.append(item)
+
+        # 3) Fallback navegador — SERIAL na thread dona do Playwright, com a
+        # sessão logada REUSADA (não abre/fecha navegador por clique).
+        por_forn: dict = {}
+        for item in pendentes_navegador:
+            por_forn.setdefault(item[1], []).append(item)
+        for forn_nome, lista in por_forn.items():
+            try:
+                forn = obter_sessao_viva(forn_nome)
+            except Exception:
+                for chave, *_ in lista:
+                    falhas.add(chave)
+                    _avancar()
+                continue
+            for chave, _f, url, codigo in lista:
+                try:
+                    forn._page.goto(url, wait_until="networkidle",
+                                    timeout=config.SCRAPER_TIMEOUT_SEGUNDOS * 1000)
+                    forn._page.wait_for_timeout(500)
+                    txt = forn._page.evaluate("() => document.body.innerText")
+                    ncm = tributacao.ncm_de_texto(txt)   # str|None definitivo
+                    ncms[chave] = ncm
+                    if conn is not None and codigo:
+                        try:
+                            db.ncm_cache_gravar(conn, forn_nome, codigo, ncm)
+                        except Exception:
+                            pass
+                except Exception:
+                    falhas.add(chave)            # transitório — re-tentável
+                _avancar()
+
+        if conn is not None:
+            try:
+                conn.commit()
+            except Exception:
+                pass
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
     return ncms, falhas

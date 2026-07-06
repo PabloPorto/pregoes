@@ -76,8 +76,23 @@ def test_pagina_vazia_nao_tem_cards(forn):
 
 @pytest.mark.parametrize("forn", ["almeida", "dantas"])
 def test_fixtures_sem_dados_pessoais(forn):
-    """As fixtures vão para o git — nunca podem carregar dado do cliente."""
-    for sufixo in ("busca_logada", "busca_vazia"):
+    """As fixtures vão para o git — nunca podem carregar dado do cliente.
+    A regra de '@' é por E-MAIL real ('@type'/'@context' do JSON-LD das
+    páginas de detalhe são marcadores schema.org, benignos)."""
+    import re
+    for sufixo in ("busca_logada", "busca_vazia", "detalhe"):
         html = _html(f"{forn}_{sufixo}.html").lower()
-        assert "@" not in html.replace("@example.com", "")
+        emails = [m for m in re.findall(r"[\w.+-]+@[\w-]+\.[\w.]+", html)
+                  if "example.com" not in m]
+        assert not emails, f"e-mail real vazou: {emails[:2]}"
         assert "anselmo" not in html and "centraldaconstrucao" not in html
+
+
+@pytest.mark.parametrize("forn,ncm_esperado", [("almeida", "32091010"),
+                                               ("dantas", "39173900")])
+def test_detalhe_extrai_ncm(forn, ncm_esperado):
+    """Contrato do consultar_ncms por HTTP: o 'Código NCM' da página de
+    DETALHE real (fixture congelada) é extraído certo, sem rede."""
+    html = _html(f"{forn}_detalhe.html")
+    status, ncm = scraper._extrair_ncm_html(html, None)
+    assert (status, ncm) == ("ok", ncm_esperado)

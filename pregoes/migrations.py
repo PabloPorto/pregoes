@@ -60,8 +60,24 @@ def _v2_exports_log(conn: sqlite3.Connection) -> None:
 #   def _v3_add_peso(conn):
 #       conn.execute("ALTER TABLE produtos ADD COLUMN peso REAL")
 #   MIGRATIONS = [..., (3, "produtos.peso", _v3_add_peso)]
+_DDL_NCM_CACHE = """
+CREATE TABLE IF NOT EXISTS ncm_cache (
+    fornecedor    TEXT NOT NULL,
+    codigo        TEXT NOT NULL,
+    ncm           TEXT,
+    consultado_em TEXT DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (fornecedor, codigo)
+);
+"""
+
+
+def _v3_ncm_cache(conn: sqlite3.Connection) -> None:
+    conn.executescript(_DDL_NCM_CACHE)   # CREATE TABLE IF NOT EXISTS
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (2, "exports_log (historico de planilhas geradas)", _v2_exports_log),
+    (3, "ncm_cache (NCM duravel por produto)", _v3_ncm_cache),
 ]
 
 

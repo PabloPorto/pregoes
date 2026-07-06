@@ -2267,7 +2267,10 @@ def _identificar_ncm(selecoes: dict, offsets: list) -> None:
         forn = ("almeida" if "almeidadistribuidor" in url
                 else "dantas" if "dantasdistribuidora" in url else None)
         if forn:
-            pedidos.append((off, forn, url))
+            # O código habilita o cache DURÁVEL de NCM (por produto, entre
+            # pregões) — ver scraper.consultar_ncms.
+            pedidos.append((off, forn, url,
+                            getattr(sel, "codigo_fornecedor", None)))
     if not pedidos:
         return
 

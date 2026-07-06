@@ -199,6 +199,19 @@ CREATE TABLE IF NOT EXISTS exports_log (
     criado_em     TEXT DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_exports_edital ON exports_log(edital_id, criado_em DESC);
+
+-- Cache DURÁVEL de NCM por produto (2026-07): o NCM é propriedade do PRODUTO
+-- (não muda com sessão/condição de pagamento), então uma vez consultado na
+-- página de detalhe vale para sempre — pregões seguintes respondem instantâneo.
+-- ncm NULL = página visitada e SEM NCM (resultado DEFINITIVO, cacheável);
+-- falha transitória (rede/login) NUNCA é gravada aqui.
+CREATE TABLE IF NOT EXISTS ncm_cache (
+    fornecedor    TEXT NOT NULL,
+    codigo        TEXT NOT NULL,
+    ncm           TEXT,
+    consultado_em TEXT DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (fornecedor, codigo)
+);
 """
 
 
@@ -468,6 +481,35 @@ def gravar_preco(
 # descrição já normalizada (`normalizador.normalizar_descricao`) como
 # chave. Quando matcher existir, podemos migrar pra `produto_id` e
 # manter este cache só como fallback.
+
+def ncm_cache_buscar(conn, fornecedor: str, codigo) -> "tuple[bool, str | None] | None":
+    """Cache durável de NCM. Devolve ``(True, ncm)`` se o produto JÁ foi
+    consultado (``ncm`` pode ser None = visitado e sem NCM, definitivo), ou
+    ``None`` se nunca foi consultado (miss)."""
+    if not codigo:
+        return None
+    row = conn.execute(
+        "SELECT ncm FROM ncm_cache WHERE fornecedor = ? AND codigo = ?",
+        (fornecedor, str(codigo).strip()),
+    ).fetchone()
+    return (True, row["ncm"]) if row is not None else None
+
+
+def ncm_cache_gravar(conn, fornecedor: str, codigo, ncm: "str | None") -> None:
+    """Grava (UPSERT) um resultado DEFINITIVO do NCM. Não commita — o caller
+    decide a fronteira da transação."""
+    if not codigo:
+        return
+    conn.execute(
+        """
+        INSERT INTO ncm_cache (fornecedor, codigo, ncm)
+        VALUES (?, ?, ?)
+        ON CONFLICT(fornecedor, codigo)
+        DO UPDATE SET ncm = excluded.ncm, consultado_em = CURRENT_TIMESTAMP
+        """,
+        (fornecedor, str(codigo).strip(), ncm),
+    )
+
 
 def cache_buscar(
     conn: sqlite3.Connection,
