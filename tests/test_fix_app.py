@@ -705,3 +705,44 @@ def test_rascunho_nao_sobrescreve_enquanto_recuperacao_pendente(monkeypatch, tmp
     app._salvar_rascunho()
     assert rascunho.carregar()["selecoes"][0] == "ANTIGO"   # disco intocado
     ss.clear()
+
+
+# === Re-busca INCREMENTAL (perf 2026-07): mescla sem tocar no que já existe ===
+
+def _opt_forn(cod, preco, forn="almeida"):
+    return _NS(preco=preco, codigo_fornecedor=cod, marca="M",
+               ncm=None, url=None, fornecedor=forn,
+               descricao_encontrada="X", confianca="exato")
+
+
+def test_mesclar_incremental_preserva_existentes_e_preenche_default():
+    ss = app.st.session_state
+    ss.clear()
+    itens = [_NS(descricao="TUBO 50"), _NS(descricao="LUVA 25"),
+             _NS(descricao="CANO 100")]
+    sel_original = object()   # sentinela: escolha do operador no item 0
+    ss["resultados_busca"] = {0: [_opt_forn("A", 1.0)], 1: [], 2: []}
+    ss["selecoes"] = {0: sel_original}
+    # re-busca dos faltantes 1 e 2: o 1 achou, o 2 continua vazio
+    app._mesclar_busca_incremental(
+        itens, [1, 2], {1: [_opt_forn("B", 2.0)], 2: []})
+    assert ss["resultados_busca"][0][0].codigo_fornecedor == "A"  # intacto
+    assert ss["resultados_busca"][1][0].codigo_fornecedor == "B"  # novo
+    assert ss["resultados_busca"][2] == []                        # segue vazio
+    assert ss["selecoes"][0] is sel_original                      # escolha intacta
+    assert ss["selecoes"][1].codigo_fornecedor == "B"             # default novo
+    assert 2 not in ss["selecoes"]                                # vazio sem default
+    ss.clear()
+
+
+def test_mesclar_incremental_respeita_nao_usar():
+    ss = app.st.session_state
+    ss.clear()
+    itens = [_NS(descricao="TUBO 50")]
+    ss["resultados_busca"] = {0: []}
+    ss["selecoes"] = {}
+    ss["itens_nao_usar"] = {0}
+    app._mesclar_busca_incremental(itens, [0], {0: [_opt_forn("A", 1.0)]})
+    assert 0 not in ss["selecoes"], "'não usar' não ganha default"
+    assert ss["resultados_busca"][0], "mas o resultado fica disponível"
+    ss.clear()

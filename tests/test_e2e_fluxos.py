@@ -753,3 +753,81 @@ def test_busca_no_site_sessao_em_cache_caida_reloga(monkeypatch):
                         lambda f: {"email": "x", "senha": "y"})
     out = scraper.buscar_no_site("almeida", "alicate")     # reusa morta → reloga
     assert [o.codigo_fornecedor for o in out] == ["C1"]
+
+
+# === obter_sessao_viva: sessão compartilhada lote+manual (perf 2026-07) =====
+
+def _fake_forn_vivo(cards=(), *, page_ok=True):
+    """Fake com _page.evaluate (o ping do obter_sessao_viva)."""
+    class _RL:
+        def acquire(self):
+            return None
+
+    class _Page:
+        def evaluate(self, _js):
+            if not page_ok:
+                raise RuntimeError("página morta")
+            return 1
+
+    class _FakeForn:
+        fechado = False
+
+        def __init__(self, email, senha):
+            self._page = _Page()
+            self._rate_limiter = _RL()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            type(self).fechado = True
+            return False
+    return _FakeForn
+
+
+def test_obter_sessao_viva_reusa_mesma_sessao(monkeypatch):
+    import pregoes.scraper as scraper
+    n = {"i": 0}
+    Base = _fake_forn_vivo()
+
+    class _Conta(Base):
+        def __init__(self, *a):
+            n["i"] += 1
+            super().__init__(*a)
+
+    monkeypatch.setattr(scraper, "AlmeidaDistribuidor", _Conta)
+    monkeypatch.setattr(scraper.credenciais, "carregar",
+                        lambda f: {"email": "x", "senha": "y"})
+    s1 = scraper.obter_sessao_viva("almeida")
+    s2 = scraper.obter_sessao_viva("almeida")
+    assert s1 is s2 and n["i"] == 1, "2ª chamada deve reusar (sem relogin)"
+
+
+def test_obter_sessao_viva_ping_morto_reloga(monkeypatch):
+    import pregoes.scraper as scraper
+    Morta = _fake_forn_vivo(page_ok=False)
+    morta = Morta("x", "y")
+    scraper._sessoes_vivas["almeida"] = morta
+    Viva = _fake_forn_vivo()
+    monkeypatch.setattr(scraper, "AlmeidaDistribuidor", Viva)
+    monkeypatch.setattr(scraper.credenciais, "carregar",
+                        lambda f: {"email": "x", "senha": "y"})
+    s = scraper.obter_sessao_viva("almeida")
+    assert s is not morta, "sessão morta (ping falhou) deve ser substituída"
+    assert scraper._sessoes_vivas["almeida"] is s
+
+
+def test_fechar_sessao_viva_descarta_uma(monkeypatch):
+    import pregoes.scraper as scraper
+    F = _fake_forn_vivo()
+    forn = F("x", "y")
+    scraper._sessoes_vivas["almeida"] = forn
+    scraper.fechar_sessao_viva("almeida")
+    assert "almeida" not in scraper._sessoes_vivas
+    assert F.fechado, "__exit__ deve ser chamado ao descartar"
+
+
+def test_obter_sessao_viva_fornecedor_invalido():
+    import pregoes.scraper as scraper
+    with pytest.raises(ValueError):
+        scraper.obter_sessao_viva("inexistente")

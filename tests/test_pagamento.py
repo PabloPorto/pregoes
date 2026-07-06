@@ -202,7 +202,7 @@ def _capturar_logs(monkeypatch):
 def test_verifica_confirma_quando_forma_salva_bate(monkeypatch):
     monkeypatch.setattr(scraper.credenciais, "carregar_preferencia_pagamento",
                         lambda f: _PREF)
-    monkeypatch.setattr(scraper, "_forma_salva", lambda page, base: "001")  # pegou
+    monkeypatch.setattr(scraper, "_forma_salva", lambda page, base, **k: "001")  # pegou
     msgs = _capturar_logs(monkeypatch)
     scraper._aplicar_preferencia_pagamento(_FakePage(), "dantas")
     assert any("CONFIRMADA" in m for m in msgs)
@@ -212,7 +212,7 @@ def test_verifica_avisa_quando_forma_salva_diverge(monkeypatch):
     monkeypatch.setattr(scraper.credenciais, "carregar_preferencia_pagamento",
                         lambda f: _PREF)
     # a conta ficou em PIX2 (não no banco configurado) → preço sairia errado
-    monkeypatch.setattr(scraper, "_forma_salva", lambda page, base: "PIX2")
+    monkeypatch.setattr(scraper, "_forma_salva", lambda page, base, **k: "PIX2")
     msgs = _capturar_logs(monkeypatch)
     scraper._aplicar_preferencia_pagamento(_FakePage(), "dantas")
     assert any("NÃO pegou" in m for m in msgs)
@@ -222,8 +222,43 @@ def test_verifica_avisa_quando_forma_salva_diverge(monkeypatch):
 def test_verifica_avisa_quando_nao_consegue_ler(monkeypatch):
     monkeypatch.setattr(scraper.credenciais, "carregar_preferencia_pagamento",
                         lambda f: _PREF)
-    monkeypatch.setattr(scraper, "_forma_salva", lambda page, base: None)  # leitura falhou
+    monkeypatch.setattr(scraper, "_forma_salva", lambda page, base, **k: None)  # leitura falhou
     msgs = _capturar_logs(monkeypatch)
     scraper._aplicar_preferencia_pagamento(_FakePage(), "dantas")
     assert any("CONFERIR" in m for m in msgs)
     assert not any("CONFIRMADA" in m for m in msgs)
+
+
+# --- VERIFY-FIRST (perf, campo 2026-07): a condição é persistente na conta —
+# se a forma salva JÁ é a configurada, pula a aplicação inteira (modal + esperas
+# fixas) e loga CONFIRMADA direto. Pré-check falhando não impede a aplicação.
+
+def test_verify_first_pula_aplicacao_quando_ja_configurada(monkeypatch):
+    monkeypatch.setattr(scraper.credenciais, "carregar_preferencia_pagamento",
+                        lambda f: _PREF)
+    monkeypatch.setattr(scraper, "_forma_salva", lambda page, base, **k: "001")
+    msgs = _capturar_logs(monkeypatch)
+    page = _FakePage()
+    scraper._aplicar_preferencia_pagamento(page, "dantas")
+    assert page.selects == [] and page.clicks == [], "NÃO deve reaplicar"
+    assert any("já estava configurada" in m for m in msgs)
+    assert any("CONFIRMADA" in m for m in msgs)   # contrato de confirmação
+
+
+def test_verify_first_precheck_falho_nao_impede_aplicacao(monkeypatch):
+    monkeypatch.setattr(scraper.credenciais, "carregar_preferencia_pagamento",
+                        lambda f: _PREF)
+    chamadas = {"n": 0}
+
+    def _fs(page, base, **k):
+        chamadas["n"] += 1
+        if chamadas["n"] == 1:
+            raise RuntimeError("pré-check caiu")   # 1ª leitura (verify-first)
+        return "001"                                # verificação pós-aplicação
+
+    monkeypatch.setattr(scraper, "_forma_salva", _fs)
+    msgs = _capturar_logs(monkeypatch)
+    page = _FakePage()
+    scraper._aplicar_preferencia_pagamento(page, "dantas")   # não levanta
+    assert page.selects and page.clicks, "aplicou normalmente"
+    assert any("CONFIRMADA" in m for m in msgs)

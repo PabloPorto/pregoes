@@ -1387,6 +1387,24 @@ def tela_busca_precos():
                     "Abra no Excel/LibreOffice, anote `correto`/`errado`/`aceitavel` "
                     "na coluna **Avaliação** da aba **Resumo** e devolva para calibrar."
                 )
+        # Re-busca INCREMENTAL (perf, campo 2026-07): busca SÓ os itens sem
+        # preço, mantendo resultados e escolhas já feitas. É seguro porque a
+        # lista de itens não mudou nesta tela (os índices são estáveis); a
+        # re-busca DESTRUTIVA continua no expander abaixo para o caso de
+        # querer recomeçar ou voltar à revisão (lá os índices podem mudar).
+        _resultados_atuais = st.session_state.resultados_busca
+        _nao_usar = st.session_state.get("itens_nao_usar") or set()
+        faltantes = [i for i in range(len(itens))
+                     if not _resultados_atuais.get(i) and i not in _nao_usar]
+        if faltantes:
+            rotulo_falt = ("Buscar preço do 1 item sem resultado"
+                           if len(faltantes) == 1 else
+                           f"Buscar preços dos {len(faltantes)} itens sem resultado")
+            if st.button(rotulo_falt, width="stretch", key="rebusca_faltantes"):
+                _executar_busca(itens, fornecedores_disponiveis,
+                                indices=faltantes)
+                st.rerun()
+
         # Saída pós-busca (auditoria 2026-06, achado alto nº 8): se o site
         # falhou no meio do lote, o operador precisa de um caminho que não
         # seja recomeçar o pregão do zero. Re-buscar é barato: o que já tem
@@ -1456,10 +1474,46 @@ def tela_busca_precos():
         st.rerun()
 
 
+def _mesclar_busca_incremental(itens: list, indices: list[int],
+                               novos: dict) -> None:
+    """Aplica o resultado de uma re-busca PARCIAL no estado da sessão.
+
+    Substitui só as entradas re-buscadas (``novos`` já vem keyed pelo índice
+    ORIGINAL); resultados e ESCOLHAS existentes ficam intactos. Itens que
+    acharam preço agora ganham a seleção default (melhor match) — como teriam
+    na busca completa — sem tocar em escolha alguma do operador nem nos
+    marcados "não usar"."""
+    from pregoes.exportador import SelecaoFornecedor
+
+    base = st.session_state.get("resultados_busca") or {}
+    base.update(novos)
+    st.session_state.resultados_busca = base
+    selecoes = st.session_state.setdefault("selecoes", {})
+    nao_usar = st.session_state.get("itens_nao_usar") or set()
+    for idx in indices:
+        bag = base.get(idx) or []
+        if bag and idx not in selecoes and idx not in nao_usar:
+            melhor = _melhor_opcao(itens[idx].descricao, bag)
+            selecoes[idx] = SelecaoFornecedor(
+                preco=melhor.preco,
+                codigo_fornecedor=melhor.codigo_fornecedor,
+                marca=melhor.marca,
+                ncm=getattr(melhor, "ncm", None),
+                url=getattr(melhor, "url", None),
+                fornecedor=getattr(melhor, "fornecedor", None),
+            )
+
+
 def _executar_busca(itens: list, fornecedores_nomes: list[str],
-                     *, salvar_diagnostico: bool = False) -> None:
-    """Roda a busca em cada fornecedor SEQUENCIALMENTE, abrindo e fechando
-    o Playwright entre eles.
+                     *, salvar_diagnostico: bool = False,
+                     indices: list[int] | None = None) -> None:
+    """Roda a busca em cada fornecedor SEQUENCIALMENTE, REUSANDO a sessão
+    logada em cache (login + condição de pagamento ~1× por sessão de
+    trabalho, não por clique — perf/limite de logins, campo 2026-07).
+
+    ``indices``: busca INCREMENTAL — só estes itens (posições na lista
+    completa); os resultados são MESCLADOS aos existentes em vez de
+    substituí-los. ``None`` = busca completa (substitui tudo).
 
     Por que sequencial e não simultâneo: Playwright sync API permite
     apenas UMA instância por thread. Abrir Almeida + Dantas ao mesmo
@@ -1533,13 +1587,18 @@ def _executar_busca(itens: list, fornecedores_nomes: list[str],
                 encerrado=encerrado,
             )
 
-    # Acumuladores ===
-    resultados_agregados: dict[int, list] = {idx: [] for idx in range(len(itens))}
+    # Alvo da busca: tudo, ou só os índices pedidos (re-busca incremental).
+    alvo_indices = list(indices) if indices is not None else list(range(len(itens)))
+    itens_alvo = [itens[i] for i in alvo_indices]
+
+    # Acumuladores — SEMPRE keyed pelo índice ORIGINAL do edital (o scraper
+    # devolve keyed pela posição no subset; remapeamos na mesclagem).
+    resultados_agregados: dict[int, list] = {i: [] for i in alvo_indices}
     erros_agregados: list = []
     cache_hits_total = 0
     cache_misses_total = 0
     stats_concluidos: list[tuple[str, int, int, int]] = []
-    total_itens = len(itens)
+    total_itens = len(itens_alvo)
 
     # Estado inicial visível antes do primeiro callback do scraper
     _render(
@@ -1576,18 +1635,26 @@ def _executar_busca(itens: list, fornecedores_nomes: list[str],
                 stats_concluidos=stats_concluidos,
             )
 
+        from pregoes.scraper import fechar_sessao_viva, obter_sessao_viva
         try:
-            with cls(cred["email"], cred["senha"]) as forn:
-                # judge/canônico ligados por padrão no orquestrador — sem
-                # controle de UI (operador não precisa saber).
-                lote = buscar_precos_para_itens(
-                    itens, [forn], progresso_callback=cb,
-                    diagnostico=log_diag,
-                )
+            # REUSA a sessão logada do cache (login + condição de pagamento só
+            # quando não há sessão viva). NÃO fechamos no fim — o ciclo de vida
+            # é do cache (novo pregão fecha; falha grave descarta abaixo).
+            forn = obter_sessao_viva(nome)
+            # judge/canônico ligados por padrão no orquestrador — sem
+            # controle de UI (operador não precisa saber).
+            lote = buscar_precos_para_itens(
+                itens_alvo, [forn], progresso_callback=cb,
+                diagnostico=log_diag,
+            )
         except Exception as exc:
-            # Falha grave (login, layout mudou) — registra como erro
-            # global mas segue para o próximo fornecedor.
+            # Falha grave (login, layout mudou) — descarta a sessão (próximo
+            # clique reloga fresco), registra erro global e segue.
             _log.exception("falha grave na busca em %s", nome)
+            try:
+                fechar_sessao_viva(nome)
+            except Exception:
+                pass
             from pregoes.scraper import ErroBusca
             erros_agregados.append(ErroBusca(
                 indice_item=-1,
@@ -1608,10 +1675,15 @@ def _executar_busca(itens: list, fornecedores_nomes: list[str],
         # "ok" exclui os por variação para refletir o badge da seleção
         stats_concluidos.append((nome, n_ok - n_var, n_var, n_vazio))
 
-        # Mescla resultados do fornecedor no agregado
-        for idx, bag in lote.resultados.items():
-            resultados_agregados[idx].extend(bag)
-        erros_agregados.extend(lote.erros)
+        # Mescla resultados do fornecedor no agregado — remapeando a posição
+        # no SUBSET de volta ao índice ORIGINAL do edital.
+        for sub_idx, bag in lote.resultados.items():
+            resultados_agregados[alvo_indices[sub_idx]].extend(bag)
+        import dataclasses as _dc
+        for e in lote.erros:
+            if 0 <= e.indice_item < len(alvo_indices):
+                e = _dc.replace(e, indice_item=alvo_indices[e.indice_item])
+            erros_agregados.append(e)
         cache_hits_total += lote.cache_hits
         cache_misses_total += lote.cache_misses
 
@@ -1630,8 +1702,12 @@ def _executar_busca(itens: list, fornecedores_nomes: list[str],
         stats_concluidos=stats_concluidos, encerrado=True,
     )
 
-    st.session_state.resultados_busca = lote.resultados
-    st.session_state.erros_busca = lote.erros
+    if indices is None:
+        st.session_state.resultados_busca = lote.resultados
+        st.session_state.erros_busca = lote.erros
+    else:
+        _mesclar_busca_incremental(itens, indices, lote.resultados)
+        st.session_state.erros_busca = lote.erros
     st.session_state.cache_stats = (lote.cache_hits, lote.cache_misses)
     with status_final.container():
         hits, misses = lote.cache_hits, lote.cache_misses
@@ -1704,6 +1780,13 @@ def _form_condicao_pagamento(fornecedor: str) -> None:
             credenciais.salvar_preferencia_pagamento(
                 fornecedor, forma["value"], forma["texto"],
                 prazo["value"], prazo["texto"])
+            # A sessão viva em cache foi logada com a condição ANTIGA — fecha
+            # todas para a próxima busca relogar já com a nova.
+            try:
+                from pregoes import scraper as _scraper
+                _scraper.fechar_sessoes_vivas()
+            except Exception:
+                pass
             style.bloco_aviso(
                 f"Condição salva: <b>{html.escape(forma['texto'])}</b> · "
                 f"<b>{html.escape(prazo['texto'])}</b>. As próximas buscas usam "

@@ -393,13 +393,14 @@ def _abrir_modal_preferencias(page) -> bool:
     return False
 
 
-def _forma_salva(page, base_url: str) -> Optional[str]:
+def _forma_salva(page, base_url: str,
+                 leituras: int = _PAG_LEITURAS_VERIF) -> Optional[str]:
     """Lê o VALUE da forma de pagamento atualmente SALVA na conta (re-navega +
     reabre o modal). É a VERIFICAÇÃO real de que a condição pegou — o site às
     vezes não persiste o 'Confirmar'. Re-tenta a LEITURA (a parte instável, mas
     read-only): devolve o 1º valor NÃO-VAZIO lido, ou None se não conseguiu
     (vazio = modal não assentou; não é uma forma de verdade)."""
-    for _ in range(_PAG_LEITURAS_VERIF):
+    for _ in range(leituras):
         try:
             page.goto(base_url, wait_until="networkidle",
                       timeout=config.SCRAPER_TIMEOUT_SEGUNDOS * 1000)
@@ -443,6 +444,17 @@ def _aplicar_preferencia_pagamento(page, fornecedor: str) -> None:
     if not base_url:
         return
     alvo, alvo_txt = pref["forma_value"], pref.get("forma_texto")
+    # VERIFY-FIRST (perf, campo 2026-07): a condição é PERSISTENTE na conta —
+    # na maioria dos logins ela JÁ está certa. Conferir antes (1 leitura) pula a
+    # aplicação inteira (~10-15s de modal + esperas fixas) e evita mexer no
+    # modal instável à toa. Se a leitura falhar (None), aplica normalmente.
+    try:
+        if _forma_salva(page, base_url, leituras=1) == alvo:
+            _logger.info("Condição de pagamento CONFIRMADA (%s): forma %s "
+                         "(já estava configurada)", fornecedor, alvo_txt)
+            return
+    except Exception:
+        pass
     try:
         page.goto(base_url, wait_until="networkidle",
                   timeout=config.SCRAPER_TIMEOUT_SEGUNDOS * 1000)
@@ -470,7 +482,10 @@ def _aplicar_preferencia_pagamento(page, fornecedor: str) -> None:
                         fornecedor, type(exc).__name__)
         return
     # CONFERE o que REALMENTE ficou salvo na conta.
-    salva = _forma_salva(page, base_url)
+    try:
+        salva = _forma_salva(page, base_url)
+    except Exception:   # blindagem do contrato "nunca levanta"
+        salva = None
     if salva == alvo:
         _logger.info("Condição de pagamento CONFIRMADA (%s): forma %s",
                      fornecedor, alvo_txt)
@@ -1640,11 +1655,45 @@ def _fechar_sessao_viva(fornecedor: str) -> None:
             pass
 
 
+def fechar_sessao_viva(fornecedor: str) -> None:
+    """Descarta a sessão em cache de UM fornecedor (ex.: após falha grave no
+    lote — o próximo uso reloga fresco)."""
+    _fechar_sessao_viva(fornecedor)
+
+
 def fechar_sessoes_vivas() -> None:
     """Fecha TODAS as sessões manuais em cache. Chamar ao iniciar um novo pregão
     para não deixar um navegador aberto à toa."""
     for fornecedor in list(_sessoes_vivas):
         _fechar_sessao_viva(fornecedor)
+
+
+def obter_sessao_viva(fornecedor: str):
+    """Devolve a sessão LOGADA reutilizável do cache — loga só se preciso.
+
+    Perf (campo 2026-07): a busca em LOTE abria navegador + login + condição de
+    pagamento A CADA clique (~30-60s de overhead por busca, e consumia o limite
+    de logins do site — que bloqueou a conta em 2026-06-27). Agora lote e busca
+    manual compartilham a MESMA sessão viva: login/pagamento ~1× por sessão de
+    trabalho.
+
+    Valida com um ping barato antes de devolver; sessão morta → reloga. A
+    sessão devolvida NÃO deve ser fechada pelo chamador (o ciclo de vida é do
+    cache: `fechar_sessoes_vivas` no novo pregão / `fechar_sessao_viva` em
+    falha grave). Levanta se faltar credencial ou o login falhar."""
+    if fornecedor not in _FORNECEDORES_VALIDOS:
+        raise ValueError(f"Fornecedor desconhecido: {fornecedor!r}")
+    forn = _sessoes_vivas.get(fornecedor)
+    if forn is not None:
+        try:
+            forn._page.evaluate("() => 1")   # página responde?
+            return forn
+        except Exception:
+            _logger.info("sessão de %s caiu — relogando", fornecedor)
+            _fechar_sessao_viva(fornecedor)
+    forn = _abrir_sessao_viva(fornecedor)
+    _sessoes_vivas[fornecedor] = forn
+    return forn
 
 
 def buscar_no_site(
