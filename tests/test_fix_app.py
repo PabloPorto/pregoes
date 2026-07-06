@@ -648,62 +648,114 @@ def test_escolher_opcao_grava_selecao():
     ss.clear()
 
 
-# === Rascunho anti-apagão: autosave + recuperação (nível app) ===============
+# === Rascunhos MULTI-PREGÃO: autosave + retomar + trocar (nível app) ========
+
+def _isolar_rascunhos(monkeypatch, tmp_path):
+    from pregoes import rascunho
+    monkeypatch.setattr(rascunho, "DIR", tmp_path / "rascunhos")
+    monkeypatch.setattr(rascunho, "CAMINHO", tmp_path / "legado.pkl")
+    return rascunho
+
+
+def _pregao_na_sessao(ss, orgao, numero, codigo="9185"):
+    from pregoes.exportador import SelecaoFornecedor
+    from pregoes.extrator import ItemExtraido
+    itens = [ItemExtraido(item_numero=1, descricao=f"LUVA {numero}",
+                          quantidade=2.0)]
+    ss["itens_edital"] = itens
+    ss["itens_revisados"] = itens
+    ss["resultados_busca"] = {0: []}
+    ss["selecoes"] = {0: SelecaoFornecedor(preco=8.32, codigo_fornecedor=codigo,
+                                           marca="M", fornecedor="dantas")}
+    ss["orgao"] = orgao; ss["numero"] = numero; ss["tela"] = "busca"
+
 
 def test_rascunho_salva_apagao_e_restaura_identico(monkeypatch, tmp_path):
     """Simula um apagão: autosava o pregão em andamento, ZERA a memória e
     restaura — itens, busca e seleções idênticos, e volta na tela onde parou
     (é o que faz o motor seguir 'igual à primeira busca')."""
-    from pregoes import rascunho
-    from pregoes.exportador import SelecaoFornecedor
-    from pregoes.extrator import ItemExtraido
-    monkeypatch.setattr(rascunho, "CAMINHO", tmp_path / "rascunho.pkl")
+    rascunho = _isolar_rascunhos(monkeypatch, tmp_path)
     ss = app.st.session_state
     ss.clear()
-    itens = [ItemExtraido(item_numero=1, descricao="LUVA", quantidade=2.0)]
-    ss["itens_edital"] = itens
-    ss["itens_revisados"] = itens
-    ss["resultados_busca"] = {0: []}                 # busca de preços já feita
-    ss["selecoes"] = {0: SelecaoFornecedor(preco=8.32, codigo_fornecedor="9185",
-                                           marca="M", fornecedor="dantas")}
-    ss["orgao"] = "Prefeitura"; ss["numero"] = "001/2026"; ss["tela"] = "busca"
+    _pregao_na_sessao(ss, "Prefeitura", "001/2026")
 
     app._salvar_rascunho()
-    assert rascunho.existe()                          # gravou no disco
+    pendentes = rascunho.listar_pregoes()
+    assert len(pendentes) == 1 and pendentes[0]["numero"] == "001/2026"
 
     ss.clear(); ss["tela"] = "home"                   # APAGÃO: memória zerada
-    estado = rascunho.carregar()
+    estado = rascunho.carregar_pregao(pendentes[0]["slug"])
     assert estado is not None
-    app._restaurar_rascunho(estado)
-    assert ss["itens_revisados"][0].descricao == "LUVA"
+    app._restaurar_rascunho(estado, pendentes[0]["slug"])
+    assert ss["itens_revisados"][0].descricao == "LUVA 001/2026"
     assert ss["selecoes"][0].codigo_fornecedor == "9185"
     assert ss["tela"] == "busca"                      # volta onde parou
     ss.clear()
 
 
 def test_rascunho_nao_salva_sem_pregao_em_andamento(monkeypatch, tmp_path):
-    from pregoes import rascunho
-    monkeypatch.setattr(rascunho, "CAMINHO", tmp_path / "rascunho.pkl")
+    rascunho = _isolar_rascunhos(monkeypatch, tmp_path)
     app.st.session_state.clear()                      # nada em andamento
     app._salvar_rascunho()
-    assert not (tmp_path / "rascunho.pkl").exists()   # não cria rascunho à toa
+    assert rascunho.listar_pregoes() == []            # não cria rascunho à toa
 
 
-def test_rascunho_nao_sobrescreve_enquanto_recuperacao_pendente(monkeypatch, tmp_path):
-    """Com a faixa de recuperação pendente, o autosave NÃO sobrescreve o
-    rascunho recuperável — senão começar algo novo apagaria o que se recupera."""
-    from pregoes import rascunho
-    from pregoes.exportador import SelecaoFornecedor
-    monkeypatch.setattr(rascunho, "CAMINHO", tmp_path / "rascunho.pkl")
-    rascunho.salvar({"itens_edital": [], "selecoes": {0: "ANTIGO"}})
+def test_pregao_novo_nao_sobrescreve_rascunho_guardado(monkeypatch, tmp_path):
+    """MULTI-PREGÃO (cenário do cliente): edital A de 1000 itens em curso,
+    chega o edital B. 'Guardar e começar outro' preserva o A; o autosave do B
+    vai para OUTRO arquivo — os dois coexistem e o A volta intacto."""
+    rascunho = _isolar_rascunhos(monkeypatch, tmp_path)
     ss = app.st.session_state
     ss.clear()
-    ss["_rascunho_disponivel"] = True                 # recuperação pendente
-    ss["itens_revisados"] = [1]                       # operador mexeu em algo
-    ss["selecoes"] = {0: SelecaoFornecedor(preco=1.0, codigo_fornecedor="X",
-                                           marca="Y", fornecedor="almeida")}
+    _pregao_na_sessao(ss, "Prefeitura A", "001/2026", codigo="AAA")
     app._salvar_rascunho()
-    assert rascunho.carregar()["selecoes"][0] == "ANTIGO"   # disco intocado
+
+    app._limpar_pregao(preservar_rascunho=True)         # "Guardar e começar outro"
+    assert len(rascunho.listar_pregoes()) == 1          # A ficou guardado
+
+    _pregao_na_sessao(ss, "Prefeitura B", "002/2026", codigo="BBB")
+    app._salvar_rascunho()
+    pendentes = {p["numero"]: p for p in rascunho.listar_pregoes()}
+    assert set(pendentes) == {"001/2026", "002/2026"}   # os DOIS coexistem
+    a = rascunho.carregar_pregao(pendentes["001/2026"]["slug"])
+    assert a["selecoes"][0].codigo_fornecedor == "AAA"  # A intacto
+    ss.clear()
+
+
+def test_rascunho_migra_slug_quando_identidade_muda(monkeypatch, tmp_path):
+    """PDF recém-subido (sem órgão/número) salva em 'sem-identificacao'; ao
+    preencher a identidade, o arquivo MIGRA para o slug real (sem duplicar)."""
+    rascunho = _isolar_rascunhos(monkeypatch, tmp_path)
+    ss = app.st.session_state
+    ss.clear()
+    _pregao_na_sessao(ss, None, None)
+    ss.pop("orgao"); ss.pop("numero")
+    app._salvar_rascunho()
+    assert rascunho.listar_pregoes()[0]["slug"] == "sem-identificacao"
+
+    ss["orgao"] = "Prefeitura"; ss["numero"] = "007/2026"   # identificou
+    app._salvar_rascunho()
+    pendentes = rascunho.listar_pregoes()
+    assert len(pendentes) == 1                          # migrou, não duplicou
+    assert pendentes[0]["slug"] != "sem-identificacao"
+    ss.clear()
+
+
+def test_limpar_pregao_default_remove_so_o_rascunho_atual(monkeypatch, tmp_path):
+    """Descartar o pregão atual remove SÓ o arquivo dele; o guardado fica."""
+    rascunho = _isolar_rascunhos(monkeypatch, tmp_path)
+    ss = app.st.session_state
+    ss.clear()
+    _pregao_na_sessao(ss, "Prefeitura A", "001/2026")
+    app._salvar_rascunho()
+    app._limpar_pregao(preservar_rascunho=True)         # guarda A
+
+    _pregao_na_sessao(ss, "Prefeitura B", "002/2026")
+    app._salvar_rascunho()
+    app._limpar_pregao()                                # DESCARTA o B
+    numeros = [p["numero"] for p in rascunho.listar_pregoes()]
+    assert numeros == ["001/2026"]                      # A sobrevive, B some
+    assert "orgao" not in ss and "numero" not in ss     # identidade sai junto
     ss.clear()
 
 

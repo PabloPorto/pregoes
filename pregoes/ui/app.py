@@ -197,13 +197,26 @@ _CHAVES_RASCUNHO = CHAVES_PREGAO + ("orgao", "numero", "pdf_path", "tela")
 PASSOS_FLUXO = ["Edital", "Itens", "Preços", "Planilha"]
 
 
-def _limpar_pregao() -> None:
-    """Descarta o estado do pregão atual da sessão."""
-    for k in CHAVES_PREGAO:
+def _limpar_pregao(preservar_rascunho: bool = False) -> None:
+    """Descarta o estado do pregão atual da sessão.
+
+    ``preservar_rascunho=True`` ("Guardar e começar outro"): o arquivo do
+    rascunho FICA no disco — o pregão aparece na lista de guardados para
+    retomar depois; só a memória é limpa. Default (False) = descarte de
+    verdade: remove também o arquivo (escolha explícita do operador; um
+    apagão NÃO passa por aqui, então rascunhos sobrevivem a quedas)."""
+    if preservar_rascunho:
+        # Solta os controles SEM apagar o arquivo. Crucial: se _rascunho_slug
+        # vazasse para o próximo pregão, o 1º autosave dele "migraria" (=
+        # apagaria) o rascunho recém-guardado.
+        for k in ("_rascunho_assin", "_rascunho_slug", "_rascunho_disponivel"):
+            st.session_state.pop(k, None)
+    else:
+        _limpar_rascunho()
+    # Identidade sai junto (órgão/número/PDF são DESTE pregão): um novo começa
+    # limpo, e o slug de fallback não aponta mais para o pregão guardado.
+    for k in CHAVES_PREGAO + ("orgao", "numero", "pdf_path"):
         st.session_state.pop(k, None)
-    # Começar um novo pregão DESCARTA o backup do anterior (escolha explícita do
-    # operador). Um apagão NÃO chama isto, então o rascunho sobrevive p/ o boot.
-    _limpar_rascunho()
     # Fecha as sessões manuais ao vivo em cache (navegador logado): um novo
     # pregão começa do zero e não herda navegador/sessão do anterior.
     try:
@@ -263,14 +276,23 @@ def _confirmar_novo_pregao() -> None:
     Aberto no nível superior do script (não dentro da sidebar) via a flag
     `_confirmar_novo_pregao`, para o modal não renderizar dentro da sidebar.
     """
-    st.warning("Você tem um pregão em andamento. Começar um novo vai descartar "
-               "a extração, a revisão e as marcas/preços já escolhidos.")
-    col_sim, col_nao = st.columns(2)
-    if col_sim.button("Descartar e começar novo", type="primary",
-                      width="stretch"):
+    st.warning("Você tem um pregão em andamento. Você pode **guardá-lo para "
+               "continuar depois** (ele fica na lista de pregões guardados na "
+               "tela inicial) ou descartá-lo de vez.")
+    col_guardar, col_desc, col_nao = st.columns(3)
+    if col_guardar.button("Guardar e começar outro", type="primary",
+                          width="stretch"):
+        st.session_state.pop("_confirmar_novo_pregao", None)
+        # Força a gravação (ignora a dedupe por assinatura) antes de limpar —
+        # o rascunho no disco fica 100% atual no momento da troca.
+        st.session_state.pop("_rascunho_assin", None)
+        _salvar_rascunho()
+        _limpar_pregao(preservar_rascunho=True)
+        ir_para("upload")          # ir_para já faz st.rerun()
+    if col_desc.button("Descartar e começar novo", width="stretch"):
         st.session_state.pop("_confirmar_novo_pregao", None)
         _limpar_pregao()
-        ir_para("upload")          # ir_para já faz st.rerun()
+        ir_para("upload")
     if col_nao.button("Continuar o atual", width="stretch"):
         st.session_state.pop("_confirmar_novo_pregao", None)
         # Retoma o trabalho em andamento (não só fecha o modal): leva à tela
@@ -1948,10 +1970,12 @@ def _assinatura_rascunho() -> str:
 
 
 def _salvar_rascunho() -> None:
-    """Autosave: grava o snapshot do pregão SE algo mudou (assinatura). No-op
-    quando não há pregão em andamento, ou enquanto uma recuperação está PENDENTE
-    (não sobrescreve o rascunho recuperável até o operador decidir)."""
-    if not _tem_pregao_em_andamento() or st.session_state.get("_rascunho_disponivel"):
+    """Autosave MULTI-PREGÃO: grava o snapshot no arquivo DESTE pregão (slug
+    por órgão+número) SE algo mudou (assinatura). Se a identidade mudou no meio
+    (ex.: órgão preenchido depois da extração), o arquivo antigo migra para o
+    slug novo. No-op sem pregão em andamento — e como cada pregão tem o seu
+    arquivo, começar um novo NUNCA sobrescreve o rascunho de outro."""
+    if not _tem_pregao_em_andamento():
         return
     assinatura = _assinatura_rascunho()
     if st.session_state.get("_rascunho_assin") == assinatura:
@@ -1959,65 +1983,85 @@ def _salvar_rascunho() -> None:
     from pregoes import rascunho
     estado = {k: st.session_state[k] for k in _CHAVES_RASCUNHO
               if k in st.session_state}
-    rascunho.salvar(estado)
+    slug = rascunho.salvar_pregao(estado)
+    anterior = st.session_state.get("_rascunho_slug")
+    if anterior and anterior != slug:
+        rascunho.remover_pregao(anterior)   # identidade mudou → migra o arquivo
+    st.session_state["_rascunho_slug"] = slug
     st.session_state["_rascunho_assin"] = assinatura
 
 
 def _limpar_rascunho() -> None:
-    """Remove o rascunho do disco e os controles em memória."""
+    """Remove o rascunho DESTE pregão do disco e os controles em memória.
+    (Os rascunhos de OUTROS pregões guardados ficam intactos.)"""
     from pregoes import rascunho
-    rascunho.limpar()
-    for k in ("_rascunho_assin", "_rascunho_disponivel"):
+    slug = (st.session_state.get("_rascunho_slug")
+            or rascunho.slug_de(st.session_state.get("orgao"),
+                                st.session_state.get("numero")))
+    rascunho.remover_pregao(slug)
+    for k in ("_rascunho_assin", "_rascunho_slug", "_rascunho_disponivel"):
         st.session_state.pop(k, None)
 
 
-def _restaurar_rascunho(estado: dict) -> None:
+def _restaurar_rascunho(estado: dict, slug: str | None = None) -> None:
     """Repõe o estado salvo na sessão — EXATAMENTE como estava (mesmos itens,
     busca, seleções, markup). A partir daí o motor opera idêntico a uma busca
     nova, pois a session_state fica idêntica."""
+    from pregoes import rascunho
     for k, v in estado.items():
         st.session_state[k] = v
     st.session_state.pop("_rascunho_disponivel", None)
+    st.session_state["_rascunho_slug"] = (
+        slug or rascunho.slug_de(estado.get("orgao"), estado.get("numero")))
     st.session_state["_rascunho_assin"] = _assinatura_rascunho()
 
 
-def _verificar_rascunho_no_boot() -> None:
-    """Uma vez por sessão: se há um rascunho salvo de antes (apagão) e a sessão
-    atual está VAZIA, sinaliza para oferecer a recuperação."""
-    if st.session_state.get("_rascunho_checado"):
-        return
-    st.session_state["_rascunho_checado"] = True
-    from pregoes import rascunho
-    if not _tem_pregao_em_andamento() and rascunho.existe():
-        st.session_state["_rascunho_disponivel"] = True
-
-
-def _banner_rascunho() -> None:
-    """Faixa de recuperação: oferece continuar o pregão da sessão anterior."""
-    if not st.session_state.get("_rascunho_disponivel"):
+def _banner_rascunhos() -> None:
+    """Pregões guardados/interrompidos: lista para CONTINUAR de onde parou ou
+    descartar (2 passos). Aparece só quando NÃO há pregão em andamento na
+    sessão — some sozinha assim que o operador está trabalhando."""
+    if _tem_pregao_em_andamento():
         return
     from pregoes import rascunho
-    estado = rascunho.carregar()
-    if not estado:
-        st.session_state.pop("_rascunho_disponivel", None)
+    pendentes = rascunho.listar_pregoes()
+    if not pendentes:
         return
-    n = len(estado.get("itens_edital") or estado.get("itens_revisados") or [])
-    nome = estado.get("numero") or estado.get("orgao") or "sem identificação"
-    detalhe = f"{n} {'itens' if n != 1 else 'item'}"
-    if estado.get("resultados_busca"):
-        detalhe += " · busca de preços já feita"
+    n = len(pendentes)
     style.bloco_aviso(
-        f"<b>Recuperar pregão em andamento?</b> Encontrei um trabalho não "
-        f"finalizado de antes ({nome} · {detalhe}). Continue de onde parou ou "
-        "comece do zero.", tipo="info")
-    c1, c2 = st.columns(2)
-    if c1.button("Continuar de onde parei", type="primary", width="stretch",
-                 key="rasc_continuar"):
-        _restaurar_rascunho(estado)
-        st.rerun()
-    if c2.button("Começar do zero", width="stretch", key="rasc_zero"):
-        _limpar_rascunho()
-        st.rerun()
+        f"<b>{n} {'pregão guardado' if n == 1 else 'pregões guardados'}</b> — "
+        "continue de onde parou ou descarte.", tipo="info")
+    for p in pendentes[:8]:
+        slug = p["slug"]
+        rotulo = " — ".join(x for x in (
+            f"Pregão {p['numero']}" if p["numero"] else None,
+            p["orgao"]) if x) or "Pregão sem identificação"
+        detalhe = f"{p['n_itens']} {'item' if p['n_itens'] == 1 else 'itens'}"
+        if p["tem_busca"]:
+            detalhe += " · busca de preços feita"
+        c1, c2, c3 = st.columns([6, 2, 2], vertical_alignment="center")
+        c1.markdown(f"**{rotulo}**  \n:gray[{detalhe}]")
+        chave_conf = f"rasc_conf_del_{slug}"
+        if st.session_state.get(chave_conf):
+            if c2.button("Sim, descartar", key=f"rasc_del_sim_{slug}",
+                         type="primary", width="stretch"):
+                rascunho.remover_pregao(slug)
+                st.session_state.pop(chave_conf, None)
+                st.rerun()
+            if c3.button("Cancelar", key=f"rasc_del_nao_{slug}", width="stretch"):
+                st.session_state.pop(chave_conf, None)
+                st.rerun()
+        else:
+            if c2.button("Continuar", key=f"rasc_cont_{slug}", type="primary",
+                         width="stretch"):
+                estado = rascunho.carregar_pregao(slug)
+                if estado:
+                    _restaurar_rascunho(estado, slug)
+                else:   # corrompido entre a listagem e o clique — remove
+                    rascunho.remover_pregao(slug)
+                st.rerun()
+            if c3.button("Descartar", key=f"rasc_del_{slug}", width="stretch"):
+                st.session_state[chave_conf] = True
+                st.rerun()
 
 
 def _escolher_opcao(idx: int, o) -> None:
@@ -3299,10 +3343,9 @@ TELAS = {
 }
 
 _renderizar_sidebar()
-# Recuperação anti-apagão: oferece restaurar um pregão não finalizado de antes
-# (faixa no topo), e ao fim de cada render salva o rascunho do que está em curso.
-_verificar_rascunho_no_boot()
-_banner_rascunho()
+# Pregões guardados/interrompidos: faixa no topo para retomar (multi-pregão);
+# ao fim de cada render, autosalva o rascunho do que está em curso.
+_banner_rascunhos()
 TELAS[st.session_state.tela]()
 _salvar_rascunho()
 

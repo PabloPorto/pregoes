@@ -96,3 +96,60 @@ def test_salvar_sobrescreve_e_continua_valido(tmp_path):
     rascunho.salvar({"v": 2}, p)
     rascunho.salvar({"v": 3}, p)
     assert rascunho.carregar(p) == {"v": 3}
+
+
+# === Multi-pregão: um rascunho por (órgão, número) ===========================
+
+def test_slug_normaliza_identidade():
+    assert rascunho.slug_de("Prefeitura de Araruna", "00012/2026") == \
+        "00012-2026-prefeitura-de-araruna"
+    assert rascunho.slug_de("SÃO JOSÉ", "7") == "7-sao-jose"     # sem acento
+    assert rascunho.slug_de(None, None) == "sem-identificacao"
+    assert rascunho.slug_de("", "  ") == "sem-identificacao"
+
+
+def test_salvar_e_listar_varios_pregoes(tmp_path):
+    d = tmp_path / "rascunhos"
+    s1 = rascunho.salvar_pregao(
+        {"orgao": "A", "numero": "1", "itens_edital": [1, 2, 3],
+         "resultados_busca": {0: ["x"]}}, d)
+    s2 = rascunho.salvar_pregao(
+        {"orgao": "B", "numero": "2", "itens_revisados": [1]}, d)
+    assert s1 != s2
+    lista = rascunho.listar_pregoes(d)
+    por_num = {p["numero"]: p for p in lista}
+    assert set(por_num) == {"1", "2"}
+    assert por_num["1"]["n_itens"] == 3 and por_num["1"]["tem_busca"] is True
+    assert por_num["2"]["n_itens"] == 1 and por_num["2"]["tem_busca"] is False
+    assert rascunho.carregar_pregao(s1, d)["orgao"] == "A"
+
+
+def test_remover_pregao_nao_toca_nos_outros(tmp_path):
+    d = tmp_path / "rascunhos"
+    s1 = rascunho.salvar_pregao({"orgao": "A", "numero": "1", "itens_edital": [1]}, d)
+    rascunho.salvar_pregao({"orgao": "B", "numero": "2", "itens_edital": [1]}, d)
+    rascunho.remover_pregao(s1, d)
+    assert [p["numero"] for p in rascunho.listar_pregoes(d)] == ["2"]
+    rascunho.remover_pregao(s1, d)   # idempotente
+
+
+def test_listar_pula_arquivo_corrompido(tmp_path):
+    d = tmp_path / "rascunhos"
+    rascunho.salvar_pregao({"orgao": "A", "numero": "1", "itens_edital": [1]}, d)
+    (d / "podre.pkl").write_bytes(b"\x00nao-e-pickle")
+    lista = rascunho.listar_pregoes(d)   # não levanta
+    assert [p["numero"] for p in lista] == ["1"]
+
+
+def test_listar_migra_formato_legado(tmp_path, monkeypatch):
+    """Slot único antigo (data/rascunho.pkl) vira arquivo por pregão no 1º
+    boot após a atualização — o apagão da versão anterior não se perde."""
+    legado = tmp_path / "rascunho.pkl"
+    monkeypatch.setattr(rascunho, "CAMINHO", legado)
+    rascunho.salvar({"orgao": "Velha", "numero": "9", "itens_edital": [1, 2]},
+                    legado)
+    d = tmp_path / "rascunhos"
+    lista = rascunho.listar_pregoes(d)
+    assert [p["numero"] for p in lista] == ["9"]      # migrou
+    assert not legado.exists()                        # legado consumido
+    assert rascunho.listar_pregoes(d)[0]["n_itens"] == 2   # 2ª chamada estável
