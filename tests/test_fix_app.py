@@ -893,3 +893,24 @@ def test_continuar_pregao_so_revisado_vai_para_revisao(monkeypatch, tmp_path):
     app._restaurar_rascunho(estado, "s2")
     assert ss["tela"] == "revisao"
     ss.clear()
+
+
+def test_identificar_ncm_desempacota_pedidos_de_4_tuplas(monkeypatch):
+    """Regressão de PRODUÇÃO (2026-07-06): consultar_ncms recebe pedidos de 4
+    elementos (off, forn, url, codigo) desde o cache durável (v1.0.31); o laço
+    de pós-processamento de _identificar_ncm ainda desempacotava 3 e crashava
+    ('too many values to unpack') ao clicar 'Identificar NCM'."""
+    from pregoes.exportador import SelecaoFornecedor
+    # consultar_ncms é importado DENTRO da função; monkeypatch no módulo pega.
+    monkeypatch.setattr(
+        "pregoes.scraper.consultar_ncms",
+        lambda pedidos, progresso=None: ({p[0]: "39172300" for p in pedidos}, set()))
+    ss = app.st.session_state
+    ss.clear()
+    sel = SelecaoFornecedor(
+        preco=1.0, codigo_fornecedor="9185", marca="M", fornecedor="almeida",
+        url="https://www.almeidadistribuidor.com.br/p/9185", ncm=None)
+    selecoes = {0: sel}
+    app._identificar_ncm(selecoes, [0])          # NÃO pode levantar ValueError
+    assert selecoes[0].ncm == "39172300"
+    ss.clear()

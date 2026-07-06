@@ -2338,7 +2338,7 @@ def _identificar_ncm(selecoes: dict, offsets: list) -> None:
     # senão um soluço travava o item "sem NCM" pelo resto da sessão e o
     # re-clique não re-tentava (auditoria 2026-06, mesmo padrão do bloco 3).
     overrides = st.session_state.get("markup_overrides", {})
-    for off, _forn, url in pedidos:
+    for off, _forn, url, _codigo in pedidos:   # pedidos = (off, forn, url, codigo)
         if off in falhas:
             continue
         ncm = ncms.get(off)
