@@ -2075,6 +2075,30 @@ def _restaurar_rascunho(estado: dict, slug: str | None = None) -> None:
     st.session_state["tela"] = _tela_pregao_em_andamento()
 
 
+def _filtrar_rascunhos_finalizados(pendentes: list) -> list:
+    """Tira da lista de 'guardados' os pregões que JÁ estão no HISTÓRICO (com
+    planilha gerada) e APAGA o rascunho órfão de cada um — gerado + baixado não
+    é mais um rascunho (feedback 2026-07-06). Um autosave pós-geração podia
+    recriar o rascunho; como o Início é a tela de pouso, isto o limpa a cada
+    visita. Degrada seguro: erro de banco → devolve a lista original (melhor um
+    extra do que esconder trabalho ainda não salvo)."""
+    if not pendentes:
+        return pendentes
+    from pregoes import rascunho
+    try:
+        with get_conn() as conn:
+            viveis = []
+            for p in pendentes:
+                if _db.pregao_finalizado(conn, p.get("orgao"), p.get("numero")):
+                    rascunho.remover_pregao(p["slug"])
+                else:
+                    viveis.append(p)
+        return viveis
+    except Exception:
+        _log.exception("falha ao filtrar pregões finalizados no Início")
+        return pendentes
+
+
 def _banner_rascunhos() -> None:
     """Lista, no Início, os pregões guardados para CONTINUAR ou descartar.
 
@@ -2086,7 +2110,7 @@ def _banner_rascunhos() -> None:
     atualmente carregado é marcado 'em andamento'; 'Continuar' nele volta para
     a tela onde parou."""
     from pregoes import rascunho
-    pendentes = rascunho.listar_pregoes()
+    pendentes = _filtrar_rascunhos_finalizados(rascunho.listar_pregoes())
     if not pendentes:
         return
     ativo = st.session_state.get("_rascunho_slug")

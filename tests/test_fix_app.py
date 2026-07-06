@@ -914,3 +914,36 @@ def test_identificar_ncm_desempacota_pedidos_de_4_tuplas(monkeypatch):
     app._identificar_ncm(selecoes, [0])          # NÃO pode levantar ValueError
     assert selecoes[0].ncm == "39172300"
     ss.clear()
+
+
+def test_filtrar_rascunhos_finalizados_remove_e_apaga(monkeypatch, tmp_path):
+    """Pregão já no histórico (finalizado) sai da lista do Início e tem o
+    rascunho órfão apagado; o não-finalizado permanece (bug 2026-07-06:
+    gerado+baixado reaparecia no Início)."""
+    from pregoes import rascunho
+    monkeypatch.setattr(rascunho, "DIR", tmp_path / "rascunhos")
+    # pregão A finalizado, pregão B ainda em aberto — arquivos reais no disco
+    rascunho.salvar_pregao({"orgao": "Edital teste 1", "numero": "2026",
+                            "itens_edital": [1]})
+    rascunho.salvar_pregao({"orgao": "Tri", "numero": "2026",
+                            "itens_edital": [1]})
+    # db.pregao_finalizado é chamado com o conn do get_conn falso; força o A.
+    monkeypatch.setattr(app._db, "pregao_finalizado",
+                        lambda conn, o, n: (o == "Edital teste 1"), raising=False)
+    pendentes = rascunho.listar_pregoes()
+    assert len(pendentes) == 2
+    viveis = app._filtrar_rascunhos_finalizados(pendentes)
+    orgaos = {p["orgao"] for p in viveis}
+    assert orgaos == {"Tri"}, "finalizado deve sair; aberto permanece"
+    # o arquivo do finalizado foi APAGADO; o do aberto ficou
+    slugs = {p.stem for p in (tmp_path / "rascunhos").glob("*.pkl")}
+    assert "2026-tri" in slugs and "2026-edital-teste-1" not in slugs
+
+
+def test_filtrar_rascunhos_degrada_seguro_em_erro_de_banco(monkeypatch):
+    """Se o banco falhar, mostra TODOS (melhor um extra do que esconder)."""
+    def _boom(*a, **k):
+        raise RuntimeError("db off")
+    monkeypatch.setattr(app._db, "pregao_finalizado", _boom, raising=False)
+    pend = [{"slug": "s", "orgao": "X", "numero": "1"}]
+    assert app._filtrar_rascunhos_finalizados(pend) == pend

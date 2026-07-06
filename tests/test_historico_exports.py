@@ -818,3 +818,24 @@ def test_abrir_banco_corrompido_nao_derruba_o_app(app_modulo, monkeypatch):
 
     monkeypatch.setattr(app, "init_db", _boom)
     app._abrir_banco()   # NÃO pode propagar a exceção
+
+
+def test_pregao_finalizado_so_apos_gerar_planilha(tmp_path, monkeypatch):
+    """db.pregao_finalizado: True só quando o (órgão,número) tem planilha em
+    exports_log — base do filtro que tira pregões concluídos do Início
+    (feedback 2026-07-06)."""
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    dbp = tmp_path / "t.db"
+    monkeypatch.setattr(config, "DB_PATH", dbp)
+    db.init_db(dbp)
+    with db.get_conn(dbp) as conn:
+        eid = _criar_edital(conn, orgao="Edital teste 1", numero="2026",
+                            status="precificado")
+        # edital existe, mas SEM planilha gerada ainda → não finalizado
+        assert db.pregao_finalizado(conn, "Edital teste 1", "2026") is False
+        db.export_log_gravar(conn, eid, "p.xlsx", 305, 55, 1.45)
+    with db.conectar(dbp) as conn:
+        assert db.pregao_finalizado(conn, "Edital teste 1", "2026") is True
+        assert db.pregao_finalizado(conn, " Edital teste 1 ", "2026") is True  # TRIM
+        assert db.pregao_finalizado(conn, "Outro", "2026") is False
+        assert db.pregao_finalizado(conn, "", "") is False

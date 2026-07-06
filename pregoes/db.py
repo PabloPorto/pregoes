@@ -732,6 +732,30 @@ def export_log_gravar(
     )
 
 
+def pregao_finalizado(conn: sqlite3.Connection, orgao, numero) -> bool:
+    """True se este (órgão, número) já GEROU ao menos uma planilha — ou seja,
+    está no HISTÓRICO. Usado para NÃO oferecer no Início, como 'guardado', um
+    pregão que já foi concluído (feedback do cliente 2026-07-06: gerado +
+    baixado não deve reaparecer na tela inicial). Compara órgão/número já
+    aparados, tratando None como ''."""
+    o = (orgao or "").strip()
+    n = (numero or "").strip()
+    if not o and not n:
+        return False   # sem identidade não casa com nada no histórico
+    row = conn.execute(
+        """
+        SELECT 1
+        FROM editais e
+        JOIN exports_log x ON x.edital_id = e.id
+        WHERE TRIM(IFNULL(e.orgao, '')) = ?
+          AND TRIM(IFNULL(e.numero_pregao, '')) = ?
+        LIMIT 1
+        """,
+        (o, n),
+    ).fetchone()
+    return row is not None
+
+
 # === Aprendizado por feedback do operador (Camada 4) ===
 
 
