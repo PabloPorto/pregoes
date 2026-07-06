@@ -421,6 +421,37 @@ div[class*="st-key-ppoptsel-"] {{
     box-shadow: inset 4px 0 0 {PALETA['primary']};
 }}
 
+/* Densidade dos cards de opção (auditoria de UI 2026-07): menos padding
+   vertical = mais opções por tela na página onde o operador passa horas.
+   "st-key-ppopt" casa ppopt-* E ppoptsel-*. */
+div[class*="st-key-ppopt"] {{
+    padding: 0.45rem 1rem !important;
+}}
+
+/* Métricas com SEMÂNTICA de cor (o st.metric nativo é sempre neutro). */
+.pp-metrics {{
+    display: flex;
+    gap: 0.75rem;
+    margin: 0.25rem 0 0.75rem;
+}}
+.pp-metric {{
+    flex: 1;
+    background: {PALETA['surface']};
+    border: 1px solid {PALETA['border']};
+    border-radius: 10px;
+    padding: 0.7rem 1rem;
+}}
+.pp-metric-label {{
+    font-size: 0.78rem;
+    color: {PALETA['text_secondary']};
+    margin-bottom: 0.15rem;
+}}
+.pp-metric-valor {{
+    font-size: 1.55rem;
+    font-weight: 700;
+    line-height: 1.1;
+}}
+
 /* Pílulas de destaque — substituem os emoji (estrela/cifrão), que renderizavam
    diferente entre Windows e Mac, por rótulos de estilo consistente. */
 .pp-pill {{
@@ -727,3 +758,25 @@ def painel_progresso_busca(
         f'</div>',
         unsafe_allow_html=True,
     )
+
+
+def linha_metricas(metricas) -> None:
+    """Linha de métricas com SEMÂNTICA de cor — o ``st.metric`` nativo é sempre
+    neutro, e "112 sem resultado" merece puxar o olho (auditoria de UI 2026-07).
+
+    ``metricas``: lista de ``(rotulo, valor, tipo, dica)`` com tipo em
+    neutro|success|warning|danger (a dica vira tooltip nativo do navegador)."""
+    cores = {
+        "neutro": PALETA["text"],
+        "success": PALETA["success"],
+        "warning": PALETA["warning"],
+        "danger": PALETA["danger"],
+    }
+    cards = "".join(
+        f'<div class="pp-metric" title="{dica or ""}">'
+        f'<div class="pp-metric-label">{rotulo}</div>'
+        f'<div class="pp-metric-valor" style="color:{cores.get(tipo, cores["neutro"])}">'
+        f"{valor}</div></div>"
+        for rotulo, valor, tipo, dica in metricas
+    )
+    st.markdown(f'<div class="pp-metrics">{cards}</div>', unsafe_allow_html=True)

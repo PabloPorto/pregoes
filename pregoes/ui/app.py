@@ -287,26 +287,29 @@ def _confirmar_novo_pregao() -> None:
     st.warning("Você tem um pregão em andamento. Você pode **guardá-lo para "
                "continuar depois** (ele fica na lista de pregões guardados na "
                "tela inicial) ou descartá-lo de vez.")
-    col_guardar, col_desc, col_nao = st.columns(3)
-    if col_guardar.button("Guardar e começar outro", type="primary",
-                          width="stretch"):
+    # Ações EMPILHADAS (auditoria de UI 2026-07): 3 colunas no dialog
+    # estreito quebravam o texto em 2 linhas e achatavam a hierarquia da
+    # decisão. Empilhado: primário em cima, destrutivo discreto embaixo.
+    if st.button("Guardar e começar outro", type="primary", width="stretch",
+                 help="O pregão atual fica na lista da tela inicial, para "
+                      "continuar depois exatamente de onde parou."):
         st.session_state.pop("_confirmar_novo_pregao", None)
         # Força a gravação (ignora a dedupe por assinatura) antes de limpar —
         # o rascunho no disco fica 100% atual no momento da troca.
         st.session_state.pop("_rascunho_assin", None)
         _salvar_rascunho()
         _limpar_pregao(preservar_rascunho=True)
+        # Confirmação transitória: a ação era MUDA (auditoria de UI 2026-07).
+        st.toast("Pregão guardado — retome pela tela inicial.")
         ir_para("upload")          # ir_para já faz st.rerun()
-    if col_desc.button("Descartar e começar novo", width="stretch"):
+    if st.button("Continuar o atual", width="stretch"):
+        st.session_state.pop("_confirmar_novo_pregao", None)
+        ir_para(_tela_pregao_em_andamento())
+    if st.button("Descartar e começar novo", width="stretch"):
         st.session_state.pop("_confirmar_novo_pregao", None)
         _limpar_pregao()
         ir_para("upload")
-    if col_nao.button("Continuar o atual", width="stretch"):
-        st.session_state.pop("_confirmar_novo_pregao", None)
-        # Retoma o trabalho em andamento (não só fecha o modal): leva à tela
-        # onde o pregão está. ir_para já faz st.rerun() e, com a flag removida,
-        # o diálogo não reabre.
-        ir_para(_tela_pregao_em_andamento())
+    # (ordem: guardar > continuar > descartar — o destrutivo por último)
 
 
 def _novo_pregao() -> None:
@@ -1192,8 +1195,8 @@ def tela_historico():
 def tela_configuracoes():
     style.header_pagina(
         "Configurações",
-        "Credenciais dos fornecedores. Tudo fica salvo apenas no seu computador "
-        "(arquivo <code>data/credenciais.json</code>), sem envio para servidores externos.",
+        "Credenciais dos fornecedores. Tudo fica salvo apenas no seu "
+        "computador, sem envio para servidores externos.",
     )
 
     aba_almeida, aba_dantas, aba_ia, aba_cat = st.tabs(
@@ -2740,13 +2743,17 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
     sem_resultado = total - com_resultado
     selecionados = len(st.session_state.selecoes)
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Itens", total)
-    c2.metric("Com preço", com_resultado - com_variacao,
-              help="Casamento exato com a descrição do edital")
-    c3.metric("Por variação", com_variacao,
-              help="Encontrado, mas por busca aproximada — conferir")
-    c4.metric("Sem resultado", sem_resultado)
+    style.linha_metricas([
+        ("Itens", total, "neutro", None),
+        ("Com preço", com_resultado - com_variacao, "success",
+         "Casamento exato com a descrição do edital"),
+        ("Por variação", com_variacao,
+         "warning" if com_variacao else "neutro",
+         "Encontrado, mas por busca aproximada — conferir"),
+        ("Sem resultado", sem_resultado,
+         "danger" if sem_resultado else "neutro",
+         "Sem preço em nenhum fornecedor — use a re-busca ou a busca manual"),
+    ])
 
     # Painel de erros do batch — só aparece quando há falhas técnicas.
     # Não bloqueia o fluxo: o operador pode prosseguir com o que deu certo.
