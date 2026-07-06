@@ -46,6 +46,11 @@ def configurar() -> None:
     if not any(isinstance(h, RotatingFileHandler) for h in root.handlers):
         root.addHandler(handler)
     _configurado = True
+    # Primeira linha do log: a versão do build. UMA vez por processo — não a
+    # cada rerun do Streamlit (que re-executa o script inteiro e antes gerava
+    # milhares de linhas 'iniciado' idênticas; achado 2026-07-06).
+    logging.getLogger("pregoes.ui").info(
+        "Pregões v%s iniciado", config.VERSAO_APP)
 
 
 def get_logger(nome: str) -> logging.Logger:

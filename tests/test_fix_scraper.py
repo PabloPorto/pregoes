@@ -156,6 +156,19 @@ def _reseta_driver_compartilhado():
     _s._pw_driver = None
 
 
+@pytest.fixture(autouse=True)
+def _pagamento_sem_config(monkeypatch):
+    """Estes testes cobrem a LIMPEZA do login (o browser fecha quando o login
+    falha), NÃO a condição de pagamento. Sem isto, o `__enter__` REAL chamava
+    `_aplicar_preferencia_pagamento`, que — com a página falsa mínima (sem
+    `.count()`) — levantava AttributeError irrelevante ao objetivo do teste
+    (esse ruído chegou a parecer bug de campo; achado 2026-07-06). Devolvendo
+    'sem preferência configurada', o pagamento é pulado."""
+    from pregoes import credenciais
+    monkeypatch.setattr(credenciais, "carregar_preferencia_pagamento",
+                        lambda f: None)
+
+
 # === Almeida ===
 
 def test_almeida_login_falho_fecha_browser_sem_derrubar_driver(monkeypatch):

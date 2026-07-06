@@ -689,7 +689,7 @@ def test_rascunho_salva_apagao_e_restaura_identico(monkeypatch, tmp_path):
     app._restaurar_rascunho(estado, pendentes[0]["slug"])
     assert ss["itens_revisados"][0].descricao == "LUVA 001/2026"
     assert ss["selecoes"][0].codigo_fornecedor == "9185"
-    assert ss["tela"] == "busca"                      # volta onde parou
+    assert ss["tela"] == "busca_precos"               # volta à tela de trabalho
     ss.clear()
 
 
@@ -843,4 +843,53 @@ def test_rascunho_nao_carrega_dataframe(monkeypatch, tmp_path):
         rascunho.listar_pregoes()[0]["slug"])
     assert "df_editavel" not in estado, "DataFrame não pode entrar no snapshot"
     assert estado["itens_edital"], "o resto do estado continua completo"
+    ss.clear()
+
+
+def test_restaurar_rascunho_limpa_estado_do_pregao_anterior(monkeypatch, tmp_path):
+    """Trocar de pregão pela lista do Início NÃO pode vazar estado do anterior:
+    chaves que só existiam no pregão A (ex.: itens_nao_usar) não podem
+    sobreviver ao restaurar o pregão B (bug de multi-pregão 2026-07-06)."""
+    rascunho = _isolar_rascunhos(monkeypatch, tmp_path)
+    ss = app.st.session_state
+    ss.clear()
+    # Pregão A ativo, com um item marcado "não usar".
+    _pregao_na_sessao(ss, "Pref A", "001/2026", codigo="AAA")
+    ss["itens_nao_usar"] = {3}
+    ss["_rascunho_slug"] = "a"
+    # Pregão B (salvo SEM itens_nao_usar).
+    estado_b = {"itens_edital": [1], "itens_revisados": [1],
+                "resultados_busca": {0: ["x"]}, "selecoes": {},
+                "orgao": "Pref B", "numero": "002/2026", "tela": "home"}
+    app._restaurar_rascunho(estado_b, "b")
+    assert "itens_nao_usar" not in ss, "estado do pregão anterior VAZOU para o novo"
+    assert ss["numero"] == "002/2026" and ss["tela"] == "busca_precos"
+    assert ss["_rascunho_slug"] == "b"
+    ss.clear()
+
+
+def test_continuar_vai_para_tela_de_precos_ignora_home_salva(monkeypatch, tmp_path):
+    """Continuar um pregão guardado leva à tela de TRABALHO (preços), não à
+    'home' que o autosave capturou enquanto o operador olhava o Início
+    (feedback 2026-07-06: 'Continuar' deixava o usuário preso no Início)."""
+    _isolar_rascunhos(monkeypatch, tmp_path)
+    ss = app.st.session_state
+    ss.clear()
+    estado = {"itens_edital": [1], "itens_revisados": [1],
+              "resultados_busca": {0: ["x"]},   # busca feita → tela de preços
+              "selecoes": {}, "orgao": "P", "numero": "1",
+              "tela": "home"}                    # tela STALE capturada no Início
+    app._restaurar_rascunho(estado, "s")
+    assert ss["tela"] == "busca_precos", "deve ir à tela de preços, não à home"
+    ss.clear()
+
+
+def test_continuar_pregao_so_revisado_vai_para_revisao(monkeypatch, tmp_path):
+    _isolar_rascunhos(monkeypatch, tmp_path)
+    ss = app.st.session_state
+    ss.clear()
+    estado = {"itens_edital": [1], "itens_revisados": [1], "selecoes": {},
+              "orgao": "P", "numero": "2", "tela": "home"}   # sem busca ainda
+    app._restaurar_rascunho(estado, "s2")
+    assert ss["tela"] == "revisao"
     ss.clear()

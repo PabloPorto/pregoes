@@ -488,9 +488,13 @@ def _aplicar_preferencia_pagamento(page, fornecedor: str) -> tuple:
         botao.first.click(timeout=5_000)
         page.wait_for_timeout(2_500)   # sessão atualiza (PHPSESSID/token)
     except Exception as exc:
+        # exc_info=exc grava o TRACEBACK completo no log — sem ele (só o nome do
+        # tipo) uma falha real na máquina do cliente é impossível de diagnosticar
+        # (achado 2026-07-06). Mensagem ao operador segue limpa; o traceback vai
+        # só para o log de suporte.
         _logger.warning("Falha ao aplicar a condição de pagamento em %s (%s) — "
                         "preços podem sair no default do site. Confira.",
-                        fornecedor, type(exc).__name__)
+                        fornecedor, type(exc).__name__, exc_info=exc)
         return ("falhou", alvo_txt)
     # CONFERE o que REALMENTE ficou salvo na conta.
     try:

@@ -44,11 +44,8 @@ style.aplicar_estilo()
 # Logging em arquivo (data/pregoes.log) para diagnóstico remoto, e backup
 # diário no boot — antes de qualquer escrita.
 from pregoes import logconf, db as _db
-logconf.configurar()
+logconf.configurar()   # loga "Pregões vX iniciado" UMA vez por processo
 _log = logconf.get_logger("ui")
-# Primeira linha de todo log: a versão. O suporte remoto lê o pregoes.log
-# do cliente e precisa saber QUAL build gerou cada rastro.
-_log.info("Pregões v%s iniciado", config.VERSAO_APP)
 
 # Inicializa/migra o banco no primeiro load — COM proteção contra corrupção.
 def _abrir_banco() -> None:
@@ -2057,24 +2054,42 @@ def _restaurar_rascunho(estado: dict, slug: str | None = None) -> None:
     busca, seleções, markup). A partir daí o motor opera idêntico a uma busca
     nova, pois a session_state fica idêntica."""
     from pregoes import rascunho
+    # Limpa o estado do pregão ANTERIOR antes de carregar. Sem isto, ao TROCAR
+    # de um pregão para outro (pela lista do Início, com um já em andamento),
+    # chaves que existiam só no anterior — ex.: itens_nao_usar, df_editavel —
+    # vazariam para o novo (achado 2026-07-06). No boot (recuperação de apagão)
+    # não há nada a limpar; é no-op.
+    for k in set(CHAVES_PREGAO) | {"orgao", "numero", "pdf_path"}:
+        st.session_state.pop(k, None)
     for k, v in estado.items():
         st.session_state[k] = v
     st.session_state.pop("_rascunho_disponivel", None)
     st.session_state["_rascunho_slug"] = (
         slug or rascunho.slug_de(estado.get("orgao"), estado.get("numero")))
     st.session_state["_rascunho_assin"] = _assinatura_rascunho()
+    # Vai DIRETO para a tela de trabalho (preços/revisão), calculada pelo
+    # estado — NÃO para a `tela` salva: o autosave roda a cada render, então,
+    # se o operador estava no Início olhando o pregão, a `tela` salva virou
+    # "home" e 'Continuar' o deixava preso lá (feedback 2026-07-06). Mesmo
+    # cálculo do "Continuar o atual" do modal, para os dois caminhos baterem.
+    st.session_state["tela"] = _tela_pregao_em_andamento()
 
 
 def _banner_rascunhos() -> None:
-    """Pregões guardados/interrompidos: lista para CONTINUAR de onde parou ou
-    descartar (2 passos). Aparece só quando NÃO há pregão em andamento na
-    sessão — some sozinha assim que o operador está trabalhando."""
-    if _tem_pregao_em_andamento():
-        return
+    """Lista, no Início, os pregões guardados para CONTINUAR ou descartar.
+
+    Aparece SEMPRE que há rascunhos pendentes — INCLUSIVE com um pregão já em
+    andamento (feedback do cliente 2026-07-06: ao voltar ao Início querendo
+    alternar entre pregões, a lista sumia até recarregar a página). Só é
+    chamada em ``tela_home`` — então não polui as telas de trabalho, e o gate
+    antigo por 'em andamento' (que causava o sumiço) foi removido. O pregão
+    atualmente carregado é marcado 'em andamento'; 'Continuar' nele volta para
+    a tela onde parou."""
     from pregoes import rascunho
     pendentes = rascunho.listar_pregoes()
     if not pendentes:
         return
+    ativo = st.session_state.get("_rascunho_slug")
     n = len(pendentes)
     style.bloco_aviso(
         f"<b>{n} {'pregão guardado' if n == 1 else 'pregões guardados'}</b> — "
@@ -2087,6 +2102,8 @@ def _banner_rascunhos() -> None:
         detalhe = f"{p['n_itens']} {'item' if p['n_itens'] == 1 else 'itens'}"
         if p["tem_busca"]:
             detalhe += " · busca de preços feita"
+        if slug == ativo:
+            detalhe += " · em andamento"
         with st.container(border=True):
             c1, c2, c3 = st.columns([6, 2, 2], vertical_alignment="center")
             c1.markdown(f"**{rotulo}**  \n:gray[{detalhe}]")
@@ -2094,7 +2111,12 @@ def _banner_rascunhos() -> None:
             if st.session_state.get(chave_conf):
                 if c2.button("Sim, descartar", key=f"rasc_del_sim_{slug}",
                              type="primary", width="stretch"):
-                    rascunho.remover_pregao(slug)
+                    if slug == st.session_state.get("_rascunho_slug"):
+                        # Descartar o ATIVO: limpa a sessão TAMBÉM — senão o
+                        # autosave do próximo render recria o arquivo.
+                        _limpar_pregao()
+                    else:
+                        rascunho.remover_pregao(slug)
                     st.session_state.pop(chave_conf, None)
                     st.rerun()
                 if c3.button("Cancelar", key=f"rasc_del_nao_{slug}",
@@ -2102,6 +2124,8 @@ def _banner_rascunhos() -> None:
                     st.session_state.pop(chave_conf, None)
                     st.rerun()
             else:
+                # 'Continuar' no pregão ativo é o caminho de VOLTA para a tela
+                # onde ele parou (restaura o mesmo estado + a tela salva).
                 if c2.button("Continuar", key=f"rasc_cont_{slug}",
                              type="primary", width="stretch"):
                     estado = rascunho.carregar_pregao(slug)
