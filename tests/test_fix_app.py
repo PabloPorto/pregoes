@@ -826,3 +826,21 @@ def test_avisos_pagamento_nao_conferida_e_sem_status():
     })
     assert "confirmar" in avisos["almeida"].lower()
     assert "dantas" not in avisos, "sem status = sem_config = sem alerta"
+
+
+def test_rascunho_nao_carrega_dataframe(monkeypatch, tmp_path):
+    """Regressão de campo (2026-07-06): pickle de DataFrame quebra entre
+    versões de pandas/numpy e os rascunhos sumiam EM SILÊNCIO após atualizar o
+    ambiente. df_editavel fica FORA do snapshot (é derivável da extração)."""
+    import pandas as pd
+    rascunho = _isolar_rascunhos(monkeypatch, tmp_path)
+    ss = app.st.session_state
+    ss.clear()
+    _pregao_na_sessao(ss, "Prefeitura", "010/2026")
+    ss["df_editavel"] = pd.DataFrame({"a": [1, 2]})   # snapshot NÃO pode levar
+    app._salvar_rascunho()
+    estado = rascunho.carregar_pregoes = rascunho.carregar_pregao(
+        rascunho.listar_pregoes()[0]["slug"])
+    assert "df_editavel" not in estado, "DataFrame não pode entrar no snapshot"
+    assert estado["itens_edital"], "o resto do estado continua completo"
+    ss.clear()

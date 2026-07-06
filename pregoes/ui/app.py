@@ -190,7 +190,15 @@ CHAVES_PREGAO = ("extracao", "df_editavel", "resultados_busca",
 # O rascunho (autosave anti-apagão) salva o estado do pregão (CHAVES_PREGAO) MAIS
 # os metadados que ficam fora dele (órgão/número/PDF) e a tela atual — para
 # restaurar EXATAMENTE onde o operador parou.
-_CHAVES_RASCUNHO = CHAVES_PREGAO + ("orgao", "numero", "pdf_path", "tela")
+#
+# df_editavel fica FORA do snapshot (achado de campo 2026-07-06): pickle de
+# DataFrame quebra entre versões de pandas/numpy (ModuleNotFoundError no
+# unpickle) e os rascunhos sumiam EM SILÊNCIO após atualizar o ambiente. O
+# DataFrame é DERIVÁVEL: restaurado como None, a tela de revisão o reconstrói
+# de `extracao`/`itens_revisados` (mesmo caminho do boot). O resto do snapshot
+# são dataclasses NOSSAS + primitivos — estáveis entre atualizações.
+_CHAVES_RASCUNHO = tuple(k for k in CHAVES_PREGAO if k != "df_editavel") + (
+    "orgao", "numero", "pdf_path", "tela")
 
 # Passos do fluxo principal — alimentam o stepper de progresso no topo das telas
 # do fluxo (redesign UX 2026-06). "Planilha" é o passo-meta (concluído ao gerar).
