@@ -6,7 +6,7 @@
  "extraido_em": "2026-06-05",
  "metodo": "extração semântica multi-agente do PDF (colunas embaralhadas); match hierárquico por prefixo 4/6/8 dígitos",
  "cobertura": "502/509 CESTs; 7 gaps em pneumáticos/alimentícios (fora do domínio do cliente)",
- "total": 389,
+ "total": 397,
  "ncms": [
   {
    "ncm": "04021",
@@ -1952,6 +1952,47 @@
    "ncm": "96190000",
    "cest": "20.048.00",
    "descricao": "Fraldas, exceto os descritos no CEST 20.048.01"
+  },
+  {
+   "ncm": "401693",
+   "cest": "01.007.00",
+   "descricao": "Juntas, gaxetas e outros elementos com função semelhante de vedação (NCM 4016.93"
+  },
+  {
+   "ncm": "04022",
+   "cest": "17.012.00",
+   "descricao": "Leite em pó, blocos ou grânulos, exceto creme de leite (NCM 0402.1, 0402.2 e 040"
+  },
+  {
+   "ncm": "0404",
+   "cest": "23.002.00",
+   "descricao": "Preparados para fabricação de sorvete em máquina (NCM 1806, 1901, 2106, 0404)"
+  },
+  {
+   "ncm": "1901",
+   "cest": "23.002.00",
+   "descricao": "Preparados para fabricação de sorvete em máquina (NCM 1806, 1901, 2106, 0404)"
+  },
+  {
+   "ncm": "2106",
+   "cest": "23.002.00",
+   "descricao": "Preparados para fabricação de sorvete em máquina (NCM 1806, 1901, 2106, 0404)"
+  },
+  {
+   "ncm": "3209",
+   "cest": "24.001.00",
+   "descricao": "Tintas, vernizes (NCM 3208, 3209, 3210.00)"
+  },
+  {
+   "ncm": "3206",
+   "cest": "24.003.00",
+   "descricao": "Corantes para aplicação em bases, tintas e vernizes (NCM 3204, 3205.00.00, 3206,"
+  },
+  {
+   "ncm": "3212",
+   "cest": "24.003.00",
+   "descricao": "Corantes para aplicação em bases, tintas e vernizes (NCM 3204, 3205.00.00, 3206,"
   }
- ]
+ ],
+ "adendos": "2026-07-06: +9 NCMs — 7 recuperados por auditoria interna (códigos citados na descrição da própria linha mas não emitidos pela extração; ex.: 3209 de 'Tintas, vernizes', achado de campo do cliente) e 2 por conferência visual do Anexo V (3212, 8702.10.00). Risco residual: 6 descrições truncadas no meio de um código — pendente validação do contador (Q14)."
 }

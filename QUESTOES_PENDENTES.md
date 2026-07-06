@@ -711,6 +711,19 @@ ela dirigir preço real. O cliente **DECIDIU prosseguir sem isso por ora**
 (validação adiada). Atualização quando o Anexo 05 mudar = **re-extrair** a
 lista (procedimento futuro, ainda não automatizado).
 
+**Falha de campo 2026-07-06 (corrigida em v1.0.30).** Cliente flagrou tinta
+acrílica (NCM 3209.10.10) saindo SEM ST enquanto o esmalte (3208.10.10) da
+MESMA linha do Anexo ("Tintas, vernizes — NCM 3208, 3209, 3210.00") saía com
+ST: a extração original emitiu só PARTE dos códigos de algumas linhas.
+Correção: **+9 NCMs** (389→397, com dedupe) — 7 recuperados por auditoria
+interna (códigos citados na `descricao` da própria linha mas não emitidos:
+3209, 3206, 4016.93, 0402.2, 0404, 1901, 2106) e 2 por conferência visual do
+Anexo (3212, 8702.10.00). A auditoria virou **teste-invariante permanente**
+(`test_nenhum_ncm_citado_na_descricao_fica_sem_cobertura`). **Risco residual**:
+6 linhas têm a descrição TRUNCADA no meio da lista de NCMs (01.009.00,
+10.059.00, 13.001.00, 13.016.00, 17.012.00, 20.040.00) — códigos cortados são
+irrecuperáveis do arquivo; só a revisão do contador (acima) fecha esses.
+
 ---
 
 ## Bloco 5 — Histórico de planilhas geradas (exports_log + tela "Histórico")

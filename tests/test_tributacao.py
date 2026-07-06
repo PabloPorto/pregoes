@@ -98,3 +98,58 @@ def test_override_ainda_vale_para_item_sem_ncm():
     markups, _, _ = tributacao.classificar_markups(
         ncms, 1.30, 1.45, overrides={0: 1.30})   # operador marcou o 0 como ST
     assert markups == {0: 1.30, 1: 1.45}         # 0=override ST, 1=default normal
+
+
+# === Lacunas do Anexo V achadas EM CAMPO (2026-07-06) ========================
+# Cliente: tinta acrílica Suvinil (NCM 3209.10.10, no Anexo V linha 24.001.00
+# "Tintas, vernizes — NCM 3208, 3209, 3210.00") saiu SEM ST na planilha; o
+# esmalte (3208.10.10) da MESMA linha saiu com ST. A extração original do PDF
+# emitiu só parte dos códigos de algumas linhas. Correção: +9 NCMs (7 por
+# auditoria interna + 2 por conferência visual do anexo).
+
+def test_tintas_vernizes_linha_completa_do_anexo():
+    from pregoes.tributacao import eh_st
+    assert eh_st("32081010"), "esmalte (3208) — já funcionava"
+    assert eh_st("32091010"), "tinta acrílica (3209) — o caso do cliente"
+    assert eh_st("32100000"), "3210.00 — já funcionava"
+
+
+def test_corantes_e_vedacao_recuperados():
+    from pregoes.tributacao import eh_st
+    assert eh_st("32069999"), "posição 3206 inteira (corantes)"
+    assert eh_st("32120010"), "3212 (corantes — print do anexo)"
+    assert eh_st("40169300"), "juntas/gaxetas de vedação — domínio do cliente"
+
+
+def test_nenhum_ncm_citado_na_descricao_fica_sem_cobertura():
+    """INVARIANTE (a auditoria de 2026-07-06 virou guarda permanente): todo
+    NCM citado no texto '(NCM ...)' de uma linha do arquivo precisa estar
+    coberto por alguma entrada emitida (igual ou prefixo). Foi exatamente
+    essa classe de furo que deixou a tinta 3209 sem ST em produção.
+
+    Descrições TRUNCADAS (cortadas no meio da lista) têm o último token
+    ignorado — esses casos são o risco residual registrado na Q14."""
+    import json
+    import re
+    from pathlib import Path
+    doc = json.loads((Path("pregoes/dados/ncm_st.json")).read_text("utf-8"))
+    emitidos = {e["ncm"] for e in doc["ncms"]}
+    por_cest: dict = {}
+    for e in doc["ncms"]:
+        por_cest.setdefault(e["cest"], e["descricao"])
+    faltando = []
+    for cest, desc in por_cest.items():
+        m = re.search(r"NCM[:\s]*([\d.,\s e/]+)", desc)
+        if not m:
+            continue
+        tokens = re.findall(r"[\d.]+", m.group(1))
+        truncada = not desc.rstrip().endswith(")")
+        if truncada and tokens:
+            tokens = tokens[:-1]   # último código pode estar cortado
+        for t in tokens:
+            c = t.replace(".", "")
+            if len(c) < 4:
+                continue
+            if c not in emitidos and not any(c.startswith(e) for e in emitidos):
+                faltando.append((cest, c))
+    assert not faltando, f"NCMs citados sem cobertura: {faltando}"
