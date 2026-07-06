@@ -338,9 +338,10 @@ def _renderizar_sidebar():
         # Telas de meio-de-fluxo não viram itens de menu, mas mantêm a navegação
         # consistente sem botão "ativo" (revisão, busca_precos, mapeamento).
         for tela_id, rotulo in nav_items:
-            ativo = tela_atual == tela_id or (
-                tela_id == "upload" and tela_atual in {"revisao", "mapeamento", "busca_precos"}
-            )
+            # Só a tela EXATA acende. Nas telas do fluxo (revisão/preços)
+            # nenhum botão fica ativo — o stepper é a âncora de localização
+            # (auditoria de UI 2026-07: 'Novo pregão' aceso em Preços confundia).
+            ativo = tela_atual == tela_id
             if st.button(
                 rotulo,
                 key=f"nav_{tela_id}",
@@ -375,6 +376,8 @@ def tela_home():
         "Início",
         "Visão geral dos pregões processados e atalho para um novo.",
     )
+
+    _banner_rascunhos()
 
     # KPIs simples — contagem total e por status relevante para o operador.
     # Usa COUNT direto no SQL (mais barato que carregar todas as linhas).
@@ -1961,7 +1964,10 @@ def _mostrar_condicao_pagamento(fornecedores: list) -> None:
         else:
             falta.append(nome.capitalize())
     if configuradas:
-        st.caption("Condição de pagamento — " + "  ·  ".join(configuradas))
+        st.markdown(
+            "<div style='margin:0.15rem 0 0.4rem'>"
+            + " ".join(style.badge(c, "neutro") for c in configuradas)
+            + "</div>", unsafe_allow_html=True)
     if falta:
         style.bloco_aviso(
             "Sem condição de pagamento configurada para <b>" + ", ".join(falta) +
@@ -2078,30 +2084,33 @@ def _banner_rascunhos() -> None:
         detalhe = f"{p['n_itens']} {'item' if p['n_itens'] == 1 else 'itens'}"
         if p["tem_busca"]:
             detalhe += " · busca de preços feita"
-        c1, c2, c3 = st.columns([6, 2, 2], vertical_alignment="center")
-        c1.markdown(f"**{rotulo}**  \n:gray[{detalhe}]")
-        chave_conf = f"rasc_conf_del_{slug}"
-        if st.session_state.get(chave_conf):
-            if c2.button("Sim, descartar", key=f"rasc_del_sim_{slug}",
-                         type="primary", width="stretch"):
-                rascunho.remover_pregao(slug)
-                st.session_state.pop(chave_conf, None)
-                st.rerun()
-            if c3.button("Cancelar", key=f"rasc_del_nao_{slug}", width="stretch"):
-                st.session_state.pop(chave_conf, None)
-                st.rerun()
-        else:
-            if c2.button("Continuar", key=f"rasc_cont_{slug}", type="primary",
-                         width="stretch"):
-                estado = rascunho.carregar_pregao(slug)
-                if estado:
-                    _restaurar_rascunho(estado, slug)
-                else:   # corrompido entre a listagem e o clique — remove
+        with st.container(border=True):
+            c1, c2, c3 = st.columns([6, 2, 2], vertical_alignment="center")
+            c1.markdown(f"**{rotulo}**  \n:gray[{detalhe}]")
+            chave_conf = f"rasc_conf_del_{slug}"
+            if st.session_state.get(chave_conf):
+                if c2.button("Sim, descartar", key=f"rasc_del_sim_{slug}",
+                             type="primary", width="stretch"):
                     rascunho.remover_pregao(slug)
-                st.rerun()
-            if c3.button("Descartar", key=f"rasc_del_{slug}", width="stretch"):
-                st.session_state[chave_conf] = True
-                st.rerun()
+                    st.session_state.pop(chave_conf, None)
+                    st.rerun()
+                if c3.button("Cancelar", key=f"rasc_del_nao_{slug}",
+                             width="stretch"):
+                    st.session_state.pop(chave_conf, None)
+                    st.rerun()
+            else:
+                if c2.button("Continuar", key=f"rasc_cont_{slug}",
+                             type="primary", width="stretch"):
+                    estado = rascunho.carregar_pregao(slug)
+                    if estado:
+                        _restaurar_rascunho(estado, slug)
+                    else:   # corrompido entre a listagem e o clique — remove
+                        rascunho.remover_pregao(slug)
+                    st.rerun()
+                if c3.button("Descartar", key=f"rasc_del_{slug}",
+                             width="stretch"):
+                    st.session_state[chave_conf] = True
+                    st.rerun()
 
 
 def _escolher_opcao(idx: int, o) -> None:
@@ -2823,6 +2832,12 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
             f"**Item {_numero_item_edital(item, idx)}** · "
             f"{_titulo_item(item.descricao)} · :{cor_status}[{label_status}]"
         )
+        # Escolha visível SEM abrir o item (auditoria de UI 2026-07): marca e
+        # preço escolhidos entram no título fechado — conferir 272 itens vira
+        # leitura corrida, não caça ao clique.
+        if sel_atual is not None and not nao_usar:
+            marca_sel = (sel_atual.marca or "").strip()[:16] or "sem marca"
+            cabecalho += " · :blue[✓ " + marca_sel + " · " + _brl(sel_atual.preco) + "]"
         with st.expander(cabecalho, expanded=False, icon=icone_status):
             # Descrição COMPLETA e exata do edital. O cabeçalho encurta para
             # caber na linha; aqui o operador lê o item inteiro (como veio do
@@ -3386,9 +3401,8 @@ TELAS = {
 }
 
 _renderizar_sidebar()
-# Pregões guardados/interrompidos: faixa no topo para retomar (multi-pregão);
-# ao fim de cada render, autosalva o rascunho do que está em curso.
-_banner_rascunhos()
+# Ao fim de cada render, autosalva o rascunho do pregão em curso; a lista de
+# pregões guardados vive na HOME (cards de retomada — auditoria de UI 2026-07).
 TELAS[st.session_state.tela]()
 _salvar_rascunho()
 
