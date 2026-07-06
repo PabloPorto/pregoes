@@ -67,6 +67,19 @@ def test_paralelo_usa_mais_de_uma_thread_e_progresso_na_thread_principal():
     forn = _FornParalelo()
     eventos = []
     principal = threading.get_ident()
+    # Barreira nas 2 primeiras buscas: EXIGE 2 threads simultâneas (com itens
+    # instantâneos, 1 worker às vezes engolia a fila inteira antes dos outros
+    # subirem → flake). Se o pool regredir para serial, a barreira estoura o
+    # timeout e o teste falha alto — determinístico nos dois sentidos.
+    barreira = threading.Barrier(2, timeout=5)
+    buscar_original = forn.buscar
+
+    def buscar_bloqueante(descricao):
+        if descricao in ("I0", "I1"):
+            barreira.wait()
+        return buscar_original(descricao)
+
+    forn.buscar = buscar_bloqueante
 
     def cb(atual, total, msg):
         eventos.append((threading.get_ident(), atual, total))
