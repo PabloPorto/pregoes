@@ -142,11 +142,25 @@ _COOKIES_LOGIN_OK = [
 ]
 
 
+# CONTRATO NOVO (2026-07-06): o driver Playwright é COMPARTILHADO do processo
+# (2º sync_playwright().start() na mesma thread quebra — achado de campo, com
+# sessões Almeida + Dantas vivas juntas no cache). Fechar uma sessão fecha SÓ o
+# navegador dela; o driver FICA para as demais. Por isso `parado is False`.
+
+@pytest.fixture(autouse=True)
+def _reseta_driver_compartilhado():
+    """O singleton _pw_driver cachearia o fake de um teste para o seguinte."""
+    import pregoes.scraper as _s
+    _s._pw_driver = None
+    yield
+    _s._pw_driver = None
+
+
 # === Almeida ===
 
-def test_almeida_login_falho_fecha_browser_e_para_playwright(monkeypatch):
-    """RuntimeError de cookies ausentes no `_login` deve fechar o browser e
-    parar o Playwright — não deixar Chromium órfão."""
+def test_almeida_login_falho_fecha_browser_sem_derrubar_driver(monkeypatch):
+    """RuntimeError de cookies ausentes no `_login` deve fechar o browser (sem
+    Chromium órfão); o DRIVER compartilhado fica (outra sessão pode usá-lo)."""
     fake_pw, browser = _montar_fake(_COOKIES_LOGIN_FALHO)
     _instalar_fake_playwright(monkeypatch, fake_pw)
 
@@ -155,7 +169,7 @@ def test_almeida_login_falho_fecha_browser_e_para_playwright(monkeypatch):
         alm.__enter__()
 
     assert browser.fechado is True, "browser.close() deveria ter sido chamado"
-    assert fake_pw.parado is True, "playwright.stop() deveria ter sido chamado"
+    assert fake_pw.parado is False, "driver compartilhado NÃO deve parar"
 
 
 def test_almeida_excecao_inesperada_no_login_tambem_limpa(monkeypatch):
@@ -174,7 +188,7 @@ def test_almeida_excecao_inesperada_no_login_tambem_limpa(monkeypatch):
         alm.__enter__()
 
     assert browser.fechado is True
-    assert fake_pw.parado is True
+    assert fake_pw.parado is False   # driver compartilhado fica
 
 
 def test_almeida_with_propaga_excecao_e_limpa(monkeypatch):
@@ -188,7 +202,7 @@ def test_almeida_with_propaga_excecao_e_limpa(monkeypatch):
             pytest.fail("não deveria entrar no corpo do with: login falhou")
 
     assert browser.fechado is True
-    assert fake_pw.parado is True
+    assert fake_pw.parado is False   # driver compartilhado fica
 
 
 def test_almeida_login_ok_nao_fecha_no_enter(monkeypatch):
@@ -207,12 +221,12 @@ def test_almeida_login_ok_nao_fecha_no_enter(monkeypatch):
     # `__exit__` (caminho de sucesso) ainda fecha tudo.
     alm.__exit__(None, None, None)
     assert browser.fechado is True
-    assert fake_pw.parado is True
+    assert fake_pw.parado is False   # driver compartilhado fica
 
 
 # === Dantas ===
 
-def test_dantas_login_falho_fecha_browser_e_para_playwright(monkeypatch):
+def test_dantas_login_falho_fecha_browser_sem_derrubar_driver(monkeypatch):
     fake_pw, browser = _montar_fake(_COOKIES_LOGIN_FALHO)
     _instalar_fake_playwright(monkeypatch, fake_pw)
 
@@ -221,7 +235,7 @@ def test_dantas_login_falho_fecha_browser_e_para_playwright(monkeypatch):
         dan.__enter__()
 
     assert browser.fechado is True, "browser.close() deveria ter sido chamado"
-    assert fake_pw.parado is True, "playwright.stop() deveria ter sido chamado"
+    assert fake_pw.parado is False, "driver compartilhado NÃO deve parar"
 
 
 def test_dantas_excecao_inesperada_no_login_tambem_limpa(monkeypatch):
@@ -238,7 +252,7 @@ def test_dantas_excecao_inesperada_no_login_tambem_limpa(monkeypatch):
         dan.__enter__()
 
     assert browser.fechado is True
-    assert fake_pw.parado is True
+    assert fake_pw.parado is False   # driver compartilhado fica
 
 
 def test_dantas_with_propaga_excecao_e_limpa(monkeypatch):
@@ -250,7 +264,7 @@ def test_dantas_with_propaga_excecao_e_limpa(monkeypatch):
             pytest.fail("não deveria entrar no corpo do with: login falhou")
 
     assert browser.fechado is True
-    assert fake_pw.parado is True
+    assert fake_pw.parado is False   # driver compartilhado fica
 
 
 def test_dantas_login_ok_nao_fecha_no_enter(monkeypatch):
@@ -266,7 +280,7 @@ def test_dantas_login_ok_nao_fecha_no_enter(monkeypatch):
 
     dan.__exit__(None, None, None)
     assert browser.fechado is True
-    assert fake_pw.parado is True
+    assert fake_pw.parado is False   # driver compartilhado fica
 
 
 # === Idempotência da limpeza ===

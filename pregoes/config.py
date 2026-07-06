@@ -38,7 +38,7 @@ def _raiz_bundle() -> Path:
 # Versão do aplicativo — aparece na sidebar e no log de boot. Sem ela, o
 # suporte remoto fica às cegas sobre o que o cliente está rodando (auditoria
 # 2026-06). Bump a cada .exe entregue ao cliente.
-VERSAO_APP = "1.0.26"
+VERSAO_APP = "1.0.27"
 
 # Estrutura de diretórios
 BASE_DIR = _raiz_gravavel()
@@ -120,6 +120,13 @@ SCRAPER_POOL_SIZE = 4
 # Respeita os parceiros — não confunda com pool_size (paralelismo).
 # Pool 4 + rate 2 req/s = sustentação de ~2 req/s com burst até 4.
 SCRAPER_MAX_REQ_POR_SEGUNDO = 2.0
+# Consultas de busca via HTTP com os cookies da sessão logada (Fase 2 de perf,
+# 2026-07): os cards são server-rendered — um GET devolve o MESMO conteúdo que o
+# navegador (preço logado validado em campo nos 2 fornecedores), em ~1/3 do
+# tempo e com miss instantâneo. O navegador continua sendo usado para login,
+# condição de pagamento, NCM e como FALLBACK de qualquer consulta HTTP que
+# falhe. Desligue (False) para voltar 100% ao navegador (rollback de campo).
+SCRAPER_HTTP_QUERIES = True
 FORNECEDORES = {
     "almeida": "https://www.almeidadistribuidor.com.br",
     "dantas": "https://www.dantasdistribuidora.com.br",

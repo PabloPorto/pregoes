@@ -44,7 +44,9 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 import time
+import urllib.request
 from dataclasses import asdict, dataclass, field, replace
 from typing import Callable, Optional, Protocol
 from urllib.parse import quote_plus
@@ -576,6 +578,149 @@ def _sem_duplicatas(resultados: list["ResultadoBusca"]) -> list["ResultadoBusca"
     return out
 
 
+# === Transporte HTTP das consultas (Fase 2 de perf, 2026-07) ===
+# Os cards da busca são SERVER-RENDERED (zero XHR — inspeção 2026-06-29): um GET
+# com os cookies da sessão logada devolve o MESMO HTML que o navegador, com o
+# data-preco da condição de pagamento aplicada (validado em campo: preço via
+# HTTP == preço via navegador nos 2 fornecedores). Vantagens: ~1/3 do tempo por
+# consulta, MISS instantâneo (sem teto de espera por card) e — crucial — HTTP em
+# thread é seguro (o problema de greenlet é do Playwright). O navegador segue
+# como transporte de login/pagamento/NCM e como FALLBACK por consulta.
+
+_RE_CARD_TAG = re.compile(r'<[^>]*\bdata-codigo-produto="[^"]*"[^>]*>')
+_RE_DATA_ATTR = re.compile(r'(data-[\w-]+)="([^"]*)"')
+_RE_HREF = re.compile(r'href="([^"]+)"')
+
+
+class SessaoHTTPExpirou(RuntimeError):
+    """A sessão HTTP deslogou no meio de um lote em modo http-only (paralelo).
+    O item vira ErroBusca e a re-busca incremental (que reloga) recupera."""
+
+
+def _cookie_header_de(context) -> str:
+    """Serializa os cookies do contexto Playwright para o header Cookie."""
+    return "; ".join(f"{c['name']}={c['value']}" for c in context.cookies())
+
+
+def _http_get(url: str, cookie_header: str) -> str:
+    req = urllib.request.Request(
+        url, headers={"User-Agent": "Mozilla/5.0", "Cookie": cookie_header})
+    with urllib.request.urlopen(
+            req, timeout=config.SCRAPER_TIMEOUT_SEGUNDOS) as resp:
+        return resp.read().decode("utf-8", "ignore")
+
+
+_RE_A_TAG = re.compile(r"<a\b[^>]*>")
+
+
+def _cards_do_html(html: str, max_cards: int) -> list[dict]:
+    """Extrai os atributos ``data-*`` dos cards do HTML cru + a URL do produto.
+
+    A URL (usada pelo "Identificar NCM") vem do ``<a href>`` do produto. Na
+    página LOGADA o anchor vem DEPOIS do card, com ``data-id-produto`` — o
+    mapa por id casa card→href sem depender de posição (campo 2026-07-06).
+    Fallback: layout deslogado, onde o ``<a>`` EMBRULHA o card (vem antes)."""
+    hrefs_por_id: dict[str, str] = {}
+    for a in _RE_A_TAG.finditer(html):
+        tag = a.group(0)
+        if "data-id-produto" not in tag:
+            continue
+        h = _RE_HREF.search(tag)
+        i = re.search(r'data-id-produto="([^"]+)"', tag)
+        if h and i and i.group(1) not in hrefs_por_id:
+            hrefs_por_id[i.group(1)] = h.group(1)
+
+    out: list[dict] = []
+    for m in _RE_CARD_TAG.finditer(html):
+        attrs = dict(_RE_DATA_ATTR.findall(m.group(0)))
+        url = hrefs_por_id.get((attrs.get("data-id-produto") or "").strip())
+        if not url:
+            ini = html.rfind("<a ", max(0, m.start() - 3000), m.start())
+            if ini >= 0:
+                h = _RE_HREF.search(html[ini:m.start()])
+                url = h.group(1) if h else None
+        attrs["url"] = url
+        out.append(attrs)
+        if len(out) >= max_cards:
+            break
+    return out
+
+
+def _consultar_cards_http(forn, url: str) -> Optional[list[dict]]:
+    """Busca os cards de ``url`` via HTTP com a sessão logada de ``forn``.
+
+    Devolve a lista de atributos (mesmo formato do ``page.evaluate`` do caminho
+    navegador), ou ``None`` = "use o navegador" (sem cookie, flag desligada ou
+    falha de rede — o fallback preserva o comportamento antigo).
+
+    Guarda anti-deslogado: cards presentes mas TODOS com preço <= 0 é a
+    assinatura de sessão HTTP expirada (deslogado o site mostra o card com
+    data-preco="0.00"). Nesse caso o HTTP é DESLIGADO para esta sessão (as
+    consultas seguem 100% navegador — corretas, só mais lentas) e logamos o
+    porquê; em modo http-only (paralelo) levanta SessaoHTTPExpirou."""
+    if not config.SCRAPER_HTTP_QUERIES:
+        return None
+    cookie = getattr(forn, "_http_cookie", None)
+    if not cookie:
+        return None
+    try:
+        html = _http_get(url, cookie)
+    except Exception as exc:
+        if getattr(forn, "_http_only", False):
+            raise SessaoHTTPExpirou(
+                f"consulta HTTP falhou em modo paralelo ({type(exc).__name__})")
+        return None   # rede/HTTP falhou → o navegador cuida desta consulta
+    cards = _cards_do_html(html, _MAX_RESULTADOS_POR_QUERY)
+
+    def _preco(c):
+        try:
+            return float((c.get("data-preco") or "0").replace(",", "."))
+        except ValueError:
+            return 0.0
+
+    if cards and all(_preco(c) <= 0 for c in cards):
+        forn._http_cookie = None   # sessão HTTP morreu — não insistir
+        _logger.warning(
+            "Sessão HTTP de %s expirou (preços zerados) — consultas seguem "
+            "pelo navegador nesta sessão.", getattr(forn, "nome", "?"))
+        if getattr(forn, "_http_only", False):
+            raise SessaoHTTPExpirou("sessão HTTP deslogou (preços zerados)")
+        return None
+    return cards
+
+
+# === Driver Playwright COMPARTILHADO do processo (2026-07-06) ===
+# `sync_playwright().start()` só pode existir UMA vez por thread — o 2º start
+# falha com "sync API inside the asyncio loop" (validado em campo ao manter
+# Almeida E Dantas vivos ao mesmo tempo no cache de sessões). O driver passa a
+# ser um singleton do processo: cada fornecedor abre o SEU navegador/contexto
+# nele, e fechar uma sessão fecha só o navegador dela (o driver fica).
+
+_pw_driver = None
+
+
+def _playwright_compartilhado():
+    """Driver único do processo (criar/usar sempre na MESMA thread — a
+    principal). Se o driver morreu (ex.: crash do subprocesso), recria uma vez."""
+    global _pw_driver
+    from playwright.sync_api import sync_playwright
+    if _pw_driver is None:
+        _pw_driver = sync_playwright().start()
+    return _pw_driver
+
+
+def _resetar_playwright_compartilhado() -> None:
+    """Derruba o driver (para o próximo uso recriar). Usado quando um launch
+    falha — driver zumbi não se recupera sozinho."""
+    global _pw_driver
+    if _pw_driver is not None:
+        try:
+            _pw_driver.stop()
+        except Exception:
+            pass
+        _pw_driver = None
+
+
 class AlmeidaDistribuidor:
     """
     Scraper de almeidadistribuidor.com.br.
@@ -611,6 +756,8 @@ class AlmeidaDistribuidor:
         self._browser = None
         self._context = None
         self._page = None
+        self._http_cookie = None   # header Cookie da sessão (transporte HTTP)
+        self._http_only = False    # modo paralelo: sem fallback de navegador
         self._rate_limiter = _RateLimiter(
             max_req_por_segundo or config.SCRAPER_MAX_REQ_POR_SEGUNDO
         )
@@ -627,8 +774,16 @@ class AlmeidaDistribuidor:
         # acumulando processos na máquina Windows do operador. Por isso
         # fechamos tudo no except antes de re-levantar.
         try:
-            self._playwright = sync_playwright().start()
-            self._browser = self._playwright.chromium.launch(headless=self._headless)
+            # Driver COMPARTILHADO do processo (2º sync_playwright().start() na
+            # mesma thread quebra); cada sessão tem só o próprio navegador.
+            try:
+                self._playwright = _playwright_compartilhado()
+                self._browser = self._playwright.chromium.launch(headless=self._headless)
+            except Exception:
+                # Driver zumbi (crash anterior) — recria uma vez e re-tenta.
+                _resetar_playwright_compartilhado()
+                self._playwright = _playwright_compartilhado()
+                self._browser = self._playwright.chromium.launch(headless=self._headless)
             self._context = self._browser.new_context(viewport={"width": 1280, "height": 900})
             self._page = self._context.new_page()
             # Bound de tempo por operação Playwright (navegação, espera de
@@ -643,6 +798,13 @@ class AlmeidaDistribuidor:
             # senão o preço vem da condição default do site. Gracioso: sem config
             # ou modal ausente → segue no default (não derruba o login).
             _aplicar_preferencia_pagamento(self._page, self.nome)
+            # Cookies extraídos DEPOIS do pagamento: a condição vive na sessão
+            # do servidor, e o header pronto habilita o transporte HTTP das
+            # consultas (Fase 2 de perf; falha aqui só desliga o atalho).
+            try:
+                self._http_cookie = _cookie_header_de(self._context)
+            except Exception:
+                self._http_cookie = None
         except BaseException:
             self._fechar()
             raise
@@ -664,9 +826,9 @@ class AlmeidaDistribuidor:
             self._browser = None
             self._context = None
             self._page = None
-            if self._playwright is not None:
-                self._playwright.stop()
-                self._playwright = None
+            # NÃO para o driver: ele é COMPARTILHADO do processo (outra sessão
+            # pode estar usando). Só solta a referência.
+            self._playwright = None
 
     def _login(self, page) -> None:
         page.goto(f"{_BASE_URL_ALMEIDA}/entrar",
@@ -776,32 +938,35 @@ class AlmeidaDistribuidor:
         return resultados[:1]
 
     def _buscar_query(self, page, query: str, confianca: str) -> list[ResultadoBusca]:
-        """Faz uma busca crua usando a página recebida e retorna até N
-        resultados parseados (sem filtro de relevância — caller filtra)."""
+        """Faz uma busca crua e retorna até N resultados parseados (sem filtro
+        de relevância — caller filtra). Transporte: HTTP com a sessão logada
+        (rápido); navegador como fallback (comportamento antigo)."""
         url = f"{_BASE_URL_ALMEIDA}/busca?s={quote_plus(query)}"
-        _carregar_busca(page, url)
+        cards_attrs = _consultar_cards_http(self, url)
+        if cards_attrs is None:
+            _carregar_busca(page, url)
 
-        # Pega todos os cards e seus atributos data-* num único round-trip
-        # ao browser. Mais barato que `.locator().all()` + `.get_attribute()`
-        # por card (que dispara N IPCs).
-        cards_attrs = page.evaluate("""
-            () => {
-                const cards = document.querySelectorAll(
-                    '.product-card__info[data-codigo-produto]'
-                );
-                return Array.from(cards).slice(0, %d).map(el => {
-                    const wrap = el.closest('.product-card') || el.parentElement;
-                    const a = wrap ? wrap.querySelector('a[href]') : null;
-                    return {
-                        'data-codigo-produto': el.getAttribute('data-codigo-produto'),
-                        'data-nome':           el.getAttribute('data-nome'),
-                        'data-preco':          el.getAttribute('data-preco'),
-                        'data-marca':          el.getAttribute('data-marca'),
-                        'url':                 a ? a.href : null,
-                    };
-                });
-            }
-        """ % _MAX_RESULTADOS_POR_QUERY)
+            # Pega todos os cards e seus atributos data-* num único round-trip
+            # ao browser. Mais barato que `.locator().all()` + `.get_attribute()`
+            # por card (que dispara N IPCs).
+            cards_attrs = page.evaluate("""
+                () => {
+                    const cards = document.querySelectorAll(
+                        '.product-card__info[data-codigo-produto]'
+                    );
+                    return Array.from(cards).slice(0, %d).map(el => {
+                        const wrap = el.closest('.product-card') || el.parentElement;
+                        const a = wrap ? wrap.querySelector('a[href]') : null;
+                        return {
+                            'data-codigo-produto': el.getAttribute('data-codigo-produto'),
+                            'data-nome':           el.getAttribute('data-nome'),
+                            'data-preco':          el.getAttribute('data-preco'),
+                            'data-marca':          el.getAttribute('data-marca'),
+                            'url':                 a ? a.href : null,
+                        };
+                    });
+                }
+            """ % _MAX_RESULTADOS_POR_QUERY)
 
         out = []
         for attrs in cards_attrs:
@@ -888,6 +1053,8 @@ class DantasDistribuidora:
         self._browser = None
         self._context = None
         self._page = None
+        self._http_cookie = None   # header Cookie da sessão (transporte HTTP)
+        self._http_only = False    # modo paralelo: sem fallback de navegador
         self._rate_limiter = _RateLimiter(
             max_req_por_segundo or config.SCRAPER_MAX_REQ_POR_SEGUNDO
         )
@@ -899,8 +1066,16 @@ class DantasDistribuidora:
         # falhar, senão sobram processos órfãos a cada falha (ver comentário
         # detalhado em AlmeidaDistribuidor.__enter__).
         try:
-            self._playwright = sync_playwright().start()
-            self._browser = self._playwright.chromium.launch(headless=self._headless)
+            # Driver COMPARTILHADO do processo (2º sync_playwright().start() na
+            # mesma thread quebra); cada sessão tem só o próprio navegador.
+            try:
+                self._playwright = _playwright_compartilhado()
+                self._browser = self._playwright.chromium.launch(headless=self._headless)
+            except Exception:
+                # Driver zumbi (crash anterior) — recria uma vez e re-tenta.
+                _resetar_playwright_compartilhado()
+                self._playwright = _playwright_compartilhado()
+                self._browser = self._playwright.chromium.launch(headless=self._headless)
             self._context = self._browser.new_context(viewport={"width": 1280, "height": 900})
             self._page = self._context.new_page()
             # Bound de tempo por operação Playwright (navegação, espera de
@@ -915,6 +1090,13 @@ class DantasDistribuidora:
             # senão o preço vem da condição default do site. Gracioso: sem config
             # ou modal ausente → segue no default (não derruba o login).
             _aplicar_preferencia_pagamento(self._page, self.nome)
+            # Cookies extraídos DEPOIS do pagamento: a condição vive na sessão
+            # do servidor, e o header pronto habilita o transporte HTTP das
+            # consultas (Fase 2 de perf; falha aqui só desliga o atalho).
+            try:
+                self._http_cookie = _cookie_header_de(self._context)
+            except Exception:
+                self._http_cookie = None
         except BaseException:
             self._fechar()
             raise
@@ -935,9 +1117,9 @@ class DantasDistribuidora:
             self._browser = None
             self._context = None
             self._page = None
-            if self._playwright is not None:
-                self._playwright.stop()
-                self._playwright = None
+            # NÃO para o driver: ele é COMPARTILHADO do processo (outra sessão
+            # pode estar usando). Só solta a referência.
+            self._playwright = None
 
     def _login(self, page) -> None:
         page.goto(f"{_BASE_URL_DANTAS}/entrar",
@@ -1020,6 +1202,14 @@ class DantasDistribuidora:
 
     def _buscar_query(self, page, query: str, confianca: str) -> list[ResultadoBusca]:
         url = f"{_BASE_URL_DANTAS}/busca?s={quote_plus(query)}"
+        cards_attrs = _consultar_cards_http(self, url)
+        if cards_attrs is not None:
+            out = []
+            for attrs in cards_attrs:
+                r = _parse_card_dantas(attrs, confianca)
+                if r is not None:
+                    out.append(r)
+            return _sem_duplicatas(out)
         _carregar_busca(page, url)
 
         cards_attrs = page.evaluate("""
