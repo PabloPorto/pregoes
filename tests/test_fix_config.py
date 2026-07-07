@@ -77,6 +77,15 @@ def test_reimport_cria_historico_em_instalacao_nova(tmp_path, monkeypatch):
     # Garante diretório limpo, sem nenhuma subpasta ainda.
     assert not (tmp_path / "data" / "historico").exists()
 
+    # Guarda o objeto-módulo ORIGINAL do config. Outros módulos JÁ importados
+    # (pregoes.db, credenciais, rascunho, ui.app) seguram uma referência a ELE;
+    # se deixarmos um objeto DIFERENTE em sys.modules ao sair, o monkeypatch de
+    # config.DB_PATH em testes posteriores patcha o objeto novo enquanto
+    # db.get_conn() continua lendo o DB_PATH do antigo (= data/pregoes.db de
+    # produção). Esse split de identidade de módulo fazia testes de render
+    # falharem só na suíte completa (achado 2026-07-06).
+    _config_original = sys.modules.get("pregoes.config")
+
     monkeypatch.setenv("PREGOES_BASE_DIR_TESTE", str(tmp_path))
     # Recarrega o módulo apontando BASE_DIR para o tmp via patch direto.
     sys.modules.pop("pregoes.config", None)
@@ -100,9 +109,23 @@ def test_reimport_cria_historico_em_instalacao_nova(tmp_path, monkeypatch):
 
     assert config.HISTORICO_DIR.exists() and config.HISTORICO_DIR.is_dir()
 
-    # Restaura o módulo real para não contaminar outros testes na sessão.
+    # Restaura o OBJETO original (não um reimport novo) — só assim os módulos
+    # que já o seguram voltam a concordar com sys.modules e o monkeypatch de
+    # config.DB_PATH deles volta a funcionar em testes posteriores. É preciso
+    # restaurar em DOIS lugares: sys.modules['pregoes.config'] (usado por
+    # `import pregoes.config`) E o atributo `config` do pacote pregoes (usado
+    # por `from pregoes import config`). O importlib.import_module acima deixou
+    # ambos apontando para o reimport; restaurar só o sys.modules deixa o
+    # atributo do pacote divergente — e o `from pregoes import config` de um
+    # teste posterior pegaria o objeto errado (achado 2026-07-06).
     sys.modules.pop("pregoes.config", None)
-    importlib.import_module("pregoes.config")
+    if _config_original is not None:
+        sys.modules["pregoes.config"] = _config_original
+        _pkg = sys.modules.get("pregoes")
+        if _pkg is not None:
+            _pkg.config = _config_original
+    else:
+        importlib.import_module("pregoes.config")
 
 
 # --------------------------------------------------------------------------
