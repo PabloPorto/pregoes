@@ -662,6 +662,25 @@ def _cards_do_html(html: str, max_cards: int) -> list[dict]:
     return out
 
 
+def _html_deslogado(html: str) -> bool:
+    """True se o HTML é de uma sessão DESLOGADA.
+
+    Sinal medido em campo (2026-07-07): a página deslogada é um "login-wall" que
+    repete o CTA "Entrar" dezenas de vezes (291 numa medição) e NÃO tem o menu de
+    conta "Sair"; a página LOGADA é o oposto ("Entrar"=0, "Sair"=4). Cobre o caso
+    em que o deslogado devolve 0 cards (não cards zerados) — que a guarda de
+    preços-zerados NÃO pegava, e a busca voltava vazia sem relogar (bug do "2º
+    leilão", 2026-07-07).
+
+    CONSERVADOR de propósito (exige AMBOS os sinais): esta função também roda no
+    lote automático (via `_consultar_cards_http`), então um falso-positivo
+    zeraria o cookie e causaria churn de login — o que já bloqueou a conta uma
+    vez. Marcar logado como deslogado é o erro caro; preferir NÃO marcar na
+    dúvida (o pior caso vira uma busca vazia, não um bloqueio de conta)."""
+    low = html.lower()
+    return low.count("entrar") >= 20 and low.count("sair") == 0
+
+
 def _consultar_cards_http(forn, url: str) -> Optional[list[dict]]:
     """Busca os cards de ``url`` via HTTP com a sessão logada de ``forn``.
 
@@ -686,6 +705,17 @@ def _consultar_cards_http(forn, url: str) -> Optional[list[dict]]:
             raise SessaoHTTPExpirou(
                 f"consulta HTTP falhou em modo paralelo ({type(exc).__name__})")
         return None   # rede/HTTP falhou → o navegador cuida desta consulta
+    # Deslogado (página de login) → zera o cookie e sinaliza, ANTES de olhar os
+    # cards: o deslogado às vezes devolve 0 cards (não cards zerados), o que a
+    # guarda de preços-zerados abaixo não pegava (bug do "2º leilão").
+    if _html_deslogado(html):
+        forn._http_cookie = None
+        _logger.warning(
+            "Sessão HTTP de %s deslogada (página de login) — consultas seguem "
+            "pelo navegador nesta sessão.", getattr(forn, "nome", "?"))
+        if getattr(forn, "_http_only", False):
+            raise SessaoHTTPExpirou("sessão HTTP deslogou (página de login)")
+        return None
     cards = _cards_do_html(html, _MAX_RESULTADOS_POR_QUERY)
 
     def _preco(c):
@@ -2050,38 +2080,52 @@ def buscar_no_site(
     forn = _sessoes_vivas.get(fornecedor)
     if forn is not None:
         tinha_http = bool(getattr(forn, "_http_cookie", None))
-        try:
-            achados = _consultar(forn)[:max(1, limite)]
-            # RELOGA só quando a sessão comprovadamente DESLOGOU — NÃO por "0
-            # resultados" (que pode ser uma busca legítima que o site não achou).
-            # Sinal CONFIÁVEL (medido em campo 2026-07-07): deslogado, o site
-            # devolve TODOS os cards com preço 0,00; a guarda de
-            # `_consultar_cards_http` detecta isso e ZERA `_http_cookie`. Isso
-            # separa os três casos que ANTES viravam o mesmo "vazio":
-            #   • logado, COM resultado  → achados != []              → devolve
-            #   • logado, SEM resultado  → achados == [], cookie ok   → devolve []
-            #   • DESLOGADO              → achados == [], cookie zerado → reloga 1x
-            # O gate importa: relogar em TODA busca vazia (fix anterior) queimava
-            # login à toa — e excesso de logins BLOCKED a conta em 2026-06-27
-            # (histórico real, não hipótese). Ele também nunca resolvia o vazio
-            # intermitente de forma confiável, porque "vazio" != "deslogado".
-            deslogou = tinha_http and getattr(forn, "_http_cookie", None) is None
-            if not deslogou:
-                return achados
-            _logger.info("busca manual em %s: sessão deslogada (preços zerados) "
-                         "— relogando uma vez", fornecedor)
+        # Sessão reusada SEM cookie HTTP está DEGRADADA para a busca manual: o
+        # lote automático pode tê-lo zerado ao ver deslogado, ou o login não o
+        # capturou. Como o diagnóstico provou que uma sessão FRESCA acha por HTTP,
+        # relogamos para garantir uma sessão logada e HTTP-capaz — em vez de cair
+        # no navegador de uma sessão possivelmente deslogada (que voltava VAZIO
+        # sem sinal nenhum: era o bug do "2º leilão" após trocar de pregão,
+        # 2026-07-07). Só quando o transporte HTTP está ligado.
+        if not tinha_http and config.SCRAPER_HTTP_QUERIES:
+            _logger.info("busca manual em %s: sessão reusada sem cookie HTTP — "
+                         "relogando", fornecedor)
             _fechar_sessao_viva(fornecedor)
-        except Exception:
-            _logger.info("sessão manual de %s caiu — relogando", fornecedor)
-            _fechar_sessao_viva(fornecedor)
+        else:
+            try:
+                achados = _consultar(forn)[:max(1, limite)]
+                # RELOGA só quando a sessão comprovadamente DESLOGOU — NÃO por "0
+                # resultados" logado (busca legítima que o site não achou). A
+                # guarda de `_consultar_cards_http` ZERA `_http_cookie` ao ver a
+                # página de login OU cards com preço 0,00 (sinais medidos em campo
+                # 2026-07-07). Separa os três casos que ANTES viravam o mesmo "vazio":
+                #   • logado, COM resultado  → achados != []              → devolve
+                #   • logado, SEM resultado  → achados == [], cookie ok   → devolve []
+                #   • DESLOGADO              → cookie zerado → reloga 1x
+                # O gate importa: relogar em TODA busca vazia (fix v1.0.40) queimava
+                # login à toa — e excesso de logins BLOCKED a conta em 2026-06-27.
+                deslogou = tinha_http and getattr(forn, "_http_cookie", None) is None
+                _logger.info(
+                    "busca manual %s termo=%r: sessão reusada, %d resultado(s)%s",
+                    fornecedor, termo, len(achados),
+                    " — deslogou, relogando" if deslogou else "")
+                if not deslogou:
+                    return achados
+                _fechar_sessao_viva(fornecedor)
+            except Exception:
+                _logger.info("sessão manual de %s caiu — relogando", fornecedor)
+                _fechar_sessao_viva(fornecedor)
 
-    # 2) Sem cache (ou caiu, ou veio vazio): loga FRESCO, cacheia e busca. Se a
-    #    busca já falhar na sessão nova, descarta (não deixa sessão quebrada no
-    #    cache) e propaga. Um vazio AQUI é definitivo (sessão nova, logada).
+    # 2) Sem cache (ou caiu, ou deslogou, ou degradada): loga FRESCO, cacheia e
+    #    busca. Se a busca já falhar na sessão nova, descarta (não deixa sessão
+    #    quebrada no cache) e propaga. Um vazio AQUI é definitivo (nova, logada).
     forn = _abrir_sessao_viva(fornecedor)
     _sessoes_vivas[fornecedor] = forn
     try:
-        return _consultar(forn)[:max(1, limite)]
+        achados = _consultar(forn)[:max(1, limite)]
+        _logger.info("busca manual %s termo=%r: sessão FRESCA, %d resultado(s)",
+                     fornecedor, termo, len(achados))
+        return achados
     except Exception:
         _fechar_sessao_viva(fornecedor)
         raise

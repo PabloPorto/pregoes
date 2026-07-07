@@ -483,6 +483,7 @@ def _fake_forn_site(cards, espera_query=None):
         def __init__(self, email, senha):
             self._page = object()
             self._rate_limiter = _RL()
+            self._http_cookie = "PHPSESSID=fake"   # sessão HTTP-capaz normal (logada)
 
         def __enter__(self):
             return self
@@ -739,6 +740,7 @@ def test_busca_no_site_sessao_em_cache_caida_reloga(monkeypatch):
     class _Morta:
         _page = object()
         _rate_limiter = _RL()
+        _http_cookie = "PHPSESSID=fake"   # tinha HTTP; a FALHA é na busca (raise)
 
         def _buscar_query(self, *a):
             raise RuntimeError("sessão morta")
@@ -868,6 +870,50 @@ def test_buscar_no_site_reloga_quando_sessao_reusada_deslogou(monkeypatch):
     out = scraper.buscar_no_site("almeida", "dobradiça")
     assert [o.codigo_fornecedor for o in out] == ["D1"], \
         "deveria relogar fresco e achar, não devolver o vazio da sessão deslogada"
+
+
+def test_buscar_no_site_reusada_sem_cookie_reloga(monkeypatch):
+    """Sessão reusada SEM cookie HTTP (o lote automático zerou o cookie ao ver
+    deslogado, ou a sessão ficou degradada) está inapta à busca manual → reloga
+    FRESCO em vez de devolver o vazio de uma sessão possivelmente deslogada. Era
+    o bug do '2º leilão' após trocar de pregão (2026-07-07): a busca reusava uma
+    sessão sem cookie, caía no navegador deslogado e voltava vazia sem sinal."""
+    import pregoes.scraper as scraper
+    monkeypatch.setattr(scraper.config, "SCRAPER_HTTP_QUERIES", True)
+
+    class _RL:
+        def acquire(self):
+            return None
+
+    class _SemCookie:
+        _page = object()
+        _rate_limiter = _RL()
+        _http_cookie = None          # degradada: sem transporte HTTP
+
+        def _buscar_query(self, page, termo, conf):
+            return []                # não deveria nem ser consultada
+
+        def __exit__(self, *a):
+            return False
+
+    scraper._sessoes_vivas["almeida"] = _SemCookie()
+    monkeypatch.setattr(scraper, "AlmeidaDistribuidor",
+                        _fake_forn_site([("ANEL DE VEDACAO", "SOCEL", 4.42, "52447")]))
+    monkeypatch.setattr(scraper.credenciais, "carregar",
+                        lambda f: {"email": "x", "senha": "y"})
+    out = scraper.buscar_no_site("almeida", "anel de vedação")
+    assert [o.codigo_fornecedor for o in out] == ["52447"], \
+        "sessão sem cookie deve relogar fresco e achar, não devolver o vazio"
+
+
+def test_html_deslogado_detecta_login_wall():
+    """_html_deslogado: página deslogada (login-wall repete 'Entrar') vs logada
+    ('Entrar'=0). Base do relogin do 2º leilão quando o deslogado vem com 0 cards."""
+    import pregoes.scraper as scraper
+    deslogado = "<a>Entrar</a>" * 40 + "<div>cadastre-se</div>"
+    logado = "<nav>Meus Pedidos · Sair</nav><div class=product-card>...</div>"
+    assert scraper._html_deslogado(deslogado) is True
+    assert scraper._html_deslogado(logado) is False
 
 
 def test_buscar_no_site_vazio_logado_nao_reloga(monkeypatch):
