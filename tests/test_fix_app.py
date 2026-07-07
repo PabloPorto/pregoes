@@ -722,22 +722,51 @@ def test_pregao_novo_nao_sobrescreve_rascunho_guardado(monkeypatch, tmp_path):
     ss.clear()
 
 
-def test_rascunho_migra_slug_quando_identidade_muda(monkeypatch, tmp_path):
-    """PDF recém-subido (sem órgão/número) salva em 'sem-identificacao'; ao
-    preencher a identidade, o arquivo MIGRA para o slug real (sem duplicar)."""
+def test_rascunho_slug_estavel_ao_preencher_identidade(monkeypatch, tmp_path):
+    """PDF recém-subido (sem órgão/número) salva num slug ÚNICO (não no slot
+    compartilhado 'sem-identificacao'). Ao preencher a identidade depois, o MESMO
+    arquivo é reusado (slug estável) — 1 rascunho, sem duplicar e sem migração; a
+    identidade nova vive no CONTEÚDO. (Fim da colisão de slug — achado 2026-07.)"""
     rascunho = _isolar_rascunhos(monkeypatch, tmp_path)
     ss = app.st.session_state
     ss.clear()
     _pregao_na_sessao(ss, None, None)
     ss.pop("orgao"); ss.pop("numero")
     app._salvar_rascunho()
-    assert rascunho.listar_pregoes()[0]["slug"] == "sem-identificacao"
+    slug1 = ss["_rascunho_slug"]
+    assert slug1 and slug1 != "sem-identificacao"       # slug ÚNICO, não o slot
+    assert len(rascunho.listar_pregoes()) == 1
 
     ss["orgao"] = "Prefeitura"; ss["numero"] = "007/2026"   # identificou
     app._salvar_rascunho()
     pendentes = rascunho.listar_pregoes()
-    assert len(pendentes) == 1                          # migrou, não duplicou
-    assert pendentes[0]["slug"] != "sem-identificacao"
+    assert len(pendentes) == 1                          # mesmo arquivo, não duplicou
+    assert ss["_rascunho_slug"] == slug1                # slug estável (sem migração)
+    assert pendentes[0]["numero"] == "007/2026"         # identidade nova no conteúdo
+    ss.clear()
+
+
+def test_dois_pregoes_sem_identidade_nao_colidem(monkeypatch, tmp_path):
+    """DOIS pregões ainda SEM órgão/número (dois PDFs recém-subidos) NÃO podem
+    compartilhar arquivo — antes ambos caíam no slot 'sem-identificacao' e o 2º
+    autosave sobrescrevia o 1º (perda silenciosa, achado 2026-07)."""
+    rascunho = _isolar_rascunhos(monkeypatch, tmp_path)
+    ss = app.st.session_state
+    ss.clear()
+    _pregao_na_sessao(ss, None, None, codigo="AAA")
+    ss.pop("orgao"); ss.pop("numero")
+    app._salvar_rascunho()
+
+    app._limpar_pregao(preservar_rascunho=True)         # "Guardar e começar outro"
+    _pregao_na_sessao(ss, None, None, codigo="BBB")
+    ss.pop("orgao"); ss.pop("numero")
+    app._salvar_rascunho()
+
+    pendentes = rascunho.listar_pregoes()
+    assert len(pendentes) == 2, "dois sem-identidade têm de coexistir, não colidir"
+    codigos = {rascunho.carregar_pregao(p["slug"])["selecoes"][0].codigo_fornecedor
+               for p in pendentes}
+    assert codigos == {"AAA", "BBB"}                    # nenhum foi sobrescrito
     ss.clear()
 
 
@@ -916,36 +945,44 @@ def test_identificar_ncm_desempacota_pedidos_de_4_tuplas(monkeypatch):
     ss.clear()
 
 
-def test_filtrar_rascunhos_finalizados_remove_e_apaga(monkeypatch, tmp_path):
-    """Pregão já no histórico (finalizado) sai da lista do Início e tem o
-    rascunho órfão apagado; o não-finalizado permanece (bug 2026-07-06:
-    gerado+baixado reaparecia no Início)."""
+def test_filtrar_rascunhos_finalizados_esconde_sem_apagar(monkeypatch, tmp_path):
+    """Pregão gerado E não mexido depois (mtime <= geração) SAI do Início; um com
+    trabalho NOVO (mtime > geração) ou nunca gerado PERMANECE. E NENHUM arquivo é
+    apagado — o Início oculta, jamais destrói trabalho (achado 2026-07: o filtro
+    deletava rascunho incompleto que casava por (órgão,número) com edital antigo).
+    (A correção do SQL de ultima_geracao_epoch é testada em test_historico_exports.)
+    """
+    import os
     from pregoes import rascunho
     monkeypatch.setattr(rascunho, "DIR", tmp_path / "rascunhos")
-    # pregão A finalizado, pregão B ainda em aberto — arquivos reais no disco
-    rascunho.salvar_pregao({"orgao": "Edital teste 1", "numero": "2026",
-                            "itens_edital": [1]})
-    rascunho.salvar_pregao({"orgao": "Tri", "numero": "2026",
-                            "itens_edital": [1]})
-    # db.pregao_finalizado é chamado com o conn do get_conn falso; força o A.
-    monkeypatch.setattr(app._db, "pregao_finalizado",
-                        lambda conn, o, n: (o == "Edital teste 1"), raising=False)
+    for org, num in (("Gerado", "001"), ("Aberto", "002"), ("Refazendo", "003")):
+        rascunho.salvar_pregao({"orgao": org, "numero": num, "itens_edital": [1]})
+    # Geração: só Gerado(001) e Refazendo(003) têm planilha; instante fixo.
+    GER = 1_000_000.0
+    monkeypatch.setattr(
+        app._db, "ultima_geracao_epoch",
+        lambda conn, o, n: GER if o in ("Gerado", "Refazendo") else None,
+        raising=False)
+    # mtimes: A intacto (antes da geração), C trabalho novo (depois), B nunca gerado.
+    os.utime(rascunho.DIR / "001-gerado.pkl", (GER - 3600, GER - 3600))
+    os.utime(rascunho.DIR / "003-refazendo.pkl", (GER + 3600, GER + 3600))
+
     pendentes = rascunho.listar_pregoes()
-    assert len(pendentes) == 2
+    assert len(pendentes) == 3
     viveis = app._filtrar_rascunhos_finalizados(pendentes)
-    orgaos = {p["orgao"] for p in viveis}
-    assert orgaos == {"Tri"}, "finalizado deve sair; aberto permanece"
-    # o arquivo do finalizado foi APAGADO; o do aberto ficou
+    assert {p["orgao"] for p in viveis} == {"Aberto", "Refazendo"}, \
+        "só o gerado-e-intacto some; nunca-gerado e trabalho-novo permanecem"
+    # NENHUM arquivo apagado
     slugs = {p.stem for p in (tmp_path / "rascunhos").glob("*.pkl")}
-    assert "2026-tri" in slugs and "2026-edital-teste-1" not in slugs
+    assert slugs == {"001-gerado", "002-aberto", "003-refazendo"}
 
 
 def test_filtrar_rascunhos_degrada_seguro_em_erro_de_banco(monkeypatch):
     """Se o banco falhar, mostra TODOS (melhor um extra do que esconder)."""
     def _boom(*a, **k):
         raise RuntimeError("db off")
-    monkeypatch.setattr(app._db, "pregao_finalizado", _boom, raising=False)
-    pend = [{"slug": "s", "orgao": "X", "numero": "1"}]
+    monkeypatch.setattr(app._db, "ultima_geracao_epoch", _boom, raising=False)
+    pend = [{"slug": "s", "orgao": "X", "numero": "1", "mtime": 1.0}]
     assert app._filtrar_rascunhos_finalizados(pend) == pend
 
 

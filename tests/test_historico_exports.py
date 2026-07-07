@@ -839,3 +839,30 @@ def test_pregao_finalizado_so_apos_gerar_planilha(tmp_path, monkeypatch):
         assert db.pregao_finalizado(conn, " Edital teste 1 ", "2026") is True  # TRIM
         assert db.pregao_finalizado(conn, "Outro", "2026") is False
         assert db.pregao_finalizado(conn, "", "") is False
+
+
+def test_ultima_geracao_epoch(tmp_path, monkeypatch):
+    """db.ultima_geracao_epoch: None quando nunca gerou; epoch UTC (float) após
+    gerar — base do filtro do Início que distingue 'gerado e concluído' de
+    'trabalho novo com o mesmo número' comparando com o mtime do rascunho."""
+    import time as _time
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    dbp = tmp_path / "t.db"
+    monkeypatch.setattr(config, "DB_PATH", dbp)
+    db.init_db(dbp)
+    agora = _time.time()
+    with db.get_conn(dbp) as conn:
+        eid = _criar_edital(conn, orgao="Edital teste 1", numero="2026",
+                            status="precificado")
+        assert db.ultima_geracao_epoch(conn, "Edital teste 1", "2026") is None
+        db.export_log_gravar(conn, eid, "p.xlsx", 305, 55, 1.45)
+    with db.conectar(dbp) as conn:
+        ger = db.ultima_geracao_epoch(conn, "Edital teste 1", "2026")
+        assert isinstance(ger, float)
+        # mesma base do st_mtime (epoch UTC) → praticamente igual ao "agora" do
+        # teste. Margem apertada (60s) DE PROPÓSITO: um bug de fuso (UTC vs local)
+        # jogaria ger horas fora e ESTOURARIA aqui — é o que queremos flagrar.
+        assert abs(ger - agora) < 60
+        assert db.ultima_geracao_epoch(conn, " Edital teste 1 ", "2026") == ger  # TRIM
+        assert db.ultima_geracao_epoch(conn, "Outro", "2026") is None
+        assert db.ultima_geracao_epoch(conn, "", "") is None

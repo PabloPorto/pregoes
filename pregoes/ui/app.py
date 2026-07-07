@@ -2031,15 +2031,23 @@ def _assinatura_rascunho() -> str:
     ss = st.session_state
     n_result = sum(len(v or [])
                    for v in (ss.get("resultados_busca") or {}).values())
-    return f"{_hash_pregao()}:{n_result}:{ss.get('orgao')}:{ss.get('numero')}"
+    # itens_nao_usar entra na assinatura: marcar/desmarcar "não usar este item"
+    # é trabalho do operador que o _hash_pregao não cobre — sem isto, o autosave
+    # pulava a gravação e a marcação podia se perder num apagão (achado 2026-07).
+    nao_usar = tuple(sorted(ss.get("itens_nao_usar") or []))
+    return (f"{_hash_pregao()}:{n_result}:{ss.get('orgao')}:"
+            f"{ss.get('numero')}:{nao_usar}")
 
 
 def _salvar_rascunho() -> None:
-    """Autosave MULTI-PREGÃO: grava o snapshot no arquivo DESTE pregão (slug
-    por órgão+número) SE algo mudou (assinatura). Se a identidade mudou no meio
-    (ex.: órgão preenchido depois da extração), o arquivo antigo migra para o
-    slug novo. No-op sem pregão em andamento — e como cada pregão tem o seu
-    arquivo, começar um novo NUNCA sobrescreve o rascunho de outro."""
+    """Autosave MULTI-PREGÃO: grava o snapshot no arquivo ÚNICO e ESTÁVEL deste
+    pregão SE algo mudou (assinatura). O slug é criado UMA vez (na 1ª gravação)
+    por `rascunho.novo_slug` e mantido em `_rascunho_slug` pelo resto da vida do
+    pregão — então o arquivo é o mesmo entre autosaves, mas NUNCA colide com o de
+    outro pregão (nem sem identificação, nem com órgão/número que normalizam
+    igual). Por isso não há mais 'migração' por mudança de identidade: o nome do
+    arquivo é estável e o órgão/número atualizados vivem no CONTEÚDO. No-op sem
+    pregão em andamento."""
     if not _tem_pregao_em_andamento():
         return
     assinatura = _assinatura_rascunho()
@@ -2048,11 +2056,11 @@ def _salvar_rascunho() -> None:
     from pregoes import rascunho
     estado = {k: st.session_state[k] for k in _CHAVES_RASCUNHO
               if k in st.session_state}
-    slug = rascunho.salvar_pregao(estado)
-    anterior = st.session_state.get("_rascunho_slug")
-    if anterior and anterior != slug:
-        rascunho.remover_pregao(anterior)   # identidade mudou → migra o arquivo
-    st.session_state["_rascunho_slug"] = slug
+    slug = st.session_state.get("_rascunho_slug")
+    if not slug:
+        slug = rascunho.novo_slug(estado.get("orgao"), estado.get("numero"))
+        st.session_state["_rascunho_slug"] = slug
+    rascunho.salvar(estado, rascunho.DIR / f"{slug}.pkl")
     st.session_state["_rascunho_assin"] = assinatura
 
 
@@ -2096,22 +2104,34 @@ def _restaurar_rascunho(estado: dict, slug: str | None = None) -> None:
 
 
 def _filtrar_rascunhos_finalizados(pendentes: list) -> list:
-    """Tira da lista de 'guardados' os pregões que JÁ estão no HISTÓRICO (com
-    planilha gerada) e APAGA o rascunho órfão de cada um — gerado + baixado não
-    é mais um rascunho (feedback 2026-07-06). Um autosave pós-geração podia
-    recriar o rascunho; como o Início é a tela de pouso, isto o limpa a cada
-    visita. Degrada seguro: erro de banco → devolve a lista original (melhor um
-    extra do que esconder trabalho ainda não salvo)."""
+    """Esconde do Início os pregões que JÁ foram gerados E NÃO foram mexidos
+    depois — gerado + baixado não é mais um rascunho (feedback 2026-07-06).
+
+    NUNCA apaga o arquivo. O Início pode OCULTAR, jamais DESTRUIR trabalho do
+    cliente (achado 2026-07: a versão anterior deletava o rascunho de um pregão
+    INCOMPLETO sempre que seu (órgão,número) casasse com um edital finalizado
+    antigo — ex.: re-fazer um pregão de número já usado, ou número em branco —
+    e o .pkl era a única cópia; perda irreversível e silenciosa).
+
+    Distingue "gerado e concluído" de "trabalho NOVO com o mesmo número"
+    comparando o mtime do rascunho com o instante da última geração: se o
+    rascunho foi salvo DEPOIS da geração, há trabalho novo → continua aparecendo.
+    Degrada seguro: erro de banco → devolve a lista original (melhor um extra do
+    que esconder/perder trabalho)."""
     if not pendentes:
         return pendentes
-    from pregoes import rascunho
     try:
         with get_conn() as conn:
             viveis = []
             for p in pendentes:
-                if _db.pregao_finalizado(conn, p.get("orgao"), p.get("numero")):
-                    rascunho.remover_pregao(p["slug"])
-                else:
+                ger = _db.ultima_geracao_epoch(
+                    conn, p.get("orgao"), p.get("numero"))
+                # Gerado (ger != None) e o rascunho não é mais novo que a geração
+                # (mtime <= ger) → concluído e intacto → some do Início. Qualquer
+                # trabalho salvo DEPOIS (mtime > ger) mantém o pregão visível.
+                gerado_e_intacto = (
+                    ger is not None and (p.get("mtime") or 0.0) <= ger)
+                if not gerado_e_intacto:
                     viveis.append(p)
         return viveis
     except Exception:

@@ -106,9 +106,32 @@ def _dir(diretorio: Optional[Path]) -> Path:
     return Path(diretorio) if diretorio else DIR
 
 
+def novo_slug(orgao, numero, diretorio: Optional[Path] = None) -> str:
+    """Slug ÚNICO para um rascunho NOVO: base legível por (número, órgão) MAIS um
+    sufixo aleatório, garantindo que dois pregões DISTINTOS nunca compartilhem o
+    mesmo arquivo — nem quando ambos ainda estão SEM identificação (o antigo slot
+    único 'sem-identificacao'), nem quando órgão/número normalizam para o mesmo
+    slug (caixa/acento/pontuação). Antes, `slug_de` sozinho colidia e um autosave
+    sobrescrevia o rascunho do outro → perda silenciosa (achado 2026-07). O sufixo
+    é INTERNO: a UI mostra órgão/número lidos do CONTEÚDO do snapshot, não do nome
+    do arquivo. Confere o disco para nunca reaproveitar um nome já usado."""
+    import secrets
+    d = _dir(diretorio)
+    base = slug_de(orgao, numero)
+    for _ in range(1000):
+        slug = f"{base}-{secrets.token_hex(4)}"
+        if not (d / f"{slug}.pkl").exists():
+            return slug
+    return f"{base}-{secrets.token_hex(16)}"   # inalcançável na prática
+
+
 def salvar_pregao(estado: dict, diretorio: Optional[Path] = None) -> str:
     """Grava o snapshot no arquivo do PREGÃO (slug por órgão+número do próprio
-    estado) e devolve o slug. Atômico e sem levantar (como `salvar`)."""
+    estado) e devolve o slug. Atômico e sem levantar (como `salvar`).
+
+    Nota: o autosave da UI usa um slug ÚNICO e estável por pregão (ver
+    `novo_slug`) para nunca colidir; esta função (slug por conteúdo) segue para
+    usos pontuais (migração de legado, testes)."""
     slug = slug_de(estado.get("orgao"), estado.get("numero"))
     salvar(estado, _dir(diretorio) / f"{slug}.pkl")
     return slug

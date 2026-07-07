@@ -130,9 +130,12 @@ def test_clicar_identificar_ncm_nao_quebra(env, monkeypatch):
 
 
 def test_home_esconde_pregao_finalizado_e_mostra_aberto(env):
-    """Início não lista (nem mantém o rascunho de) um pregão já FINALIZADO no
-    histórico; um pregão em aberto continua aparecendo. Fim a fim, render + db
-    (regressão do 'reaparece no Início após gerar', 2026-07)."""
+    """Início não LISTA um pregão gerado e não mexido depois; um pregão em aberto
+    continua aparecendo. E o rascunho do finalizado NÃO é apagado (o Início pode
+    ocultar, jamais destruir trabalho — regressão do 'reaparece no Início após
+    gerar' + achado 2026-07 de que o filtro deletava trabalho). Fim a fim,
+    render + db."""
+    import os
     from pregoes import config, db, rascunho
     # pregão FINALIZADO no histórico (edital + planilha gerada)
     with db.get_conn(config.DB_PATH) as conn:
@@ -140,20 +143,25 @@ def test_home_esconde_pregao_finalizado_e_mostra_aberto(env):
             "INSERT INTO editais (orgao, numero_pregao, arquivo_pdf, status) "
             "VALUES ('Prefeitura X', '001/2026', 'x.pdf', 'precificado')")
         db.export_log_gravar(conn, cur.lastrowid, "p.xlsx", 3, 1, 1.45)
-    # rascunhos: um do finalizado (órfão) + um em aberto
+        ger = db.ultima_geracao_epoch(conn, "Prefeitura X", "001/2026")
+    # rascunhos: um do finalizado + um em aberto
     rascunho.salvar_pregao({"orgao": "Prefeitura X", "numero": "001/2026",
                             "itens_edital": [1, 2, 3]})
     rascunho.salvar_pregao({"orgao": "Prefeitura Y", "numero": "002/2026",
                             "itens_edital": [1]})
+    # o rascunho do finalizado é ANTERIOR à geração (não foi mexido depois) →
+    # deve sumir do Início; o em aberto nunca foi gerado → aparece.
+    finalizado_pkl = rascunho.DIR / "001-2026-prefeitura-x.pkl"
+    os.utime(finalizado_pkl, (ger - 3600, ger - 3600))
     at = _at(env)
     assert not at.exception
     txt = " ".join(m.value for m in at.markdown)
     assert "002/2026" in txt, "pregão em aberto deveria aparecer no Início"
     assert "001/2026" not in txt, "pregão finalizado NÃO pode aparecer no Início"
-    # e o rascunho órfão do finalizado foi apagado do disco
+    # ambos os arquivos CONTINUAM no disco — o Início oculta, não deleta.
     slugs = {p.stem for p in rascunho.DIR.glob("*.pkl")}
     assert "002-2026-prefeitura-y" in slugs
-    assert "001-2026-prefeitura-x" not in slugs
+    assert "001-2026-prefeitura-x" in slugs, "o rascunho finalizado NÃO pode ser apagado"
 
 
 def test_render_revisao_sem_crash(env):

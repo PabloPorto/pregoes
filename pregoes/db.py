@@ -756,6 +756,33 @@ def pregao_finalizado(conn: sqlite3.Connection, orgao, numero) -> bool:
     return row is not None
 
 
+def ultima_geracao_epoch(conn: sqlite3.Connection, orgao, numero) -> "float | None":
+    """Instante (epoch UTC, em segundos) da geração de planilha MAIS RECENTE
+    deste (órgão, número), ou None se nunca gerou.
+
+    Usado pelo Início para decidir se um rascunho é "gerado e concluído" (deve
+    sumir da lista) OU "trabalho NOVO com o mesmo número" (deve continuar
+    aparecendo): compara-se este instante com o mtime do arquivo do rascunho.
+    `criado_em` é gravado em UTC por CURRENT_TIMESTAMP; `strftime('%s', ...)` o
+    devolve como epoch UTC — a MESMA base do st_mtime, então a comparação é
+    apples-to-apples (mesma máquina, mesmo relógio). Trata None como ''."""
+    o = (orgao or "").strip()
+    n = (numero or "").strip()
+    if not o and not n:
+        return None
+    row = conn.execute(
+        """
+        SELECT MAX(CAST(strftime('%s', x.criado_em) AS INTEGER))
+        FROM editais e
+        JOIN exports_log x ON x.edital_id = e.id
+        WHERE TRIM(IFNULL(e.orgao, '')) = ?
+          AND TRIM(IFNULL(e.numero_pregao, '')) = ?
+        """,
+        (o, n),
+    ).fetchone()
+    return float(row[0]) if row and row[0] is not None else None
+
+
 # === Aprendizado por feedback do operador (Camada 4) ===
 
 
