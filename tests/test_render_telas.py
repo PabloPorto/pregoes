@@ -130,12 +130,11 @@ def test_clicar_identificar_ncm_nao_quebra(env, monkeypatch):
 
 
 def test_home_esconde_pregao_finalizado_e_mostra_aberto(env):
-    """Início não LISTA um pregão gerado e não mexido depois; um pregão em aberto
-    continua aparecendo. E o rascunho do finalizado NÃO é apagado (o Início pode
-    ocultar, jamais destruir trabalho — regressão do 'reaparece no Início após
-    gerar' + achado 2026-07 de que o filtro deletava trabalho). Fim a fim,
-    render + db."""
-    import os
+    """Início não LISTA um pregão que JÁ está no histórico (planilha gerada); um
+    pregão em aberto continua aparecendo. E o rascunho do finalizado NÃO é apagado
+    (o Início pode ocultar, jamais destruir trabalho — regressão do 'reaparece no
+    Início após gerar', repetidamente relatada, + achado 2026-07 de que o filtro
+    deletava). Fim a fim, render + db."""
     from pregoes import config, db, rascunho
     # pregão FINALIZADO no histórico (edital + planilha gerada)
     with db.get_conn(config.DB_PATH) as conn:
@@ -143,16 +142,11 @@ def test_home_esconde_pregao_finalizado_e_mostra_aberto(env):
             "INSERT INTO editais (orgao, numero_pregao, arquivo_pdf, status) "
             "VALUES ('Prefeitura X', '001/2026', 'x.pdf', 'precificado')")
         db.export_log_gravar(conn, cur.lastrowid, "p.xlsx", 3, 1, 1.45)
-        ger = db.ultima_geracao_epoch(conn, "Prefeitura X", "001/2026")
     # rascunhos: um do finalizado + um em aberto
     rascunho.salvar_pregao({"orgao": "Prefeitura X", "numero": "001/2026",
                             "itens_edital": [1, 2, 3]})
     rascunho.salvar_pregao({"orgao": "Prefeitura Y", "numero": "002/2026",
                             "itens_edital": [1]})
-    # o rascunho do finalizado é ANTERIOR à geração (não foi mexido depois) →
-    # deve sumir do Início; o em aberto nunca foi gerado → aparece.
-    finalizado_pkl = rascunho.DIR / "001-2026-prefeitura-x.pkl"
-    os.utime(finalizado_pkl, (ger - 3600, ger - 3600))
     at = _at(env)
     assert not at.exception
     txt = " ".join(m.value for m in at.markdown)

@@ -946,43 +946,37 @@ def test_identificar_ncm_desempacota_pedidos_de_4_tuplas(monkeypatch):
 
 
 def test_filtrar_rascunhos_finalizados_esconde_sem_apagar(monkeypatch, tmp_path):
-    """Pregão gerado E não mexido depois (mtime <= geração) SAI do Início; um com
-    trabalho NOVO (mtime > geração) ou nunca gerado PERMANECE. E NENHUM arquivo é
-    apagado — o Início oculta, jamais destrói trabalho (achado 2026-07: o filtro
-    deletava rascunho incompleto que casava por (órgão,número) com edital antigo).
-    (A correção do SQL de ultima_geracao_epoch é testada em test_historico_exports.)
-    """
-    import os
+    """Pregão no HISTÓRICO (planilha gerada) some do Início; o não-finalizado
+    permanece. E NENHUM arquivo é apagado — o Início OCULTA, jamais destrói
+    trabalho (achado 2026-07: a versão que deletava perdia rascunho incompleto).
+    Regra SIMPLES por presença de export: a v1.0.42 tentou distinguir por mtime e
+    reexibia o finalizado em campo (Natuba 202) porque o autosave regrava o
+    rascunho após gerar — por isso voltamos ao sinal robusto."""
     from pregoes import rascunho
     monkeypatch.setattr(rascunho, "DIR", tmp_path / "rascunhos")
-    for org, num in (("Gerado", "001"), ("Aberto", "002"), ("Refazendo", "003")):
+    for org, num in (("Gerado", "001"), ("Aberto", "002")):
         rascunho.salvar_pregao({"orgao": org, "numero": num, "itens_edital": [1]})
-    # Geração: só Gerado(001) e Refazendo(003) têm planilha; instante fixo.
-    GER = 1_000_000.0
+    # Só "Gerado" tem planilha no histórico.
     monkeypatch.setattr(
-        app._db, "ultima_geracao_epoch",
-        lambda conn, o, n: GER if o in ("Gerado", "Refazendo") else None,
-        raising=False)
-    # mtimes: A intacto (antes da geração), C trabalho novo (depois), B nunca gerado.
-    os.utime(rascunho.DIR / "001-gerado.pkl", (GER - 3600, GER - 3600))
-    os.utime(rascunho.DIR / "003-refazendo.pkl", (GER + 3600, GER + 3600))
+        app._db, "pregao_finalizado",
+        lambda conn, o, n: (o == "Gerado"), raising=False)
 
     pendentes = rascunho.listar_pregoes()
-    assert len(pendentes) == 3
+    assert len(pendentes) == 2
     viveis = app._filtrar_rascunhos_finalizados(pendentes)
-    assert {p["orgao"] for p in viveis} == {"Aberto", "Refazendo"}, \
-        "só o gerado-e-intacto some; nunca-gerado e trabalho-novo permanecem"
-    # NENHUM arquivo apagado
+    assert {p["orgao"] for p in viveis} == {"Aberto"}, \
+        "o finalizado some; o não-finalizado permanece"
+    # NENHUM arquivo apagado — os dois .pkl continuam no disco
     slugs = {p.stem for p in (tmp_path / "rascunhos").glob("*.pkl")}
-    assert slugs == {"001-gerado", "002-aberto", "003-refazendo"}
+    assert slugs == {"001-gerado", "002-aberto"}
 
 
 def test_filtrar_rascunhos_degrada_seguro_em_erro_de_banco(monkeypatch):
     """Se o banco falhar, mostra TODOS (melhor um extra do que esconder)."""
     def _boom(*a, **k):
         raise RuntimeError("db off")
-    monkeypatch.setattr(app._db, "ultima_geracao_epoch", _boom, raising=False)
-    pend = [{"slug": "s", "orgao": "X", "numero": "1", "mtime": 1.0}]
+    monkeypatch.setattr(app._db, "pregao_finalizado", _boom, raising=False)
+    pend = [{"slug": "s", "orgao": "X", "numero": "1"}]
     assert app._filtrar_rascunhos_finalizados(pend) == pend
 
 

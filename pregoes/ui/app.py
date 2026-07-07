@@ -2104,36 +2104,32 @@ def _restaurar_rascunho(estado: dict, slug: str | None = None) -> None:
 
 
 def _filtrar_rascunhos_finalizados(pendentes: list) -> list:
-    """Esconde do Início os pregões que JÁ foram gerados E NÃO foram mexidos
-    depois — gerado + baixado não é mais um rascunho (feedback 2026-07-06).
+    """Esconde do Início os pregões que JÁ estão no HISTÓRICO (planilha gerada) —
+    gerado + baixado não é mais um 'guardado' (feedback 2026-07-06).
 
-    NUNCA apaga o arquivo. O Início pode OCULTAR, jamais DESTRUIR trabalho do
-    cliente (achado 2026-07: a versão anterior deletava o rascunho de um pregão
-    INCOMPLETO sempre que seu (órgão,número) casasse com um edital finalizado
-    antigo — ex.: re-fazer um pregão de número já usado, ou número em branco —
-    e o .pkl era a única cópia; perda irreversível e silenciosa).
+    Regra SIMPLES e confiável: tem export no banco → some do Início. NUNCA apaga o
+    arquivo (o Início pode OCULTAR, jamais DESTRUIR trabalho do cliente — achado
+    2026-07 de que a versão que deletava perdia rascunho incompleto).
 
-    Distingue "gerado e concluído" de "trabalho NOVO com o mesmo número"
-    comparando o mtime do rascunho com o instante da última geração: se o
-    rascunho foi salvo DEPOIS da geração, há trabalho novo → continua aparecendo.
-    Degrada seguro: erro de banco → devolve a lista original (melhor um extra do
-    que esconder/perder trabalho)."""
+    Histórico das tentativas erradas (para não repetir): a v1.0.42 tentou também
+    distinguir "gerado e concluído" de "trabalho novo com o mesmo número"
+    comparando o mtime do rascunho com o instante da geração. FALHOU em campo
+    (Natuba 202, 2026-07-07): o autosave regrava o rascunho ~9s DEPOIS de gerar,
+    então mtime > geração SEMPRE, e o pregão finalizado reaparecia — exatamente o
+    bug que o fix prometia resolver. A premissa (rascunho intocado após gerar)
+    era falsa. Voltamos ao sinal robusto: presença de export.
+
+    Trade-off aceito: re-fazer um pregão com o MESMO (órgão,número) de um já
+    gerado fica oculto no Início — mas o arquivo NÃO é apagado (recuperável) e é
+    um caso raro. Prioridade é NÃO reexibir finalizado (bug repetidamente
+    relatado). Degrada seguro: erro de banco → devolve a lista original."""
     if not pendentes:
         return pendentes
     try:
         with get_conn() as conn:
-            viveis = []
-            for p in pendentes:
-                ger = _db.ultima_geracao_epoch(
-                    conn, p.get("orgao"), p.get("numero"))
-                # Gerado (ger != None) e o rascunho não é mais novo que a geração
-                # (mtime <= ger) → concluído e intacto → some do Início. Qualquer
-                # trabalho salvo DEPOIS (mtime > ger) mantém o pregão visível.
-                gerado_e_intacto = (
-                    ger is not None and (p.get("mtime") or 0.0) <= ger)
-                if not gerado_e_intacto:
-                    viveis.append(p)
-        return viveis
+            return [p for p in pendentes
+                    if not _db.pregao_finalizado(
+                        conn, p.get("orgao"), p.get("numero"))]
     except Exception:
         _log.exception("falha ao filtrar pregões finalizados no Início")
         return pendentes
