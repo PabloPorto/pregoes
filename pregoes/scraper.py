@@ -2050,13 +2050,24 @@ def buscar_no_site(
     forn = _sessoes_vivas.get(fornecedor)
     if forn is not None:
         try:
-            return _consultar(forn)[:max(1, limite)]
+            achados = _consultar(forn)[:max(1, limite)]
+            if achados:
+                return achados
+            # VAZIO numa sessão REUSADA é suspeito: a sessão pode ter DESLOGADO
+            # (cookies expiram; a página segue "viva" mas devolve 0 resultado, o
+            # que aparecia como "Nada encontrado" mesmo com o produto existindo —
+            # feedback de campo 2026-07). Descarta e tenta 1x com login FRESCO
+            # antes de concluir que não há resultado.
+            _logger.info("busca manual em %s veio vazia na sessão reusada — "
+                         "relogando e tentando de novo", fornecedor)
+            _fechar_sessao_viva(fornecedor)
         except Exception:
             _logger.info("sessão manual de %s caiu — relogando", fornecedor)
             _fechar_sessao_viva(fornecedor)
 
-    # 2) Sem cache (ou caiu): loga FRESCO, cacheia e busca. Se a busca já falhar
-    #    na sessão nova, descarta (não deixa sessão quebrada no cache) e propaga.
+    # 2) Sem cache (ou caiu, ou veio vazio): loga FRESCO, cacheia e busca. Se a
+    #    busca já falhar na sessão nova, descarta (não deixa sessão quebrada no
+    #    cache) e propaga. Um vazio AQUI é definitivo (sessão nova, logada).
     forn = _abrir_sessao_viva(fornecedor)
     _sessoes_vivas[fornecedor] = forn
     try:

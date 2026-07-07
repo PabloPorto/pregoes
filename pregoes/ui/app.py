@@ -202,6 +202,24 @@ _CHAVES_RASCUNHO = tuple(k for k in CHAVES_PREGAO if k != "df_editavel") + (
 PASSOS_FLUXO = ["Edital", "Itens", "Preços", "Planilha"]
 
 
+# Prefixos das chaves de session_state indexadas pela POSIÇÃO do item nas
+# buscas manuais (site + catálogo). Não estão em CHAVES_PREGAO; se não forem
+# limpas ao trocar de pregão, o novo herda no MESMO índice o resultado/termo do
+# anterior (ex.: 'Nada encontrado' de outro pregão, sem re-buscar — feedback
+# 2026-07). `site_res_` é o pior (resultado em cache exibido sem re-buscar).
+_PREFIXOS_BUSCA_ITEM = ("site_res_", "siteq_", "siteforn_", "sitego_",
+                        "catq_", "fonte_busca_", "naousar_")
+
+
+def _limpar_busca_por_item() -> None:
+    """Zera o estado por-item das buscas manuais (resultado do site, termos
+    digitados, fornecedor/aba, botões) — para o pregão novo não herdar buscas
+    do anterior pelo índice do item."""
+    for k in [k for k in st.session_state
+              if isinstance(k, str) and k.startswith(_PREFIXOS_BUSCA_ITEM)]:
+        st.session_state.pop(k, None)
+
+
 def _limpar_pregao(preservar_rascunho: bool = False) -> None:
     """Descarta o estado do pregão atual da sessão.
 
@@ -222,6 +240,7 @@ def _limpar_pregao(preservar_rascunho: bool = False) -> None:
     # limpo, e o slug de fallback não aponta mais para o pregão guardado.
     for k in CHAVES_PREGAO + ("orgao", "numero", "pdf_path"):
         st.session_state.pop(k, None)
+    _limpar_busca_por_item()
     # Fecha as sessões manuais ao vivo em cache (navegador logado): um novo
     # pregão começa do zero e não herda navegador/sessão do anterior.
     try:
@@ -2061,6 +2080,7 @@ def _restaurar_rascunho(estado: dict, slug: str | None = None) -> None:
     # não há nada a limpar; é no-op.
     for k in set(CHAVES_PREGAO) | {"orgao", "numero", "pdf_path"}:
         st.session_state.pop(k, None)
+    _limpar_busca_por_item()   # não herda buscas manuais de outro pregão
     for k, v in estado.items():
         st.session_state[k] = v
     st.session_state.pop("_rascunho_disponivel", None)

@@ -831,3 +831,43 @@ def test_obter_sessao_viva_fornecedor_invalido():
     import pregoes.scraper as scraper
     with pytest.raises(ValueError):
         scraper.obter_sessao_viva("inexistente")
+
+
+def test_buscar_no_site_relogа_quando_sessao_reusada_vem_vazia(monkeypatch):
+    """Sessão reusada DESLOGADA devolve [] (não levanta): buscar_no_site deve
+    relogar FRESCO e tentar de novo antes de dizer 'nada encontrado'
+    (feedback de campo 2026-07: busca no site 'não disparava')."""
+    import pregoes.scraper as scraper
+
+    class _RL:
+        def acquire(self):
+            return None
+
+    class _Deslogada:   # sessão em cache, viva mas sem resultado
+        _page = object()
+        _rate_limiter = _RL()
+
+        def _buscar_query(self, page, termo, conf):
+            return []          # deslogada → 0 resultado (não levanta)
+
+        def __exit__(self, *a):
+            return False
+
+    scraper._sessoes_vivas["almeida"] = _Deslogada()
+    monkeypatch.setattr(scraper, "AlmeidaDistribuidor",
+                        _fake_forn_site([("DOBRADICA FERRO", "M", 12.0, "D1")]))
+    monkeypatch.setattr(scraper.credenciais, "carregar",
+                        lambda f: {"email": "x", "senha": "y"})
+    out = scraper.buscar_no_site("almeida", "dobradiça")
+    assert [o.codigo_fornecedor for o in out] == ["D1"], \
+        "deveria relogar fresco e achar, não devolver o vazio da sessão morta"
+
+
+def test_buscar_no_site_vazio_definitivo_em_sessao_fresca(monkeypatch):
+    """Vazio numa sessão FRESCA (recém-logada) é definitivo — devolve []
+    sem loop de relogin."""
+    import pregoes.scraper as scraper
+    monkeypatch.setattr(scraper, "AlmeidaDistribuidor", _fake_forn_site([]))
+    monkeypatch.setattr(scraper.credenciais, "carregar",
+                        lambda f: {"email": "x", "senha": "y"})
+    assert scraper.buscar_no_site("almeida", "inexistente") == []

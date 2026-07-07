@@ -947,3 +947,37 @@ def test_filtrar_rascunhos_degrada_seguro_em_erro_de_banco(monkeypatch):
     monkeypatch.setattr(app._db, "pregao_finalizado", _boom, raising=False)
     pend = [{"slug": "s", "orgao": "X", "numero": "1"}]
     assert app._filtrar_rascunhos_finalizados(pend) == pend
+
+
+def test_novo_pregao_limpa_estado_das_buscas_manuais(monkeypatch, tmp_path):
+    """As chaves por-item das buscas manuais (site_res_/siteq_/fonte_busca_...)
+    NÃO podem vazar para o pregão novo — senão o mesmo índice mostra o resultado
+    do pregão anterior ('Nada encontrado' em cache) sem re-buscar (bug 2026-07)."""
+    _isolar_rascunhos(monkeypatch, tmp_path)
+    ss = app.st.session_state
+    ss.clear()
+    _pregao_na_sessao(ss, "Pref A", "001/2026")
+    # estado deixado por buscas manuais do pregão A no item 19
+    ss["site_res_19"] = ("almeida", [])          # "Nada encontrado" em cache
+    ss["siteq_19"] = "dobradiça"
+    ss["siteforn_19"] = "almeida"
+    ss["fonte_busca_19"] = "Site do fornecedor"
+    ss["catq_3"] = "tubo"
+    app._limpar_pregao()                          # começa outro pregão
+    for k in ("site_res_19", "siteq_19", "siteforn_19", "fonte_busca_19", "catq_3"):
+        assert k not in ss, f"{k} vazou para o pregão novo"
+    ss.clear()
+
+
+def test_restaurar_pregao_limpa_busca_manual_de_outro(monkeypatch, tmp_path):
+    """Continuar um pregão também zera buscas manuais que ficaram de outro."""
+    _isolar_rascunhos(monkeypatch, tmp_path)
+    ss = app.st.session_state
+    ss.clear()
+    ss["site_res_5"] = ("dantas", [])            # lixo de um pregão anterior
+    ss["siteq_5"] = "cano"
+    app._restaurar_rascunho({"itens_edital": [1], "itens_revisados": [1],
+                             "resultados_busca": {0: ["x"]}, "selecoes": {},
+                             "orgao": "P", "numero": "9", "tela": "home"}, "s")
+    assert "site_res_5" not in ss and "siteq_5" not in ss
+    ss.clear()
