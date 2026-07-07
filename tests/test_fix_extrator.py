@@ -214,3 +214,51 @@ def test_dedup_preserva_ordem_e_pega_a_melhor_copia_mesmo_vindo_depois():
     out = _deduplicar_itens([blank, outro, bom])
     assert [i.item_numero for i in out] == [1, 2]    # ordem preservada
     assert out[0].quantidade == 10                   # manteve a cópia boa
+
+
+# === Dedup: cópia do Modelo de Proposta SEM número (achado edital PE 2026-07) ==
+
+def test_dedup_colapsa_copia_sem_numero_herdando_o_numero_real():
+    """Modelo de Proposta repete os itens SEM a coluna de número (item_numero
+    None). O antigo (chave num+desc) não colapsava — (1,'x') != (None,'x') — e
+    o edital saía DOBRADO. Agora a cópia sem número herda o número real e funde."""
+    from pregoes.extrator import _deduplicar_itens
+    termo = _it_dedup(1, "ABRACADEIRA NYLON 140X3,6MM", 10000, "UNIDADE", None)
+    modelo = _it_dedup(None, "ABRACADEIRA NYLON 140X3,6MM", 10000, "UNIDADE", None)
+    out = _deduplicar_itens([termo, modelo])
+    assert len(out) == 1
+    assert out[0].item_numero == 1           # herdou o número real
+    assert out[0].quantidade == 10000
+
+
+def test_dedup_copia_sem_numero_ambigua_e_descartada():
+    """Se a descrição tem VÁRIOS números (SKUs homônimos), a cópia sem número é
+    ambígua → descartada; os SKUs numerados permanecem separados."""
+    from pregoes.extrator import _deduplicar_itens
+    a = _it_dedup(150, "LACA SELADORA", 50, "UN", 120)
+    b = _it_dedup(151, "LACA SELADORA", 50, "UN", 40)
+    sem_num = _it_dedup(None, "LACA SELADORA", 50, "UN", None)
+    out = _deduplicar_itens([a, b, sem_num])
+    assert {i.item_numero for i in out} == {150, 151}   # 2 itens; a sem número saiu
+
+
+def test_dedup_mesmo_numero_variante_em_branco_descarta_a_em_branco():
+    """Mesmo número, descrição levemente diferente (espaço no hífen / truncada)
+    e uma cópia EM BRANCO (sem qtd e sem unidade = Modelo) → fica só a completa
+    (itens 45/46/112 do edital PE)."""
+    from pregoes.extrator import _deduplicar_itens
+    completa = _it_dedup(45, "CONECTOR CDP 10-70", 700, "UNIDADE", None)
+    variante_branca = _it_dedup(45, "CONECTOR CDP 10- 70", None, "", None)
+    out = _deduplicar_itens([completa, variante_branca])
+    assert len(out) == 1
+    assert out[0].quantidade == 700 and out[0].unidade == "UNIDADE"
+
+
+def test_dedup_mesmo_numero_duas_completas_distintas_nao_funde():
+    """Salvaguarda: mesmo número com DUAS cópias que têm dados (não em branco)
+    NÃO é fundido às cegas (poderia ser engano de numeração)."""
+    from pregoes.extrator import _deduplicar_itens
+    a = _it_dedup(7, "CABO A", 10, "M", None)
+    b = _it_dedup(7, "CABO B DIFERENTE", 20, "M", None)
+    out = _deduplicar_itens([a, b])
+    assert len(out) == 2   # ambas com dados → preserva

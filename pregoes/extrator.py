@@ -455,13 +455,36 @@ def _deduplicar_itens(itens: list["ItemExtraido"]) -> list["ItemExtraido"]:
     que a melhor cópia apareça depois)."""
     if len(itens) < 2:
         return list(itens)
-    grupos: dict = {}   # (num, desc_norm) -> list[(ordem, item)]
+
+    # 1) Agrupa por DESCRIÇÃO normalizada. Dentro de cada descrição: uma cópia
+    #    SEM número, quando existe cópia COM número, é a duplicata mal-parseada
+    #    do Modelo de Proposta (a coluna de número não veio) — HERDA o número
+    #    real (se a descrição tem um único número) e funde; se a descrição tem
+    #    VÁRIOS números (SKUs homônimos, ex.: #150/#151 "LACA SELADORA"), a cópia
+    #    sem número é AMBÍGUA e descartada (a numerada já a representa). Sem isto,
+    #    editais que repetem a lista SEM numerar o Modelo saíam DOBRADOS, com
+    #    metade das linhas sem número (achado de campo 2026-07: edital PE com 136
+    #    linhas-fantasma). Chavear por (num, desc) sozinho não pega esse caso
+    #    porque (1,"x") != (None,"x").
+    por_desc: dict = {}
     for ordem, it in enumerate(itens):
-        grupos.setdefault((it.item_numero, _normaliza(it.descricao)), []).append(
-            (ordem, it))
+        por_desc.setdefault(_normaliza(it.descricao), []).append((ordem, it))
+
+    grupos: dict = {}   # (num, desc_norm) -> list[(ordem, item)]
+    for desc_norm, copias_desc in por_desc.items():
+        numeros = {it.item_numero for _, it in copias_desc
+                   if it.item_numero is not None}
+        unico = next(iter(numeros)) if len(numeros) == 1 else None
+        for ordem, it in copias_desc:
+            num = it.item_numero
+            if num is None and numeros:
+                if unico is None:
+                    continue          # descrição com vários números → ambígua
+                num = unico           # herda o número real → funde no grupo dele
+            grupos.setdefault((num, desc_norm), []).append((ordem, it))
 
     saida: list[tuple[int, "ItemExtraido"]] = []
-    for copias in grupos.values():
+    for (num_grupo, _desc), copias in grupos.items():
         # Quantidades VÁLIDAS distintas → linhas distintas (lotes); senão são
         # cópias do mesmo item (incl. a cópia mal-parseada, com qtd=None).
         qtds = {it.quantidade for _, it in copias
@@ -469,7 +492,7 @@ def _deduplicar_itens(itens: list["ItemExtraido"]) -> list["ItemExtraido"]:
         if len(qtds) <= 1:
             ordem0 = min(o for o, _ in copias)
             melhor = max(copias, key=lambda oi: _score_item(oi[1]))[1]
-            saida.append((ordem0, melhor))
+            escolhidos = [(ordem0, melhor)]
         else:
             por_qtd: dict = {}   # qtd -> (ordem0, melhor_item)
             for o, it in copias:
@@ -483,7 +506,39 @@ def _deduplicar_itens(itens: list["ItemExtraido"]) -> list["ItemExtraido"]:
                     por_qtd[q] = (min(cur[0], o), it)
                 else:
                     por_qtd[q] = (min(cur[0], o), cur[1])
-            saida.extend(por_qtd.values())
+            escolhidos = list(por_qtd.values())
+        # A cópia vencedora HERDA o número real do grupo: se a fantasma
+        # sem-número venceu por score, ela assume o número do Termo de
+        # Referência (senão a linha final ficaria sem número).
+        for ordem0, it in escolhidos:
+            if num_grupo is not None and it.item_numero is None:
+                it.item_numero = num_grupo
+            saida.append((ordem0, it))
+
+    # 2) Mesmo item_numero = MESMO item (números são únicos no edital). Quando um
+    #    número tem uma cópia COMPLETA e outra(s) EM BRANCO — sem quantidade e
+    #    sem unidade —, a em branco é a cópia do Modelo cuja descrição variou o
+    #    suficiente (espaço no hífen, truncação) para escapar do passo 1 pela
+    #    descrição. Descarta as em branco (não têm dado a perder). NÃO funde duas
+    #    cópias AMBAS com dados — poderiam ser itens distintos por engano de
+    #    numeração (conservador). Achado de campo 2026-07 (edital PE, itens
+    #    45/46/112).
+    def _em_branco(it: "ItemExtraido") -> bool:
+        sem_qtd = it.quantidade is None or it.quantidade <= 0
+        return sem_qtd and not (it.unidade or "").strip()
+
+    por_num: dict = {}
+    for ordem, it in saida:
+        if it.item_numero is not None:
+            por_num.setdefault(it.item_numero, []).append(it)
+    descartar_ids = set()
+    for grp in por_num.values():
+        if len(grp) > 1 and any(not _em_branco(it) for it in grp):
+            for it in grp:
+                if _em_branco(it):
+                    descartar_ids.add(id(it))
+    if descartar_ids:
+        saida = [(o, it) for o, it in saida if id(it) not in descartar_ids]
 
     saida.sort(key=lambda oi: oi[0])
     return [it for _, it in saida]
