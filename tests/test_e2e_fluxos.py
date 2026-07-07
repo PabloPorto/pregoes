@@ -833,22 +833,29 @@ def test_obter_sessao_viva_fornecedor_invalido():
         scraper.obter_sessao_viva("inexistente")
 
 
-def test_buscar_no_site_relogа_quando_sessao_reusada_vem_vazia(monkeypatch):
-    """Sessão reusada DESLOGADA devolve [] (não levanta): buscar_no_site deve
-    relogar FRESCO e tentar de novo antes de dizer 'nada encontrado'
-    (feedback de campo 2026-07: busca no site 'não disparava')."""
+def test_buscar_no_site_reloga_quando_sessao_reusada_deslogou(monkeypatch):
+    """Sessão reusada que DESLOGOU no site: o Almeida/Dantas, deslogado, devolve
+    os cards com preço 0,00 → a guarda de `_consultar_cards_http` detecta e ZERA
+    `_http_cookie`, e a busca vem vazia. buscar_no_site deve relogar FRESCO e
+    achar (bug de campo 2026-07: busca no site intermitente — a sessão em cache
+    às vezes estava deslogada). O gatilho é o cookie ZERADO (sinal confiável de
+    deslogado), medido em campo 2026-07-07 — NÃO o simples vazio (ver o teste de
+    'vazio logado não reloga')."""
     import pregoes.scraper as scraper
 
     class _RL:
         def acquire(self):
             return None
 
-    class _Deslogada:   # sessão em cache, viva mas sem resultado
+    class _Deslogada:   # sessão viva mas DESLOGADA no site
         _page = object()
         _rate_limiter = _RL()
+        _http_cookie = "PHPSESSID=valido"   # tinha transporte HTTP (parecia viva)
 
         def _buscar_query(self, page, termo, conf):
-            return []          # deslogada → 0 resultado (não levanta)
+            # Espelha a guarda real: deslogado → preços 0,00 → cookie zerado + [].
+            self._http_cookie = None
+            return []
 
         def __exit__(self, *a):
             return False
@@ -860,7 +867,53 @@ def test_buscar_no_site_relogа_quando_sessao_reusada_vem_vazia(monkeypatch):
                         lambda f: {"email": "x", "senha": "y"})
     out = scraper.buscar_no_site("almeida", "dobradiça")
     assert [o.codigo_fornecedor for o in out] == ["D1"], \
-        "deveria relogar fresco e achar, não devolver o vazio da sessão morta"
+        "deveria relogar fresco e achar, não devolver o vazio da sessão deslogada"
+
+
+def test_buscar_no_site_vazio_logado_nao_reloga(monkeypatch):
+    """Vazio numa sessão LOGADA (cookie intacto) = 'o site não achou este termo'
+    — resposta DEFINITIVA. NÃO pode relogar: relogar em toda busca vazia
+    (comportamento anterior) queimava login à toa e o excesso de logins BLOQUEOU
+    a conta em 2026-06-27. Este teste é o guarda contra a volta do churn."""
+    import pregoes.scraper as scraper
+    n_login = {"n": 0}
+
+    class _RL:
+        def acquire(self):
+            return None
+
+    class _LogadaSemResultado:
+        _page = object()
+        _rate_limiter = _RL()
+        _http_cookie = "PHPSESSID=valido"   # segue LOGADA (cookie NÃO é zerado)
+
+        def _buscar_query(self, page, termo, conf):
+            return []          # logado, mas o termo não tem match no site
+
+        def __exit__(self, *a):
+            return False
+
+    class _NaoDeveriaLogar:
+        def __init__(self, *a):
+            n_login["n"] += 1
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def _buscar_query(self, *a):
+            return []
+
+    scraper._sessoes_vivas["almeida"] = _LogadaSemResultado()
+    monkeypatch.setattr(scraper, "AlmeidaDistribuidor", _NaoDeveriaLogar)
+    monkeypatch.setattr(scraper.credenciais, "carregar",
+                        lambda f: {"email": "x", "senha": "y"})
+    out = scraper.buscar_no_site("almeida", "produto inexistente xyz")
+    assert out == []
+    assert n_login["n"] == 0, \
+        "vazio LOGADO não pode disparar relogin (evita o churn que bloqueou a conta)"
 
 
 def test_buscar_no_site_vazio_definitivo_em_sessao_fresca(monkeypatch):

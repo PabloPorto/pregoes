@@ -2049,17 +2049,27 @@ def buscar_no_site(
     # 1) REUSA a sessão logada, se houver — é o ganho de velocidade.
     forn = _sessoes_vivas.get(fornecedor)
     if forn is not None:
+        tinha_http = bool(getattr(forn, "_http_cookie", None))
         try:
             achados = _consultar(forn)[:max(1, limite)]
-            if achados:
+            # RELOGA só quando a sessão comprovadamente DESLOGOU — NÃO por "0
+            # resultados" (que pode ser uma busca legítima que o site não achou).
+            # Sinal CONFIÁVEL (medido em campo 2026-07-07): deslogado, o site
+            # devolve TODOS os cards com preço 0,00; a guarda de
+            # `_consultar_cards_http` detecta isso e ZERA `_http_cookie`. Isso
+            # separa os três casos que ANTES viravam o mesmo "vazio":
+            #   • logado, COM resultado  → achados != []              → devolve
+            #   • logado, SEM resultado  → achados == [], cookie ok   → devolve []
+            #   • DESLOGADO              → achados == [], cookie zerado → reloga 1x
+            # O gate importa: relogar em TODA busca vazia (fix anterior) queimava
+            # login à toa — e excesso de logins BLOCKED a conta em 2026-06-27
+            # (histórico real, não hipótese). Ele também nunca resolvia o vazio
+            # intermitente de forma confiável, porque "vazio" != "deslogado".
+            deslogou = tinha_http and getattr(forn, "_http_cookie", None) is None
+            if not deslogou:
                 return achados
-            # VAZIO numa sessão REUSADA é suspeito: a sessão pode ter DESLOGADO
-            # (cookies expiram; a página segue "viva" mas devolve 0 resultado, o
-            # que aparecia como "Nada encontrado" mesmo com o produto existindo —
-            # feedback de campo 2026-07). Descarta e tenta 1x com login FRESCO
-            # antes de concluir que não há resultado.
-            _logger.info("busca manual em %s veio vazia na sessão reusada — "
-                         "relogando e tentando de novo", fornecedor)
+            _logger.info("busca manual em %s: sessão deslogada (preços zerados) "
+                         "— relogando uma vez", fornecedor)
             _fechar_sessao_viva(fornecedor)
         except Exception:
             _logger.info("sessão manual de %s caiu — relogando", fornecedor)
