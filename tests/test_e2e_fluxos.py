@@ -710,8 +710,10 @@ def _limpa_sessoes_vivas_cache():
     sessão fake de um teste vaze para o próximo."""
     import pregoes.scraper as _s
     _s._sessoes_vivas.clear()
+    _s._relogou_por_vazio.clear()
     yield
     _s._sessoes_vivas.clear()
+    _s._relogou_por_vazio.clear()
 
 
 def test_busca_no_site_reusa_sessao_logada(monkeypatch):
@@ -922,11 +924,11 @@ def test_html_deslogado_detecta_login_wall():
     assert scraper._html_deslogado(logado) is False
 
 
-def test_buscar_no_site_vazio_logado_nao_reloga(monkeypatch):
-    """Vazio numa sessão LOGADA (cookie intacto) = 'o site não achou este termo'
-    — resposta DEFINITIVA. NÃO pode relogar: relogar em toda busca vazia
-    (comportamento anterior) queimava login à toa e o excesso de logins BLOQUEOU
-    a conta em 2026-06-27. Este teste é o guarda contra a volta do churn."""
+def test_buscar_no_site_vazio_reusado_reloga_1x_depois_trava(monkeypatch):
+    """Sessão reusada que volta VAZIA reloga UMA vez (pode estar velha; pedido
+    do cliente 2026-07-09), mas a 2ª vazia NÃO reloga de novo — TRAVA anti-churn:
+    relogar em toda busca vazia queimava login e BLOQUEOU a conta em 2026-06-27.
+    Um resultado não-vazio reseta o ciclo."""
     import pregoes.scraper as scraper
     n_login = {"n": 0}
 
@@ -934,38 +936,49 @@ def test_buscar_no_site_vazio_logado_nao_reloga(monkeypatch):
         def acquire(self):
             return None
 
-    class _LogadaSemResultado:
+    class _LogadaVazia:
         _page = object()
         _rate_limiter = _RL()
-        _http_cookie = "PHPSESSID=valido"   # segue LOGADA (cookie NÃO é zerado)
+        _http_cookie = "PHPSESSID=valido"   # logada; cookie não é zerado
 
         def _buscar_query(self, page, termo, conf):
-            return []          # logado, mas o termo não tem match no site
-
-        def __exit__(self, *a):
-            return False
-
-    class _NaoDeveriaLogar:
-        def __init__(self, *a):
-            n_login["n"] += 1
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return False
-
-        def _buscar_query(self, *a):
             return []
 
-    scraper._sessoes_vivas["almeida"] = _LogadaSemResultado()
-    monkeypatch.setattr(scraper, "AlmeidaDistribuidor", _NaoDeveriaLogar)
+        def __exit__(self, *a):
+            return False
+
+    # O login fresco também volta vazio (ex.: janela de instabilidade do site).
+    Base = _fake_forn_site([])
+    class _ContaVazia(Base):
+        def __init__(self, *a):
+            n_login["n"] += 1
+            super().__init__(*a)
+
+    monkeypatch.setattr(scraper, "AlmeidaDistribuidor", _ContaVazia)
     monkeypatch.setattr(scraper.credenciais, "carregar",
                         lambda f: {"email": "x", "senha": "y"})
-    out = scraper.buscar_no_site("almeida", "produto inexistente xyz")
-    assert out == []
-    assert n_login["n"] == 0, \
-        "vazio LOGADO não pode disparar relogin (evita o churn que bloqueou a conta)"
+
+    scraper._sessoes_vivas["almeida"] = _LogadaVazia()
+    assert scraper.buscar_no_site("almeida", "cabo") == []
+    assert n_login["n"] == 1, "1ª busca vazia reloga UMA vez"
+
+    # 2ª busca: reusa a sessão fresca (também vazia) → NÃO reloga de novo.
+    assert scraper.buscar_no_site("almeida", "cabo") == []
+    assert n_login["n"] == 1, "2ª vazia NÃO reloga (trava anti-churn)"
+
+
+def test_buscar_no_site_resultado_reseta_a_trava_de_relogin(monkeypatch):
+    """Depois de um resultado NÃO-vazio, a trava reseta: uma nova busca vazia
+    pode relogar de novo (é um novo período seco, não o mesmo)."""
+    import pregoes.scraper as scraper
+    scraper._relogou_por_vazio.add("almeida")   # como se já tivesse relogado
+    scraper._sessoes_vivas["almeida"] = _fake_forn_site(
+        [("CABO FLEXIVEL", "SIL", 3.5, "9")])("x", "y")
+    monkeypatch.setattr(scraper.credenciais, "carregar",
+                        lambda f: {"email": "x", "senha": "y"})
+    out = scraper.buscar_no_site("almeida", "cabo")
+    assert [o.codigo_fornecedor for o in out] == ["9"]
+    assert "almeida" not in scraper._relogou_por_vazio, "resultado reseta a trava"
 
 
 def test_buscar_no_site_vazio_definitivo_em_sessao_fresca(monkeypatch):

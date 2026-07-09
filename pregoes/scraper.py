@@ -2016,6 +2016,12 @@ def cotar_por_codigo(fornecedor: str, codigo: str) -> Optional[ResultadoBusca]:
 # pior caso = o comportamento de antes (otimização de UX 2026-06-27).
 _FORNECEDORES_VALIDOS = ("almeida", "dantas")
 _sessoes_vivas: dict = {}
+# Fornecedores para os quais JÁ tentamos um relogin por "busca manual vazia"
+# neste período seco. Trava contra churn: a 1ª busca vazia numa sessão reusada
+# reloga UMA vez (a sessão pode estar velha/stale sem o sinal de deslogado
+# pegar); as vazias seguintes NÃO relogam de novo — excesso de login bloqueou a
+# conta em 2026-06-27. Um resultado NÃO-vazio ou trocar de pregão reseta.
+_relogou_por_vazio: set = set()
 
 
 def _abrir_sessao_viva(fornecedor: str):
@@ -2055,6 +2061,7 @@ def fechar_sessoes_vivas() -> None:
     para não deixar um navegador aberto à toa."""
     for fornecedor in list(_sessoes_vivas):
         _fechar_sessao_viva(fornecedor)
+    _relogou_por_vazio.clear()   # novo pregão = novo período seco
 
 
 def obter_sessao_viva(fornecedor: str):
@@ -2134,35 +2141,50 @@ def buscar_no_site(
         else:
             try:
                 achados = _consultar(forn)[:max(1, limite)]
-                # RELOGA só quando a sessão comprovadamente DESLOGOU — NÃO por "0
-                # resultados" logado (busca legítima que o site não achou). A
-                # guarda de `_consultar_cards_http` ZERA `_http_cookie` ao ver a
-                # página de login OU cards com preço 0,00 (sinais medidos em campo
-                # 2026-07-07). Separa os três casos que ANTES viravam o mesmo "vazio":
-                #   • logado, COM resultado  → achados != []              → devolve
-                #   • logado, SEM resultado  → achados == [], cookie ok   → devolve []
-                #   • DESLOGADO              → cookie zerado → reloga 1x
-                # O gate importa: relogar em TODA busca vazia (fix v1.0.40) queimava
-                # login à toa — e excesso de logins BLOCKED a conta em 2026-06-27.
-                deslogou = tinha_http and getattr(forn, "_http_cookie", None) is None
-                _logger.info(
-                    "busca manual %s termo=%r: sessão reusada, %d resultado(s)%s",
-                    fornecedor, termo, len(achados),
-                    " — deslogou, relogando" if deslogou else "")
-                if not deslogou:
+                if achados:
+                    _relogou_por_vazio.discard(fornecedor)   # deu certo → reseta
+                    _logger.info("busca manual %s termo=%r: sessão reusada, "
+                                 "%d resultado(s)", fornecedor, termo, len(achados))
                     return achados
-                _fechar_sessao_viva(fornecedor)
+                # VAZIO numa sessão reusada. Dois motivos para relogar UMA vez:
+                #   • DESLOGADO — a guarda de _consultar_cards_http zerou o cookie
+                #     (página de login OU preços 0,00);
+                #   • sessão possivelmente STALE que a detecção não pegou — a
+                #     sessão veio do lote automático e pode estar velha; um login
+                #     fresco resolve SE for isso (pedido do cliente 2026-07-09).
+                # Trava anti-churn: só reloga se ainda NÃO relogamos por vazio
+                # neste período seco. Assim uma janela de instabilidade (várias
+                # buscas vazias seguidas) gera 1 relogin, não N — o excesso de
+                # login bloqueou a conta em 2026-06-27.
+                deslogou = tinha_http and getattr(forn, "_http_cookie", None) is None
+                ja_relogou = fornecedor in _relogou_por_vazio
+                if deslogou or not ja_relogou:
+                    _relogou_por_vazio.add(fornecedor)
+                    _logger.info(
+                        "busca manual %s termo=%r: reusada VAZIA — relogando 1x%s",
+                        fornecedor, termo,
+                        " (deslogado)" if deslogou else " (sessão pode estar velha)")
+                    _fechar_sessao_viva(fornecedor)
+                    # cai para o login FRESCO abaixo
+                else:
+                    _logger.info(
+                        "busca manual %s termo=%r: reusada VAZIA (já relogado "
+                        "neste ciclo — não insisto p/ não bloquear a conta)",
+                        fornecedor, termo)
+                    return achados
             except Exception:
                 _logger.info("sessão manual de %s caiu — relogando", fornecedor)
                 _fechar_sessao_viva(fornecedor)
 
-    # 2) Sem cache (ou caiu, ou deslogou, ou degradada): loga FRESCO, cacheia e
+    # 2) Sem cache (ou caiu, ou deslogou, ou vazia+stale): loga FRESCO, cacheia e
     #    busca. Se a busca já falhar na sessão nova, descarta (não deixa sessão
     #    quebrada no cache) e propaga. Um vazio AQUI é definitivo (nova, logada).
     forn = _abrir_sessao_viva(fornecedor)
     _sessoes_vivas[fornecedor] = forn
     try:
         achados = _consultar(forn)[:max(1, limite)]
+        if achados:
+            _relogou_por_vazio.discard(fornecedor)
         _logger.info("busca manual %s termo=%r: sessão FRESCA, %d resultado(s)",
                      fornecedor, termo, len(achados))
         return achados
