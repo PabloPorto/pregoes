@@ -2456,28 +2456,28 @@ def _identificar_ncm(selecoes: dict, offsets: list) -> None:
 
 
 def _painel_markup(selecoes: dict, itens: list) -> tuple[dict, set]:
-    """Painel "Markup deste pregão" (Fase 4 — Substituição Tributária).
+    """Painel "Substituição Tributária deste pregão".
 
-    Gerencia POR EXCEÇÃO: o automático classifica cada item pelo NCM (ST →
-    markup menor; normal → maior); o operador só ajusta os DOIS markups do
-    pregão e decide os itens SEM NCM (nada é presumido ST em silêncio —
-    princípio Resp 7). Devolve ``(markups {offset -> markup}, com_st {offsets
-    com Substituição Tributária})`` para o exportador.
+    No modelo do contador (2026-07) o PREÇO é calculado pela própria planilha
+    (3 cenários de margem) — o app NÃO define mais markup. Aqui o operador só
+    confirma QUAIS itens têm Substituição Tributária: o automático classifica
+    pelo NCM (Anexo 05) e o operador decide os itens SEM NCM (nada é presumido
+    ST em silêncio — princípio Resp 7). O app grava 'SIM' na coluna AC desses
+    itens; a planilha zera o imposto estadual e ajusta o preço. Devolve
+    ``(markups, com_st)`` — `markups` fica só por compatibilidade da chamada (o
+    exportador o ignora); `com_st` é o conjunto de offsets com ST.
     """
     from pregoes import tributacao
 
-    st.markdown("#### Markup deste pregão")
-    c1, c2 = st.columns(2)
-    m_st = c1.number_input(
-        "Itens com Substituição Tributária", min_value=1.0, step=0.05,
-        value=float(st.session_state.get("mk_st", config.MARKUP_ST)),
-        format="%.2f", key="mk_st",
-        help="O NCM consta na lista de ST do estado → ICMS já recolhido na "
-             "origem, markup menor.")
-    m_normal = c2.number_input(
-        "Itens normais", min_value=1.0, step=0.05,
-        value=float(st.session_state.get("mk_normal", config.MARKUP_NORMAL)),
-        format="%.2f", key="mk_normal")
+    # Sentinelas internos APENAS para a classificação distinguir ST de normal —
+    # NÃO são mostrados nem precificam (o preço é manual/planilha). Precisam só
+    # ser distintos entre si.
+    m_st, m_normal = config.MARKUP_ST, config.MARKUP_NORMAL
+
+    st.markdown("#### Substituição Tributária deste pregão")
+    st.caption("O preço de venda é calculado na planilha (3 cenários de margem). "
+               "Aqui você só confirma os itens com ST — eles saem marcados 'SIM' "
+               "na coluna correspondente e a planilha ajusta o imposto sozinha.")
 
     overrides = st.session_state.setdefault("markup_overrides", {})
     ncms = {off: getattr(s, "ncm", None) for off, s in selecoes.items()}

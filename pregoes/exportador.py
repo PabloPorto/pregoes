@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import math
 import os
-import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -75,23 +74,25 @@ def _preco_com_desconto(sel: "SelecaoFornecedor"):
     return preco
 
 
-# Faixa de linhas que o template já tem prontas
-LINHA_PRIMEIRO_ITEM = config.LINHA_DADOS_INICIO        # 5
-LINHA_ULTIMO_ITEM_TEMPLATE = 504                       # template suporta 500 itens (5..504)
-LINHA_TOTAL_REFERENCIA = 505                           # =SUM(Y5:Y504)
-LINHA_CABECALHO_TOTAL = 506                            # 'FATURAMENTO', 'MARGEM', 'LUCRO'
-LINHA_TOTAL_FINAL = 507                                # =SUM(I5:I504), =G507/C507, =SUM(K5:K504)
+# Faixa de linhas do template do contador (2026-07): cabeçalho L2, dados L3..600
+# (598 itens), rótulos de total L603, fórmulas de total L604 (=SUM(I3:I600),
+# =G604/C604, =SUM(K3:K600)). Antes era L5..504 + totais 505/507.
+LINHA_PRIMEIRO_ITEM = config.LINHA_DADOS_INICIO        # 3
+LINHA_ULTIMO_ITEM_TEMPLATE = 600                       # template comporta 598 itens (3..600)
+LINHA_CABECALHO_TOTAL = 603                            # 'FATURAMENTO', 'MARGEM', 'LUCRO'
+LINHA_TOTAL_FINAL = 604                                # =SUM(I3:I600), =G604/C604, =SUM(K3:K600)
 
-# Coluna AC (29): indicador "foi gerado com Substituição Tributária?" (pedido
-# do cliente, 2026-06). Fica DEPOIS da última coluna do template (AB=28), então
-# não desloca nenhuma fórmula G..AB — é escrita só no arquivo exportado, o
-# template em disco continua intocado.
-COL_ST_INDICADOR = 29                                  # AC
-CABECALHO_ST = "SUBST. TRIBUTÁRIA"
+# Coluna AC (29): flag NATIVA "SUBST. TRIBUTÁRIA" do modelo do contador. O app
+# grava o texto TOKEN_ST ('SIM') nos itens com ST (por NCM) e DEIXA EM BRANCO os
+# demais — a própria planilha lê essa flag (IF(AC="SIM",...)) para zerar o
+# imposto estadual e ajustar o gross-up de preço. NÃO escrevemos o cabeçalho
+# (ele é nativo em AC2) nem inventamos a coluna — só preenchemos a flag.
+COL_ST = 29                                            # AC
+TOKEN_ST = "SIM"                                       # valor exato que a planilha compara
 
-# Coluna (1-based) mais à direita que o exportador escreve: U = 21 (preço,
-# código e marca vindos do scraper). Define a largura mínima do template.
-_COLUNA_MAX_ESCRITA = 21
+# Coluna (1-based) mais à direita que o exportador escreve: AC = 29 (a flag de
+# ST). Define a largura mínima que o template precisa ter.
+_COLUNA_MAX_ESCRITA = 29
 
 
 def validar_template(template_path: Path) -> None:
@@ -104,12 +105,16 @@ def validar_template(template_path: Path) -> None:
     EM SILÊNCIO (erro financeiro). Aqui falhamos cedo, com mensagem clara em
     português, ANTES de copiar o template e começar a preencher.
 
-    Invariantes (calibrados no template real do cliente — ver G5=`=S5*1.45`):
-    - existe uma aba ativa que alcança ao menos a coluna U (preço/cód/marca);
-    - os cabeçalhos-âncora da linha 4 (B,C,D,E,F,L,T,U) não estão vazios;
-    - a fórmula de PREÇO VENDA da coluna G, na primeira e na última linha do
-      bloco de itens, é do tipo `=S{n}*<markup>` — a base que o markup por
-      item reescreve. Se esse padrão sumiu, o markup falharia calado.
+    Invariantes (modelo do contador, 2026-07 — ver AC2=`SUBST. TRIBUTÁRIA` e o
+    gross-up em Z3):
+    - existe uma aba ativa que alcança ao menos a coluna AC (flag de ST);
+    - os cabeçalhos-âncora da linha 2 (B,C,D,E,F,L,T,U e AC) não estão vazios;
+    - a coluna AC é a flag nativa de Substituição Tributária;
+    - o motor de preço está vivo: a fórmula de gross-up da coluna Z, na primeira
+      linha de dados, referencia AC (`IF(...AC...="SIM"...)`). Se esse padrão
+      sumiu, o preço sugerido sairia errado.
+
+    NÃO exigimos mais fórmula em G: no modelo novo o PREÇO VENDA é manual.
 
     Levanta ValueError (mensagem para leigo) se algo não bate.
     """
@@ -132,27 +137,28 @@ def validar_template(template_path: Path) -> None:
         if (ws.max_column or 0) < _COLUNA_MAX_ESCRITA:
             raise ValueError(
                 f"O template '{template_path.name}' tem colunas a menos que o "
-                f"esperado (não alcança a coluna U de preço/marca). "
+                f"esperado (não alcança a coluna AC de Substituição Tributária). "
                 f"{aviso_restaurar}")
-        faltando = [c for c in ("B", "C", "D", "E", "F", "L", "T", "U")
-                    if not str(ws[f"{c}{config.LINHA_CABECALHO}"].value
-                               or "").strip()]
+        cab = config.LINHA_CABECALHO
+        faltando = [c for c in ("B", "C", "D", "E", "F", "L", "T", "U", "AC")
+                    if not str(ws[f"{c}{cab}"].value or "").strip()]
         if faltando:
             raise ValueError(
                 f"O template '{template_path.name}' está com cabeçalhos vazios "
-                f"nas colunas {', '.join(faltando)} (linha "
-                f"{config.LINHA_CABECALHO}). Provável coluna movida ou apagada. "
+                f"nas colunas {', '.join(faltando)} (linha {cab}). Provável "
+                f"coluna movida ou apagada. {aviso_restaurar}")
+        if "TRIBUT" not in str(ws[f"AC{cab}"].value or "").upper():
+            raise ValueError(
+                f"A coluna AC do template '{template_path.name}' (linha {cab}) "
+                f"não é a flag de Substituição Tributária esperada. "
                 f"{aviso_restaurar}")
-        for linha in (LINHA_PRIMEIRO_ITEM, LINHA_ULTIMO_ITEM_TEMPLATE):
-            valor = ws[f"G{linha}"].value
-            if not (isinstance(valor, str)
-                    and re.search(r"S\d+", valor)
-                    and re.search(r"\*\s*\d+(?:\.\d+)?", valor)):
-                raise ValueError(
-                    f"A fórmula de PREÇO VENDA da coluna G (linha {linha}) do "
-                    f"template '{template_path.name}' não está no formato "
-                    f"esperado (=S{linha}*markup). Sem ela o preço de venda "
-                    f"sairia errado. {aviso_restaurar}")
+        z = ws[f"Z{LINHA_PRIMEIRO_ITEM}"].value
+        if not (isinstance(z, str) and z.startswith("=") and "AC" in z):
+            raise ValueError(
+                f"A fórmula de preço (coluna Z, linha {LINHA_PRIMEIRO_ITEM}) do "
+                f"template '{template_path.name}' não está no formato esperado "
+                f"(gross-up que lê a flag AC). Sem ela o preço sugerido sairia "
+                f"errado. {aviso_restaurar}")
     finally:
         wb.close()
 
@@ -172,20 +178,26 @@ def exportar(
     """
     Gera planilha matriz preenchida.
 
+    Modelo do contador (2026-07): o app preenche os INSUMOS (item, descrição,
+    unidade, quantidade, valor de referência, custo em L, código, marca) e marca
+    'SIM' na coluna AC dos itens com ST — a própria planilha calcula custo,
+    imposto estadual e os 3 cenários de preço (Z/AA/AB). O PREÇO VENDA (G) é
+    MANUAL: fica em branco para o operador escolher.
+
     Args:
         itens: lista de ItemExtraido vindos do extrator
-        orgao: nome do órgão (vai na célula C1 'ORGÃO')
-        numero_pregao: número do pregão (vai na célula C2 'PREGÃO')
-        markup: multiplicador sobre o custo de aquisição. Default = valor de
-            `config.MARKUP_DEFAULT` (1.45). O cliente pode passar 1.30 para
-            um pregão com concorrência apertada, etc. Substitui as fórmulas
-            `G = =S*1.45` do template por `G = =S*<markup>`.
-        selecoes: opcional, mapa `{índice_do_item: SelecaoFornecedor}` com a
-            marca/preço escolhida pelo operador para cada item após a busca
-            nos fornecedores. Quando presente, preenche colunas L (preço),
-            T (código fornecedor) e U (marca). Itens ausentes do mapa ficam
-            sem preço (operador preenche manualmente no Excel, comportamento
-            pré-Fase 2).
+        orgao/numero_pregao: identificam o pregão no NOME do arquivo gerado. O
+            modelo novo não tem célula de órgão/pregão no topo, então não são
+            escritos na planilha.
+        markup/markups: DEPRECADOS no modelo novo — o preço não é mais
+            `=S*markup` (G é manual). Aceitos por compatibilidade da chamada,
+            mas não afetam o preço. A condição tributária vai por `itens_com_st`.
+        itens_com_st: índices (offset na lista) dos itens com Substituição
+            Tributária → o app grava 'SIM' na coluna AC deles. Complementado por
+            `sel.ncm` quando disponível (tributacao.eh_st).
+        selecoes: mapa `{offset: SelecaoFornecedor}` com a escolha do operador —
+            preenche L (custo), T (código), U (marca). Itens ausentes ficam sem
+            preço (o operador completa no Excel).
         destino: caminho de saída (default: data/exports/<auto>.xlsx)
         template: caminho do template (default: config.TEMPLATE_MATRIZ)
 
@@ -202,8 +214,6 @@ def exportar(
     itens = list(itens)
     if not itens:
         raise ValueError("Lista de itens vazia — nada para exportar.")
-
-    markup_efetivo = markup if markup is not None else config.MARKUP_DEFAULT
 
     if destino is None:
         nome = _nome_default(orgao, numero_pregao)
@@ -226,33 +236,21 @@ def exportar(
     wb = load_workbook(destino_tmp)   # SEM data_only — mantém fórmulas
     ws = wb.active
 
-    # Preencher cabeçalho (C1, C2) — também texto livre, mesma neutralização
-    if orgao:
-        _escrever_texto(ws["C1"], orgao)
-    if numero_pregao:
-        _escrever_texto(ws["C2"], numero_pregao)
+    # Órgão/número NÃO vão na planilha (o modelo do contador não tem esse campo
+    # no topo) — a identificação do pregão fica no NOME do arquivo.
 
-    # Markup GLOBAL do pregão (template-wide): comportamento legado — todas as
-    # linhas G recebem o multiplicador. Aplicado ANTES de expandir, para as
-    # linhas novas herdarem. O markup POR ITEM (Fase 4) sobrescreve linhas
-    # específicas depois, no laço.
-    if markup_efetivo != config.MARKUP_DEFAULT:
-        _aplicar_markup(ws, markup_efetivo)
-
-    # Expandir template se o edital tiver mais que 500 itens.
+    # Expandir só se o edital passar da capacidade nativa (598 itens: 3..600).
     n_itens = len(itens)
-    if n_itens > 500:
-        _expandir_linhas(ws, n_extras=n_itens - 500)
+    capacidade = LINHA_ULTIMO_ITEM_TEMPLATE - LINHA_PRIMEIRO_ITEM + 1
+    if n_itens > capacidade:
+        _expandir_linhas(ws, n_extras=n_itens - capacidade)
 
-    # Cabeçalho da coluna indicadora de ST (AC4), com o visual dos vizinhos.
     itens_com_st = itens_com_st or set()
-    _escrever_cabecalho_st(ws)
 
     # Preencher itens
     selecoes = selecoes or {}
     for offset, item in enumerate(itens):
         linha = LINHA_PRIMEIRO_ITEM + offset
-        ws[f"A{linha}"] = offset + 1
         ws[f"B{linha}"] = item.item_numero if item.item_numero is not None else (offset + 1)
         # C, D, T, U recebem TEXTO LIVRE (descrição do edital, unidade,
         # código/marca raspados). Neutralizamos prefixos de fórmula para o
@@ -287,42 +285,20 @@ def exportar(
             _escrever_texto(ws[f"T{linha}"], codigo)
             _escrever_texto(ws[f"U{linha}"], sel.marca)
 
-        # Markup POR ITEM (Fase 4) — sobrescreve a fórmula G SÓ desta linha
-        # quando há (1) override explícito do operador na UI, ou (2) default
-        # por classificação tributária (NCM com ST → markup menor). Sem isso, a
-        # linha mantém o markup GLOBAL do pregão já aplicado acima.
-        m_item = None
-        if markups is not None and offset in markups:
-            m_item = markups[offset]
-        elif sel is not None and getattr(sel, "ncm", None):
-            m_item = tributacao.markup_para(sel.ncm)
-        if m_item is not None:
-            _aplicar_markup_em_linha(ws, linha, m_item)
-
-        # Coluna AC: foi gerado com Substituição Tributária? (pedido do cliente)
-        ws.cell(row=linha, column=COL_ST_INDICADOR).value = (
-            "Sim" if offset in itens_com_st else "Não")
+        # Substituição Tributária → flag NATIVA da coluna AC (modelo do contador).
+        # Item é ST se veio marcado (itens_com_st) OU se o NCM da opção escolhida
+        # consta no Anexo 05 (tributacao.eh_st). Gravamos o token 'SIM' que a
+        # planilha compara; item NÃO-ST fica em BRANCO (a fórmula IF(AC="SIM",...)
+        # cai no ramo sem-ST). NÃO trocamos mais fórmula de G — o preço é manual.
+        eh_st_item = offset in itens_com_st or (
+            sel is not None and getattr(sel, "ncm", None)
+            and tributacao.eh_st(sel.ncm))
+        if eh_st_item:
+            ws.cell(row=linha, column=COL_ST).value = TOKEN_ST
 
     wb.save(destino_tmp)
     os.replace(destino_tmp, destino)   # rename atômico → publicação do destino
     return destino
-
-
-def _escrever_cabecalho_st(ws) -> None:
-    """Escreve o cabeçalho da coluna AC ("SUBST. TRIBUTÁRIA"), copiando o
-    visual de um cabeçalho vizinho (U4) para a coluna parecer nativa. Falha de
-    estilo NUNCA derruba a exportação — o que importa é o texto do cabeçalho."""
-    import copy
-    alvo = ws.cell(row=4, column=COL_ST_INDICADOR)
-    alvo.value = CABECALHO_ST
-    try:
-        modelo = ws["U4"]   # 'MARCA' — último cabeçalho de texto do template
-        alvo.font = copy.copy(modelo.font)
-        alvo.fill = copy.copy(modelo.fill)
-        alvo.border = copy.copy(modelo.border)
-        alvo.alignment = copy.copy(modelo.alignment)
-    except Exception:
-        pass
 
 
 def _escrever_texto(celula: "Cell", texto: object) -> None:
@@ -336,8 +312,8 @@ def _escrever_texto(celula: "Cell", texto: object) -> None:
     pregoeiro. Prefixamos apóstrofo — o mesmo recurso de "forçar texto" do
     Excel — para que o conteúdo seja exibido literalmente.
 
-    Não usar em células numéricas nem de fórmula do template (G..AB): aqui só
-    passam C, D, T, U e os cabeçalhos C1/C2, todos texto.
+    Não usar em células numéricas nem de fórmula do template: aqui só passam
+    C, D, T, U (descrição/unidade/código/marca), todos texto.
     """
     if isinstance(texto, str):
         # O pdfplumber emite caracteres de controle (form-feed em quebra de
@@ -351,107 +327,47 @@ def _escrever_texto(celula: "Cell", texto: object) -> None:
         celula.value = texto
 
 
-def _aplicar_markup(ws, markup: float) -> None:
-    """
-    Substitui o multiplicador do markup nas fórmulas da coluna G (preço de venda).
-
-    Template original: G5 = =S5*1.45, G6 = =S6*1.45, ... G504 = =S504*1.45.
-    Após esta função, todas viram =Sn*<markup>. As outras fórmulas (H, I, etc.)
-    referenciam G e portanto se ajustam automaticamente pelo Excel.
-
-    PORQUÊ do regex (e não derivar de MARKUP_DEFAULT): o multiplicador real
-    está na própria célula (=S5*1.45). Se derivássemos o sufixo a trocar de
-    config.MARKUP_DEFAULT e alguém editasse esse valor para 1.5, a busca por
-    "*1.5" jamais casaria "=S5*1.45" e o markup deixaria de ser aplicado em
-    SILÊNCIO — erro financeiro em toda a planilha. O regex troca o número que
-    multiplica Sn diretamente, qualquer que seja o literal do template.
-    """
-    for linha in range(LINHA_PRIMEIRO_ITEM, LINHA_ULTIMO_ITEM_TEMPLATE + 1):
-        _aplicar_markup_em_linha(ws, linha, markup)
-
-
-def _aplicar_markup_em_linha(ws, linha: int, markup: float) -> None:
-    """Reescreve o multiplicador do markup SÓ na fórmula G desta linha.
-
-    Base do markup POR ITEM (Fase 4): cada linha pode ter um markup diferente
-    (ST vs normal). As demais fórmulas (H, I, …) referenciam G e se ajustam.
-    """
-    celula = ws[f"G{linha}"]
-    valor = celula.value
-    if not isinstance(valor, str):
-        return
-    # Casa o "* <número>" que multiplica a referência Sn (ex.: *1.45, *1.5, *2).
-    # O '*' obrigatório impede pegar os dígitos de "S504" (sem '*' antes).
-    nova = re.sub(r"\*\s*\d+(?:\.\d+)?", f"*{_formatar_markup(markup)}",
-                  valor, count=1)
-    if nova != valor:
-        celula.value = nova
-
-
-def _formatar_markup(markup: float) -> str:
-    """
-    Formata o markup como literal de fórmula Excel sem zeros/ponto supérfluos.
-
-    1.30 → '1.3', 1.6 → '1.6', 2.0 → '2'. Mantém compatibilidade com o
-    formato do template e com os testes (=S5*1.3, não =S5*1.30).
-    """
-    return f"{markup:g}"
-
-
 def _expandir_linhas(ws, n_extras: int):
     """
-    Insere N linhas adicionais antes da linha de totais, copiando as fórmulas
-    da última linha de itens existente (504) com translação de referências
-    relativas.
+    Insere N linhas extras antes do bloco de totais, copiando as fórmulas da
+    última linha de itens do template (600) com translação de referências
+    relativas (o Translator mantém $V$2 absoluto e ajusta L600→L<nova>).
     """
-    # Linha modelo (já tem todas as fórmulas certinhas)
-    linha_modelo = LINHA_ULTIMO_ITEM_TEMPLATE
-    nova_linha_total_ref = LINHA_TOTAL_REFERENCIA + n_extras
-    nova_linha_total_final = LINHA_TOTAL_FINAL + n_extras
+    linha_modelo = LINHA_ULTIMO_ITEM_TEMPLATE            # 600
 
-    # Inserir linhas em branco (openpyxl empurra tudo para baixo, inclusive totais)
+    # Inserir linhas em branco (openpyxl empurra os totais para baixo junto).
     ws.insert_rows(idx=linha_modelo + 1, amount=n_extras)
 
-    # Replicar fórmulas/conteúdo da linha modelo para as novas
     for nova_idx in range(linha_modelo + 1, linha_modelo + 1 + n_extras):
         for col in range(1, ws.max_column + 1):
             valor_modelo = ws.cell(row=linha_modelo, column=col).value
-            if valor_modelo is None:
-                continue
             if isinstance(valor_modelo, str) and valor_modelo.startswith("="):
-                # Tradutor mantém $V$4 absoluto e ajusta L504→L<nova> relativo
                 origem = f"{get_column_letter(col)}{linha_modelo}"
                 t = Translator(valor_modelo, origin=origem)
                 destino_ref = f"{get_column_letter(col)}{nova_idx}"
-                nova_formula = t.translate_formula(destino_ref)
-                ws.cell(row=nova_idx, column=col).value = nova_formula
-            # valores constantes (ex: número da linha em A) — pular, vamos preencher depois
+                ws.cell(row=nova_idx, column=col).value = \
+                    t.translate_formula(destino_ref)
 
-    # Atualizar fórmulas de total que referenciavam :504
     _ajustar_totais(ws, n_extras)
 
 
 def _ajustar_totais(ws, n_extras: int):
-    """Ajusta SUM(:504) para SUM(:novo_limite) nas linhas de total que foram
-    empurradas para baixo pela inserção."""
-    nova_ultima_item = LINHA_ULTIMO_ITEM_TEMPLATE + n_extras
-    nova_total_ref = LINHA_TOTAL_REFERENCIA + n_extras
-    nova_total_final = LINHA_TOTAL_FINAL + n_extras
+    """Estende os SUM do rodapé para a nova última linha de itens.
 
-    # Linha 505 antes / nova_total_ref agora: =SUM(Y5:Y504) → =SUM(Y5:Y<nova>)
-    for col in range(1, ws.max_column + 1):
-        v = ws.cell(row=nova_total_ref, column=col).value
-        if isinstance(v, str) and ":" in v and "504" in v:
-            ws.cell(row=nova_total_ref, column=col).value = v.replace("504", str(nova_ultima_item))
-
-    # Linha 507 antes: =SUM(I5:I504), =G507/C507, =SUM(K5:K504)
+    Totais do modelo novo (após correção do arquivo-base): C=SUM(I3:I600),
+    G=SUM(K3:K600), D=G/C. Ao inserir linhas, a linha de total desce n_extras e
+    o limite 600 vira 600+n_extras. Reescreve os ranges ``I3:I600``/``K3:K600``
+    e as auto-referências da linha de total."""
+    nova_ultima_item = LINHA_ULTIMO_ITEM_TEMPLATE + n_extras     # 600 + extras
+    nova_total_final = LINHA_TOTAL_FINAL + n_extras              # 604 + extras
     for col in range(1, ws.max_column + 1):
         v = ws.cell(row=nova_total_final, column=col).value
         if isinstance(v, str) and v.startswith("="):
-            atualizada = v.replace(":I504", f":I{nova_ultima_item}") \
-                          .replace(":K504", f":K{nova_ultima_item}") \
-                          .replace("G507", f"G{nova_total_final}") \
-                          .replace("C507", f"C{nova_total_final}")
+            atualizada = (
+                v.replace(f":I{LINHA_ULTIMO_ITEM_TEMPLATE}", f":I{nova_ultima_item}")
+                 .replace(f":K{LINHA_ULTIMO_ITEM_TEMPLATE}", f":K{nova_ultima_item}")
+                 .replace(f"G{LINHA_TOTAL_FINAL}", f"G{nova_total_final}")
+                 .replace(f"C{LINHA_TOTAL_FINAL}", f"C{nova_total_final}"))
             ws.cell(row=nova_total_final, column=col).value = atualizada
 
 

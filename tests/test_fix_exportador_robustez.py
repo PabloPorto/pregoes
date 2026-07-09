@@ -52,14 +52,16 @@ def test_validar_template_aceita_o_template_real():
     validar_template(config.TEMPLATE_MATRIZ)   # não deve levantar
 
 
-def test_validar_template_rejeita_formula_g_quebrada(tmp_path):
-    """Se a fórmula de PREÇO VENDA (=Sn*markup) some, o markup falharia calado
-    → validar_template barra com mensagem sobre a coluna G."""
+def test_validar_template_rejeita_formula_z_quebrada(tmp_path):
+    """Modelo do contador: o PREÇO VENDA (G) é MANUAL, mas o motor de preço vive
+    na fórmula de gross-up da coluna Z (=IF($AC="SIM",...)). Se essa fórmula some
+    (vira número), o preço sugerido sairia errado em silêncio → validar_template
+    barra com mensagem sobre a coluna Z."""
     corrompido = _template_adulterado(
         tmp_path,
-        lambda ws: ws.__setitem__(f"G{LINHA_PRIMEIRO_ITEM}", 123),  # não é fórmula
+        lambda ws: ws.__setitem__(f"Z{LINHA_PRIMEIRO_ITEM}", 123),  # não é fórmula
     )
-    with pytest.raises(ValueError, match="G"):
+    with pytest.raises(ValueError, match="Z"):
         validar_template(corrompido)
 
 
@@ -79,7 +81,7 @@ def test_exportar_barra_template_corrompido_sem_escrever_destino(tmp_path):
     levanta ValueError e NÃO deixa nenhum arquivo no destino."""
     corrompido = _template_adulterado(
         tmp_path,
-        lambda ws: ws.__setitem__(f"G{LINHA_ULTIMO_ITEM_TEMPLATE}", 0),
+        lambda ws: ws.__setitem__(f"Z{LINHA_PRIMEIRO_ITEM}", 0),  # motor de preço morto
     )
     destino = tmp_path / "saida.xlsx"
     with pytest.raises(ValueError):
@@ -97,6 +99,8 @@ def test_exportacao_bem_sucedida_publica_destino_e_nao_deixa_part(tmp_path):
     assert ret == destino and destino.exists()
     intermediario = tmp_path / "ok.part.xlsx"
     assert not intermediario.exists()
-    # E o arquivo publicado é um xlsx íntegro (abre e tem a fórmula G).
+    # E o arquivo publicado é um xlsx íntegro: abre e preserva o motor de preço
+    # (a fórmula de gross-up da coluna Z). G é manual no modelo novo → fica vazio.
     wb = load_workbook(destino)
-    assert isinstance(wb.active[f"G{LINHA_PRIMEIRO_ITEM}"].value, str)
+    assert isinstance(wb.active[f"Z{LINHA_PRIMEIRO_ITEM}"].value, str)
+    assert wb.active[f"G{LINHA_PRIMEIRO_ITEM}"].value is None

@@ -87,60 +87,69 @@ def test_exportador_preserva_formulas(tmp_path):
     wb = load_workbook(destino)
     ws = wb.active
 
-    # Linha 5 (primeiro item) deve ter fórmulas em G, H, I, J, K, S
-    for col in ["G", "H", "I", "J", "K", "S"]:
-        v = ws[f"{col}5"].value
-        assert isinstance(v, str) and v.startswith("="), f"{col}5 perdeu fórmula: {v}"
+    # Linha 3 (primeiro item) deve ter fórmulas em H, I, J, K, S.
+    # No modelo do contador o PREÇO VENDA (G) é MANUAL — não é mais fórmula.
+    for col in ["H", "I", "J", "K", "S"]:
+        v = ws[f"{col}3"].value
+        assert isinstance(v, str) and v.startswith("="), f"{col}3 perdeu fórmula: {v}"
+    # G não é escrito (preço manual) e continua vazio na linha de dados.
+    assert ws["G3"].value is None
 
-    # Total da linha 507 deve estar preservado
-    assert ws["C507"].value == "=SUM(I5:I504)"
-    assert ws["G507"].value == "=SUM(K5:K504)"
+    # Total da linha 604 deve estar preservado
+    assert ws["C604"].value == "=SUM(I3:I600)"
+    assert ws["G604"].value == "=SUM(K3:K600)"
 
 
 def test_exportador_preenche_dados_certos(tmp_path):
     res = extrair_pdf(PDF_TESTE)
     destino = tmp_path / "saida.xlsx"
+    # orgao/numero_pregao continuam aceitos (identificam o arquivo no NOME),
+    # mas o modelo do contador não tem célula de órgão/pregão no topo, então
+    # NÃO são escritos na planilha — por isso não os checamos mais aqui.
     exportar(res.itens, orgao="Teste", numero_pregao="123", destino=destino)
 
     wb = load_workbook(destino)
     ws = wb.active
 
-    assert ws["C1"].value == "Teste"
-    assert ws["C2"].value == "123"
-    assert ws["E5"].value == 40
-    assert ws["F5"].value == 16.40
-    assert "ABRAÇADEIRA" in ws["C5"].value
+    # Dados do primeiro item na linha 3 (era linha 5 no modelo antigo).
+    assert ws["E3"].value == 40
+    assert ws["F3"].value == 16.40
+    assert "ABRAÇADEIRA" in ws["C3"].value
 
 
-def test_exportador_aplica_markup_customizado(tmp_path):
-    """Quando o usuário passa markup != default, todas as fórmulas G são
-    reescritas. Outras fórmulas (H, I, etc.) referenciam G e ajustam-se
-    automaticamente pelo Excel."""
+def test_exportador_markup_customizado_nao_toca_preco(tmp_path):
+    """No modelo do contador o PREÇO VENDA (G) é MANUAL: o parâmetro `markup`
+    ainda existe na assinatura por compatibilidade, mas é IGNORADO — não há mais
+    fórmula `=S*markup`. Passar markup != default NÃO escreve nada em G, e as
+    fórmulas adjacentes do template continuam intactas (retarget do antigo teste
+    de reescrita de G)."""
     res = extrair_pdf(PDF_TESTE)
     destino = tmp_path / "saida.xlsx"
     exportar(res.itens, markup=1.30, destino=destino)
 
     wb = load_workbook(destino)
     ws = wb.active
-    # Linha 5: =S5*1.30 (não mais *1.45)
-    assert ws["G5"].value == "=S5*1.3"
-    # Linha 504 (última do template): =S504*1.30
-    assert ws["G504"].value == "=S504*1.3"
-    # Fórmulas adjacentes preservadas
-    assert ws["H5"].value == "=J5/G5"
-    assert ws["S5"].value == "=L5+N5+P5+R5"
+    # G continua vazio (manual) mesmo com markup explícito — na 1ª e na última
+    # linha de dados do template.
+    assert ws["G3"].value is None
+    assert ws["G600"].value is None
+    # Fórmulas adjacentes preservadas (linha 3 = primeiro item)
+    assert ws["H3"].value == "=J3/G3"
+    assert ws["S3"].value == "=L3+N3+P3+R3"
 
 
 def test_exportador_markup_default_preserva_template(tmp_path):
-    """Sem markup explícito, fórmulas G ficam idênticas ao template (*1.45)."""
+    """Sem markup explícito, G (preço venda) também fica MANUAL/vazio — o modelo
+    novo não tem mais fórmula de preço; o operador digita G escolhendo entre os
+    cenários Z/AA/AB."""
     res = extrair_pdf(PDF_TESTE)
     destino = tmp_path / "saida.xlsx"
     exportar(res.itens, destino=destino)
 
     wb = load_workbook(destino)
     ws = wb.active
-    assert ws["G5"].value == "=S5*1.45"
-    assert ws["G504"].value == "=S504*1.45"
+    assert ws["G3"].value is None
+    assert ws["G600"].value is None
 
 
 def test_exportador_preenche_LTU_quando_ha_selecao(tmp_path):
@@ -157,17 +166,18 @@ def test_exportador_preenche_LTU_quando_ha_selecao(tmp_path):
 
     wb = load_workbook(destino)
     ws = wb.active
-    # Linha 5 (item 0) preenchida
-    assert ws["L5"].value == 12.34
-    assert ws["T5"].value == "ABC123"
-    assert ws["U5"].value == "FOXLUX"
-    # Linha 6 (item 1) sem seleção: L/T/U vazios
-    assert ws["L6"].value is None
-    assert ws["T6"].value is None
-    assert ws["U6"].value is None
-    # Linha 7 (item 2) preenchida
-    assert ws["L7"].value == 99.99
-    assert ws["U7"].value == "THOMPSON"
+    # Dados começam na linha 3: offset 0 → linha 3, offset 2 → linha 5.
+    # Linha 3 (item 0) preenchida
+    assert ws["L3"].value == 12.34
+    assert ws["T3"].value == "ABC123"
+    assert ws["U3"].value == "FOXLUX"
+    # Linha 4 (item 1) sem seleção: L/T/U vazios
+    assert ws["L4"].value is None
+    assert ws["T4"].value is None
+    assert ws["U4"].value is None
+    # Linha 5 (item 2) preenchida
+    assert ws["L5"].value == 99.99
+    assert ws["U5"].value == "THOMPSON"
 
 
 def test_exportador_sem_selecoes_nao_toca_LTU(tmp_path):
@@ -177,7 +187,8 @@ def test_exportador_sem_selecoes_nao_toca_LTU(tmp_path):
     exportar(res.itens, destino=destino)
     wb = load_workbook(destino)
     ws = wb.active
-    for linha in range(5, 10):
+    # Primeiras linhas de dados (3..7 no modelo do contador) sem seleção.
+    for linha in range(3, 8):
         assert ws[f"L{linha}"].value is None
         assert ws[f"T{linha}"].value is None
         assert ws[f"U{linha}"].value is None

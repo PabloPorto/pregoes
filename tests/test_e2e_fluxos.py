@@ -315,8 +315,9 @@ def test_ncm_tabela_classifica_st_hierarquico():
 
 
 def test_markup_e_coluna_st_na_planilha_exportada(banco, tmp_path):
-    """E2E até o .xlsx: item com NCM de ST sai markup 1,30 e coluna 'Sim';
-    normal sai 1,45 e 'Não'."""
+    """E2E até o .xlsx (modelo do contador): o efeito do ST migrou do
+    multiplicador em G para a flag nativa AC — item com NCM de ST recebe 'SIM'
+    em AC; item normal fica com AC em branco. G (PREÇO VENDA) é manual (None)."""
     itens = [_item("CONEXAO PVC", n=1), _item("CABO DE ACO", n=2)]
     selecoes = {
         0: SelecaoFornecedor(preco=10.0, codigo_fornecedor="A1", marca="TIGRE",
@@ -332,10 +333,13 @@ def test_markup_e_coluna_st_na_planilha_exportada(banco, tmp_path):
              destino=destino)
 
     ws = load_workbook(destino).active
-    assert ws["G5"].value == "=S5*1.3"      # ST
-    assert ws["G6"].value == "=S6*1.45"     # normal
-    assert ws["AC5"].value == "Sim"
-    assert ws["AC6"].value == "Não"
+    # G (PREÇO VENDA) é MANUAL no modelo novo — o app nunca escreve a fórmula.
+    assert ws["G3"].value is None           # ST  (offset 0 → linha 3)
+    assert ws["G4"].value is None           # normal (offset 1 → linha 4)
+    # A condição tributária vai na flag nativa AC (a planilha lê IF(AC="SIM",...)):
+    # item ST recebe 'SIM'; item normal fica em BRANCO (None).
+    assert ws["AC3"].value == "SIM"         # ST
+    assert ws["AC4"].value is None          # normal → AC em branco
 
 
 def test_override_obsoleto_nao_vence_ncm_no_pipeline():
@@ -386,10 +390,10 @@ def test_jornada_completa_busca_selecao_planilha(banco, monkeypatch, tmp_path):
              destino=destino)
 
     ws = load_workbook(destino).active
-    assert ws["L5"].value == 92.0           # preço do tubo
-    assert ws["T5"].value == "8811"         # código fornecedor
-    assert ws["G5"].value == "=S5*1.3"      # tubo PVC = ST
-    assert ws["AC5"].value == "Sim"
+    assert ws["L3"].value == 92.0           # preço do tubo (offset 0 → linha 3)
+    assert ws["T3"].value == "8811"         # código fornecedor
+    assert ws["G3"].value is None           # PREÇO VENDA é manual (nunca escrito)
+    assert ws["AC3"].value == "SIM"         # tubo PVC = ST (flag nativa AC)
 
 
 # ===================== Validação de fumaça (áreas confiáveis) ============
@@ -445,8 +449,8 @@ def test_adv_caractere_de_controle_nao_derruba_export(tmp_path):
     destino = tmp_path / "m.xlsx"
     exportar(itens, destino=destino)            # não pode levantar
     ws = load_workbook(destino).active
-    assert "CANO PVC" in (ws["C5"].value or "")  # gravou, sem o char ilegal
-    assert ws["C6"].value                        # o 2º item não se perdeu
+    assert "CANO PVC" in (ws["C3"].value or "")  # gravou, sem o char ilegal
+    assert ws["C4"].value                        # o 2º item não se perdeu
 
 
 def test_adv_quantidade_nan_inf_nao_some_em_silencio(tmp_path):
@@ -455,8 +459,8 @@ def test_adv_quantidade_nan_inf_nao_some_em_silencio(tmp_path):
     destino = tmp_path / "m.xlsx"
     exportar(itens, destino=destino)
     ws = load_workbook(destino).active
-    assert ws["E5"].value == 0          # nan → 0 (não célula vazia silenciosa)
-    assert ws["F5"].value is None       # inf → ausente
+    assert ws["E3"].value == 0          # nan → 0 (não célula vazia silenciosa)
+    assert ws["F3"].value is None       # inf → ausente
 
 
 def test_adv_item_descricao_none_nao_derruba_lote(banco, monkeypatch):
@@ -625,17 +629,19 @@ def test_exportacao_todos_itens_presentes_selecoes_esparsas(tmp_path):
     exportar(itens, selecoes=selecoes, destino=destino)
     ws = load_workbook(destino).active
 
-    # Todos os 10 itens presentes, na ordem (A=sequencial, B=ID do edital).
-    assert ws["A5"].value == 1 and ws["B5"].value == 1
-    assert ws["A14"].value == 10 and ws["B14"].value == 10   # último item presente
+    # Todos os 10 itens presentes, na ordem. O modelo novo NÃO escreve a coluna A
+    # (sequência) — a ordem do edital é a própria posição da linha (linha = 3 +
+    # offset) e o ID do edital fica em B.
+    assert ws["B3"].value == 1                               # 1º item (offset 0)
+    assert ws["B12"].value == 10                             # último item presente (offset 9)
     # Item NÃO selecionado (offset 1, item 2): descrição/qtd preenchidos, preço vazio.
-    assert ws["B6"].value == 2
-    assert ws["C6"].value == "PRODUTO 2" and ws["E6"].value == 10
-    assert ws["L6"].value is None and ws["T6"].value is None
+    assert ws["B4"].value == 2
+    assert ws["C4"].value == "PRODUTO 2" and ws["E4"].value == 10
+    assert ws["L4"].value is None and ws["T4"].value is None
     # Itens selecionados: preço preenchido.
-    assert ws["L5"].value == 11.0 and ws["T5"].value == "A1"
-    assert ws["L9"].value == 55.0                            # offset 4 → linha 9
-    assert ws["L14"].value is None                           # último não selecionado
+    assert ws["L3"].value == 11.0 and ws["T3"].value == "A1"
+    assert ws["L7"].value == 55.0                            # offset 4 → linha 7
+    assert ws["L12"].value is None                           # último não selecionado
 
 
 def test_item_numero_preservado_em_B_independe_de_selecao(tmp_path):
@@ -647,13 +653,13 @@ def test_item_numero_preservado_em_B_independe_de_selecao(tmp_path):
     destino = tmp_path / "m.xlsx"
     exportar(itens, selecoes=selecoes, destino=destino)
     ws = load_workbook(destino).active
-    # Coluna B = ID do edital (mesma fonte do cabeçalho da busca).
-    assert [ws[f"B{5+i}"].value for i in range(4)] == [2, 9, 25, 4]  # None→offset+1=4
-    # Coluna A = sequência da lista (sempre 1..N).
-    assert [ws[f"A{5+i}"].value for i in range(4)] == [1, 2, 3, 4]
-    # Só o item_numero=9 (offset 1) tem preço.
-    assert ws["L6"].value == 5.0
-    assert ws["L5"].value is None and ws["L7"].value is None and ws["L8"].value is None
+    # Coluna B = ID do edital (mesma fonte do cabeçalho da busca). Linha = 3 + offset.
+    assert [ws[f"B{3+i}"].value for i in range(4)] == [2, 9, 25, 4]  # None→offset+1=4
+    # O modelo novo não escreve a coluna A (sequência): a ordem da lista é a própria
+    # ordem das linhas (3..6), então a sequência 1..N está preservada na posição.
+    # Só o item_numero=9 (offset 1) tem preço → linha 4.
+    assert ws["L4"].value == 5.0
+    assert ws["L3"].value is None and ws["L5"].value is None and ws["L6"].value is None
 
 
 # ============ QA adversarial #5 — falha parcial na orquestração =============

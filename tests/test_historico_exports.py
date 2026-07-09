@@ -799,12 +799,13 @@ def test_gerar_excel_exporta_edital_inteiro_preco_so_nos_buscados(app_modulo):
     arqs = list(config.EXPORTS_DIR.glob("*.xlsx"))
     assert arqs, "planilha gerada"
     ws = load_workbook(arqs[0]).active
-    # TODOS os 5 itens do edital presentes, em ordem.
+    # TODOS os 5 itens do edital presentes, em ordem. Modelo do contador: dados
+    # começam na LINHA 3 (config.LINHA_DADOS_INICIO), não mais na 5.
     for off in range(5):
-        assert ws[f"C{5 + off}"].value == f"PRODUTO {off + 1}", f"item {off+1} sumiu"
+        assert ws[f"C{3 + off}"].value == f"PRODUTO {off + 1}", f"item {off+1} sumiu"
     # Preço (col L) só no item de edital 0 (único buscado E selecionado).
-    assert ws["L5"].value == 7.0
-    assert all(ws[f"L{ln}"].value is None for ln in (6, 7, 8, 9)), "preço vazou p/ não-selecionado"
+    assert ws["L3"].value == 7.0
+    assert all(ws[f"L{ln}"].value is None for ln in (4, 5, 6, 7)), "preço vazou p/ não-selecionado"
 
 
 def test_abrir_banco_corrompido_nao_derruba_o_app(app_modulo, monkeypatch):

@@ -158,8 +158,10 @@ def test_exportar_selecao_fora_do_range_e_descartada_caracterizacao(tmp_path):
     dest = tmp_path / "m.xlsx"
     exportar(_itens(3), selecoes=sel, destino=dest)
     ws = load_workbook(dest).active
-    precos = [ws[f"L{5 + i}"].value for i in range(3)]
-    assert 99.0 not in precos    # silenciosamente descartada (não há linha 10)
+    # 3 itens → linhas de dados 3,4,5 (LINHA_PRIMEIRO_ITEM=3). Offset 5 cairia na
+    # linha 8, que não existe como item → seleção descartada em silêncio.
+    precos = [ws[f"L{3 + i}"].value for i in range(3)]
+    assert 99.0 not in precos    # silenciosamente descartada (não há linha 8)
 
 
 def test_exportar_markup_e_st_alinham_com_o_item_certo(tmp_path):
@@ -172,10 +174,12 @@ def test_exportar_markup_e_st_alinham_com_o_item_certo(tmp_path):
     dest = tmp_path / "m.xlsx"
     exportar(itens, selecoes=sel, markups=markups, itens_com_st=com_st, destino=dest)
     ws = load_workbook(dest).active
-    # offset 2 → linha 7 (LINHA_PRIMEIRO_ITEM=5). Só ela tem preço e ST=Sim.
-    assert ws["L7"].value == 10.0
-    assert ws["AC7"].value == "Sim"
-    assert ws["AC5"].value == "Não" and ws["AC6"].value == "Não"
+    # offset 2 → linha 5 (LINHA_PRIMEIRO_ITEM=3). Só ela tem preço e ST='SIM'.
+    # No modelo do contador o item NÃO-ST fica com AC VAZIO (None), não 'Não' —
+    # a planilha compara IF(AC="SIM",...).
+    assert ws["L5"].value == 10.0
+    assert ws["AC5"].value == "SIM"
+    assert ws["AC3"].value is None and ws["AC4"].value is None
 
 
 def test_conjunto_st_arquivo_corrompido_degrada_para_vazio(monkeypatch, tmp_path):

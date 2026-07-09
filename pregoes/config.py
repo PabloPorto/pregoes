@@ -38,7 +38,7 @@ def _raiz_bundle() -> Path:
 # Versão do aplicativo — aparece na sidebar e no log de boot. Sem ela, o
 # suporte remoto fica às cegas sobre o que o cliente está rodando (auditoria
 # 2026-06). Bump a cada .exe entregue ao cliente.
-VERSAO_APP = "1.0.46"
+VERSAO_APP = "1.1.0"
 
 # Estrutura de diretórios
 BASE_DIR = _raiz_gravavel()
@@ -134,10 +134,18 @@ FORNECEDORES = {
 }
 
 # === Layout do template MATRIZ.xlsx ===
-# Linha onde os cabeçalhos reais estão (R4 conforme análise do template)
-LINHA_CABECALHO = 4
+# MODELO DO CONTADOR (2026-07): a planilha-base foi refeita pelo contador do
+# cliente e é a especificação vigente. Mudou em relação ao modelo antigo:
+#  - cabeçalho na LINHA 2 (era 4); dados começam na LINHA 3 (era 5);
+#  - o PREÇO VENDA (G) deixou de ser fórmula (=S*1,45) e é MANUAL — o operador
+#    escolhe entre 3 cenários de margem (colunas Z/AA/AB = 15/12/7%);
+#  - a Substituição Tributária é NATIVA: a coluna AC ('SUBST. TRIBUTÁRIA')
+#    recebe o texto 'SIM' e a própria planilha zera o imposto estadual e ajusta
+#    o gross-up. O app grava 'SIM' em AC por NCM (não troca mais multiplicador).
+# O exportador foi migrado para este layout (ver pregoes/exportador.py).
+LINHA_CABECALHO = 2
 # Primeira linha de dados
-LINHA_DADOS_INICIO = 5
+LINHA_DADOS_INICIO = 3
 # Mapeamento das colunas conforme template do cliente
 COLUNAS = {
     "item":              "B",
@@ -145,12 +153,12 @@ COLUNAS = {
     "unidade":           "D",
     "quantidade":        "E",
     "valor_referencia":  "F",
-    "preco_venda":       "G",   # FÓRMULA — não tocar
+    "preco_venda":       "G",   # MANUAL no modelo novo (operador digita; ver Z/AA/AB)
     "margem":            "H",   # FÓRMULA
     "faturamento":       "I",   # FÓRMULA
     "lucro_unitario":    "J",   # FÓRMULA
     "lucro_item":        "K",   # FÓRMULA
-    "preco_base":        "L",   # ← do scraper
+    "preco_base":        "L",   # ← do scraper (custo)
     "perc_st":           "M",   # manual no MVP
     "valor_st":          "N",   # FÓRMULA
     "perc_ipi":          "O",   # manual no MVP
@@ -160,12 +168,13 @@ COLUNAS = {
     "custo_aquisicao":   "S",   # FÓRMULA
     "codigo_fornecedor": "T",   # ← do scraper
     "marca":             "U",   # ← do scraper
+    "subst_tributaria":  "AC",  # ← do app: 'SIM' p/ item com ST (dispara a planilha)
 }
 
 # Colunas que o RPA preenche (resto é fórmula do Excel)
 COLUNAS_PREENCHIDAS_RPA = ["item", "descricao", "unidade", "quantidade",
                             "valor_referencia", "preco_base",
-                            "codigo_fornecedor", "marca"]
+                            "codigo_fornecedor", "marca", "subst_tributaria"]
 
 # === UI Streamlit ===
 PORTA_UI = 8501
