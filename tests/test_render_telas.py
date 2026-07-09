@@ -176,3 +176,23 @@ def test_render_revisao_sem_crash(env):
     at.session_state["tela"] = "revisao"
     at.run()
     assert not at.exception, f"revisão quebrou no render: {at.exception}"
+
+
+def test_busca_manual_vazia_avisa_site_pode_estar_instavel(env):
+    """Busca manual no site que volta VAZIA não pode afirmar só 'nada
+    encontrado': o site do fornecedor tem janelas de instabilidade em que
+    devolve vazio para QUALQUER termo (campo 2026-07-09) — a mensagem precisa
+    dizer isso para o operador não achar que o produto não existe (nem que o
+    sistema quebrou)."""
+    from streamlit.testing.v1 import AppTest
+    at = AppTest.from_file(APP, default_timeout=30)
+    at.run()
+    _seed_busca_precos(at)
+    at.session_state["fonte_busca_0"] = "Site do fornecedor"
+    at.session_state["site_res_0"] = ("almeida", [])   # busca feita, veio vazia
+    at.run()
+    assert not at.exception
+    captions = " ".join(c.value for c in at.caption)
+    assert "Nada encontrado na Almeida" in captions
+    assert "instável" in captions, \
+        "mensagem deve avisar que o site pode estar instável (não só 'nada encontrado')"

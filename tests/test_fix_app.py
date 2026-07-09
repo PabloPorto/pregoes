@@ -1012,3 +1012,22 @@ def test_restaurar_pregao_limpa_busca_manual_de_outro(monkeypatch, tmp_path):
                              "orgao": "P", "numero": "9", "tela": "home"}, "s")
     assert "site_res_5" not in ss and "siteq_5" not in ss
     ss.clear()
+
+
+# === Honestidade quando o SITE do fornecedor está instável (2026-07-09) ===
+
+def test_avisos_lote_vazio_fornecedor_zerado_gera_aviso():
+    """Fornecedor com ZERO acerto em TODOS os itens de um lote relevante →
+    aviso de site instável (provado em campo: janela de ~10 min em que a
+    Almeida logada devolvia vazio para qualquer termo e voltou sozinha).
+    Fornecedor com acertos (ou lote pequeno) → sem aviso."""
+    stats = [("almeida", 0, 0, 120), ("dantas", 80, 15, 25)]
+    avisos = app._avisos_lote_vazio(stats, 120)
+    assert len(avisos) == 1 and "Almeida" in avisos[0]
+    assert "instável" in avisos[0] or "fora do ar" in avisos[0]
+    # lote pequeno: zero real é plausível — não alarma
+    assert app._avisos_lote_vazio([("almeida", 0, 0, 2)], 2) == []
+    # todos acharam algo — sem aviso
+    assert app._avisos_lote_vazio([("almeida", 5, 1, 4)], 10) == []
+    # match só por variação ainda é resultado (ok=0, var>0) — sem aviso
+    assert app._avisos_lote_vazio([("dantas", 0, 3, 7)], 10) == []

@@ -182,7 +182,8 @@ CHAVES_PREGAO = ("extracao", "df_editavel", "resultados_busca",
                  "selecoes", "pagina_busca", "itens_revisados",
                  "itens_edital", "mapa_busca_edital", "itens_nao_usar",
                  "usando_tabelas_docling", "mapeamento_tabela_idx",
-                 "markup_overrides", "pregao_gerado_hash")
+                 "markup_overrides", "pregao_gerado_hash",
+                 "avisos_lote_vazio")
 
 # O rascunho (autosave anti-apagão) salva o estado do pregão (CHAVES_PREGAO) MAIS
 # os metadados que ficam fora dele (órgão/número/PDF) e a tela atual — para
@@ -1443,6 +1444,10 @@ def tela_busca_precos():
         # onde revisa os preços (o log é invisível para ele).
         for _aviso in (st.session_state.get("avisos_pagamento") or {}).values():
             style.bloco_aviso(_aviso, tipo="warning")
+        # Fornecedor que voltou ZERO em TODOS os itens = site instável, não
+        # "nada existe" — o operador não pode confiar nesses 'não encontrado'.
+        for _aviso in (st.session_state.get("avisos_lote_vazio") or []):
+            style.bloco_aviso(_aviso, tipo="warning")
 
         # Re-busca INCREMENTAL (perf, campo 2026-07): busca SÓ os itens sem
         # preço, mantendo resultados e escolhas já feitas. É seguro porque a
@@ -1551,6 +1556,34 @@ def _avisos_pagamento_de(sessoes: dict) -> dict:
                 f"<b>Atenção — {rotulo}:</b> não consegui confirmar a condição "
                 f"de pagamento{forma_txt}. Os preços PODEM estar na condição "
                 "errada. Confira um item conhecido antes de gerar a planilha.")
+    return avisos
+
+
+def _avisos_lote_vazio(stats_concluidos: list, total_itens: int) -> list[str]:
+    """Alerta quando um fornecedor voltou ZERO resultado para TODOS os itens de
+    um lote relevante. Num edital de material de construção, zero acertos em
+    dezenas/centenas de itens não é "nada existe" — é o SITE do fornecedor
+    instável ou fora do ar (provado em campo 2026-07-09: janela de ~10 min em
+    que a Almeida, logada e com sessão válida, devolveu página SEM a grade de
+    produtos para QUALQUER termo; a MESMA sessão voltou a achar minutos depois).
+    Sem este aviso, o operador confia em centenas de 'não encontrado' falsos e
+    perde horas — ou preços — à toa.
+
+    ``stats_concluidos``: tuplas ``(nome, ok, variacao, nao_achou)`` por
+    fornecedor. Lotes pequenos (< 5 itens) não geram aviso (zero real é
+    plausível)."""
+    avisos: list[str] = []
+    if total_itens < 5:
+        return avisos
+    for nome, ok, var, _nao in stats_concluidos:
+        if ok + var == 0:
+            avisos.append(
+                f"<b>Atenção — {nome.capitalize()}:</b> nenhum resultado em "
+                f"NENHUM dos {total_itens} itens. Isso normalmente é o site do "
+                "fornecedor instável ou fora do ar, não falta de produto. "
+                "Aguarde alguns minutos e use "
+                "<b>Buscar preços dos itens sem resultado</b> antes de confiar "
+                "nos itens marcados como não encontrados.")
     return avisos
 
 
@@ -1878,6 +1911,10 @@ def _executar_busca(itens: list, fornecedores_nomes: list[str],
         _mesclar_busca_incremental(itens, indices, lote.resultados)
         st.session_state.erros_busca = lote.erros
     st.session_state.cache_stats = (lote.cache_hits, lote.cache_misses)
+    # Honestidade com o operador: fornecedor com ZERO em tudo = site instável
+    # (não "nada existe") — persiste o aviso para a tela de resultados.
+    st.session_state["avisos_lote_vazio"] = _avisos_lote_vazio(
+        stats_concluidos, total_itens)
     with status_final.container():
         hits, misses = lote.cache_hits, lote.cache_misses
         extras = []
@@ -2730,8 +2767,15 @@ def _busca_site_item(idx: int, item, dentro: bool = False) -> None:
             return
         forn_res, achados = dados
         if not achados:
+            # Honestidade: "vazio" nem sempre é "não existe" — em campo
+            # (2026-07-09) o site passou ~10 min devolvendo vazio para QUALQUER
+            # termo numa sessão logada e válida, e voltou sozinho. Afirmar só
+            # "nada encontrado" fez o operador desconfiar do sistema.
             st.caption(f"Nada encontrado na {forn_res.capitalize()} para esse "
-                       "termo. Tente outras palavras ou o código.")
+                       "termo. Tente outras palavras ou o código. Se o produto "
+                       "deveria existir, o site do fornecedor pode estar "
+                       "instável neste momento — tente de novo em alguns "
+                       "minutos.")
             return
         st.caption(f"{len(achados)} resultado(s) na {forn_res.capitalize()} — "
                    "**preço atual do site**. Clique em **Usar** no escolhido.")
