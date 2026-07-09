@@ -486,7 +486,10 @@ def _aplicar_preferencia_pagamento(page, fornecedor: str) -> tuple:
     gracioso: NUNCA levanta (não pode derrubar o login); sem preferência
     configurada, não mexe (segue no default do site)."""
     pref = credenciais.carregar_preferencia_pagamento(fornecedor)
-    if not pref or not pref.get("forma_value") or not pref.get("prazo_value"):
+    # Prazo OPCIONAL: PIX/antecipado não têm prazo no site — basta a FORMA. O
+    # passo de aplicação abaixo só mexe no <select> de prazo se ele estiver
+    # VISÍVEL (PIX o oculta), então forma-sem-prazo funciona ponta a ponta.
+    if not pref or not pref.get("forma_value"):
         return ("sem_config", None)
     base_url = config.FORNECEDORES.get(fornecedor)
     if not base_url:

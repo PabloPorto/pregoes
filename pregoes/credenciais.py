@@ -112,7 +112,11 @@ _CHAVE_PREF = "preferencias_pagamento"
 
 def carregar_preferencia_pagamento(fornecedor: str) -> Optional[dict]:
     """Retorna `{forma_value, forma_texto, prazo_value, prazo_texto}` da condição
-    de pagamento configurada para o fornecedor, ou None se não houver."""
+    de pagamento configurada para o fornecedor, ou None se não houver.
+
+    O PRAZO é OPCIONAL: PIX e pagamento antecipado NÃO têm prazo no site (o modal
+    só mostra a Forma) — exigir prazo forçava um valor falso, ex.: 'PIX · A VISTA
+    (MÍNIMO R$ 300,00)' (achado 2026-07-09). Basta a FORMA para a condição valer."""
     if not CAMINHO.exists():
         return None
     try:
@@ -120,14 +124,14 @@ def carregar_preferencia_pagamento(fornecedor: str) -> Optional[dict]:
     except (json.JSONDecodeError, UnicodeDecodeError, OSError):
         return None
     pref = (dados.get(_CHAVE_PREF) or {}).get(fornecedor)
-    if not pref or not pref.get("forma_value") or not pref.get("prazo_value"):
+    if not pref or not pref.get("forma_value"):
         return None
     return pref
 
 
 def salvar_preferencia_pagamento(
     fornecedor: str, forma_value: str, forma_texto: str,
-    prazo_value: str, prazo_texto: str,
+    prazo_value: str = "", prazo_texto: str = "",
 ) -> None:
     """Persiste a condição de pagamento escolhida. Preserva as outras entradas
     (credenciais, chaves de API, o outro fornecedor)."""

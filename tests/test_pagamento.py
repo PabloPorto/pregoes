@@ -347,3 +347,27 @@ def test_forma_salva_http_none_quando_sem_cookie_ou_sem_select(monkeypatch):
     monkeypatch.setattr(scraper, "_cookie_header_de", lambda ctx: "PHPSESSID=x")
     monkeypatch.setattr(scraper, "_http_get", lambda url, cookie: "<html>sem select</html>")
     assert scraper._forma_salva_http(_P(), "http://x") is None
+
+
+# === PIX/antecipado NÃO têm prazo — prazo é opcional (2026-07-09) ===
+
+def test_preferencia_pix_valida_sem_prazo(cred_tmp):
+    """'PIX é PIX, não tem prazo': a preferência vale só com a FORMA. Antes o
+    app exigia prazo e forçava um valor falso ('PIX · A VISTA MÍNIMO R$300')."""
+    credenciais.salvar_preferencia_pagamento("almeida", "PIX2", "PIX")   # sem prazo
+    pref = credenciais.carregar_preferencia_pagamento("almeida")
+    assert pref and pref["forma_value"] == "PIX2" and pref["forma_texto"] == "PIX"
+    assert pref.get("prazo_value", "") == ""     # sem prazo — e válido mesmo assim
+    assert pref.get("prazo_texto", "") == ""
+
+
+def test_aplica_preferencia_pix_sem_prazo_nao_e_sem_config(monkeypatch):
+    """Forma sem prazo (PIX) NÃO é 'sem_config' — o app aplica a forma. A
+    verificação (verify-first) confirma sem depender do prazo."""
+    monkeypatch.setattr(
+        scraper.credenciais, "carregar_preferencia_pagamento",
+        lambda f: {"forma_value": "PIX2", "forma_texto": "PIX",
+                   "prazo_value": "", "prazo_texto": ""})
+    monkeypatch.setattr(scraper, "_forma_salva", lambda page, base, **k: "PIX2")
+    status, forma = scraper._aplicar_preferencia_pagamento(_FakePage(), "almeida")
+    assert status == "confirmada" and forma == "PIX"

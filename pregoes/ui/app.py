@@ -1961,9 +1961,12 @@ def _form_condicao_pagamento(fornecedor: str) -> None:
     aplica em toda busca. Opções bundladas (config.carregar_opcoes_pagamento)."""
     opcoes = config.carregar_opcoes_pagamento().get(fornecedor, {})
     forma_ops = opcoes.get("forma", [])
-    prazo_ops = opcoes.get("prazo", [])
-    if not forma_ops or not prazo_ops:
+    if not forma_ops:
         return   # sem opções bundladas (raro) — não mostra o seletor
+    # Prazo é OPCIONAL: PIX/antecipado não têm prazo no site. A 1ª opção deixa o
+    # operador dizer isso explicitamente (value vazio = sem prazo).
+    SEM_PRAZO = {"value": "", "texto": "— Não se aplica (PIX, à vista, antecipado) —"}
+    prazo_ops = [SEM_PRAZO] + list(opcoes.get("prazo", []))
     pref = credenciais.carregar_preferencia_pagamento(fornecedor) or {}
 
     def _idx(ops, value):
@@ -1973,21 +1976,23 @@ def _form_condicao_pagamento(fornecedor: str) -> None:
         return 0
 
     st.markdown("**Condição de pagamento** — o preço no site **muda** conforme a "
-                "forma e o prazo. Escolha a condição sob a qual você realmente "
-                "compra; o sistema busca os preços nela.")
+                "forma (e o prazo, quando houver). Escolha a condição sob a qual "
+                "você realmente compra; o sistema busca os preços nela. "
+                "**PIX e pagamento antecipado não têm prazo** — deixe o prazo em "
+                "*Não se aplica*.")
     with st.form(f"form_pagto_{fornecedor}"):
         forma = st.selectbox(
             "Forma de Pagamento", forma_ops,
             index=_idx(forma_ops, pref.get("forma_value")),
             format_func=lambda o: o["texto"], key=f"forma_{fornecedor}")
         prazo = st.selectbox(
-            "Prazo de Pagamento", prazo_ops,
+            "Prazo de Pagamento (só para boleto/cartão)", prazo_ops,
             index=_idx(prazo_ops, pref.get("prazo_value")),
             format_func=lambda o: o["texto"], key=f"prazo_{fornecedor}")
         if st.form_submit_button("Salvar condição de pagamento", type="primary"):
             credenciais.salvar_preferencia_pagamento(
                 fornecedor, forma["value"], forma["texto"],
-                prazo["value"], prazo["texto"])
+                prazo["value"], prazo["texto"] if prazo["value"] else "")
             # A sessão viva em cache foi logada com a condição ANTIGA — fecha
             # todas para a próxima busca relogar já com a nova.
             try:
@@ -1995,14 +2000,19 @@ def _form_condicao_pagamento(fornecedor: str) -> None:
                 _scraper.fechar_sessoes_vivas()
             except Exception:
                 pass
+            _cond = html.escape(forma["texto"])
+            if prazo["value"]:
+                _cond += " · " + html.escape(prazo["texto"])
             style.bloco_aviso(
-                f"Condição salva: <b>{html.escape(forma['texto'])}</b> · "
-                f"<b>{html.escape(prazo['texto'])}</b>. As próximas buscas usam "
-                "essa condição.", tipo="success")
-            pref = {"forma_texto": forma["texto"], "prazo_texto": prazo["texto"]}
+                f"Condição salva: <b>{_cond}</b>. As próximas buscas usam essa "
+                "condição.", tipo="success")
+            pref = {"forma_texto": forma["texto"],
+                    "prazo_texto": prazo["texto"] if prazo["value"] else ""}
     if pref:
-        st.caption(f"Condição atual: {pref.get('forma_texto')} · "
-                   f"{pref.get('prazo_texto')}")
+        _atual = pref.get("forma_texto") or ""
+        if pref.get("prazo_texto"):
+            _atual += " · " + pref["prazo_texto"]
+        st.caption(f"Condição atual: {_atual}")
     else:
         st.caption("Ainda não configurado — o sistema usa a condição **default** "
                    "do site (o preço pode não bater com a sua).")
@@ -2017,8 +2027,10 @@ def _mostrar_condicao_pagamento(fornecedores: list) -> None:
     for nome in fornecedores:
         pref = credenciais.carregar_preferencia_pagamento(nome)
         if pref:
-            configuradas.append(
-                f"{nome.capitalize()}: {pref['forma_texto']} · {pref['prazo_texto']}")
+            cond = pref.get("forma_texto") or ""
+            if pref.get("prazo_texto"):   # PIX/antecipado não têm prazo
+                cond += " · " + pref["prazo_texto"]
+            configuradas.append(f"{nome.capitalize()}: {cond}")
         else:
             falta.append(nome.capitalize())
     if configuradas:
