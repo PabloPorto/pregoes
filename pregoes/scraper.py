@@ -362,6 +362,14 @@ class _RateLimiter:
 
 _SEL_FORMA = 'select[name="id_forma_pagamento_preferencia"]'
 _SEL_PRAZO = 'select[name="id_condicao_pagamento_preferencia"]'
+# O <select> da forma está no HTML da página MESMO com o modal fechado, e a
+# <option selected> é a forma vigente na conta. Ler isso por HTTP é MUITO mais
+# robusto que reabrir o modal instável (campo 2026-07-09: o modal devolvia None
+# numa janela de instabilidade — falso "não consegui confirmar" — enquanto o
+# HTML servido por HTTP trazia a forma correta 'PIX2').
+_RE_SELECT_FORMA = re.compile(
+    r'<select[^>]*name="id_forma_pagamento_preferencia".*?</select>', re.S)
+_RE_OPTION_TAG = re.compile(r'<option\b[^>]*>')
 # A aplicação roda UMA vez (re-abrir o modal várias vezes seguidas dispara a
 # instabilidade do site). A VERIFICAÇÃO relê a forma salva — e essa leitura (a
 # parte instável, mas read-only) é que re-tenta, pois evita o sucesso FALSO do
@@ -399,13 +407,42 @@ def _abrir_modal_preferencias(page) -> bool:
     return False
 
 
+def _forma_salva_http(page, base_url: str) -> Optional[str]:
+    """Lê a forma de pagamento SALVA direto do HTML da home, via HTTP com o
+    cookie da sessão — SEM abrir o modal instável. Devolve o value da
+    ``<option selected>`` do ``<select name=id_forma_pagamento_preferencia>``,
+    ou None se não deu para ler. Estável: usa o mesmo transporte da busca."""
+    try:
+        cookie = _cookie_header_de(page.context)
+        if not cookie:
+            return None
+        html = _http_get(base_url, cookie)
+    except Exception:
+        return None
+    bloco = _RE_SELECT_FORMA.search(html)
+    if not bloco:
+        return None
+    for opt in _RE_OPTION_TAG.finditer(bloco.group(0)):
+        tag = opt.group(0)
+        if re.search(r"\bselected\b", tag):
+            v = re.search(r'value="([^"]*)"', tag)
+            return (v.group(1) if v else None) or None
+    return None
+
+
 def _forma_salva(page, base_url: str,
                  leituras: int = _PAG_LEITURAS_VERIF) -> Optional[str]:
-    """Lê o VALUE da forma de pagamento atualmente SALVA na conta (re-navega +
-    reabre o modal). É a VERIFICAÇÃO real de que a condição pegou — o site às
-    vezes não persiste o 'Confirmar'. Re-tenta a LEITURA (a parte instável, mas
-    read-only): devolve o 1º valor NÃO-VAZIO lido, ou None se não conseguiu
-    (vazio = modal não assentou; não é uma forma de verdade)."""
+    """Lê o VALUE da forma de pagamento atualmente SALVA na conta. É a
+    VERIFICAÇÃO real de que a condição pegou — o site às vezes não persiste o
+    'Confirmar'.
+
+    ROBUSTO (campo 2026-07-09): tenta primeiro a leitura por HTTP do HTML
+    (estável, sem modal); só cai no modal do navegador — a parte instável, mas
+    read-only, com re-tentativa — se o HTTP não resolver. Devolve o 1º value
+    NÃO-VAZIO lido, ou None."""
+    via_http = _forma_salva_http(page, base_url)
+    if via_http:
+        return via_http
     for _ in range(leituras):
         try:
             page.goto(base_url, wait_until="networkidle",

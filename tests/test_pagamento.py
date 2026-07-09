@@ -308,3 +308,42 @@ def test_status_falhou_em_erro(monkeypatch):
 
     assert scraper._aplicar_preferencia_pagamento(_BoomPage(), "dantas")[0] == \
         "falhou"
+
+
+# === Conferência da forma via HTTP (robusta, sem modal) — 2026-07-09 ===
+
+def test_forma_salva_le_do_html_via_http_sem_abrir_modal(monkeypatch):
+    """A forma SALVA é lida da <option selected> do HTML via HTTP, SEM abrir o
+    modal instável. Regressão do falso 'não consegui confirmar' de 2026-07-09: o
+    modal devolvia None numa janela de instabilidade enquanto o HTML servido por
+    HTTP trazia a forma correta ('PIX2'). _forma_salva prefere o HTTP e nem toca
+    no modal quando ele resolve."""
+    html = ('<div><select name="id_forma_pagamento_preferencia">'
+            '<option value="001">BANCO</option>'
+            '<option value="PIX2" selected="selected">PIX</option>'
+            '<option value="ZZZ">OUTRO</option>'
+            '</select></div>')
+    monkeypatch.setattr(scraper, "_http_get", lambda url, cookie: html)
+    monkeypatch.setattr(scraper, "_cookie_header_de", lambda ctx: "PHPSESSID=x")
+
+    class _PageHttpOk:
+        context = object()
+        def goto(self, *a, **k):
+            raise AssertionError("não deveria abrir o modal quando o HTTP resolve")
+
+    page = _PageHttpOk()
+    assert scraper._forma_salva_http(page, "http://x") == "PIX2"
+    assert scraper._forma_salva(page, "http://x") == "PIX2"   # prefere HTTP, sem modal
+
+
+def test_forma_salva_http_none_quando_sem_cookie_ou_sem_select(monkeypatch):
+    """HTTP não resolve (sem cookie / HTML sem o select) → None, e _forma_salva
+    cai no caminho do modal (comportamento antigo preservado)."""
+    monkeypatch.setattr(scraper, "_cookie_header_de", lambda ctx: "")   # sem cookie
+    class _P:
+        context = object()
+    assert scraper._forma_salva_http(_P(), "http://x") is None
+
+    monkeypatch.setattr(scraper, "_cookie_header_de", lambda ctx: "PHPSESSID=x")
+    monkeypatch.setattr(scraper, "_http_get", lambda url, cookie: "<html>sem select</html>")
+    assert scraper._forma_salva_http(_P(), "http://x") is None

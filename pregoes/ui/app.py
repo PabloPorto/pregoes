@@ -1554,8 +1554,10 @@ def _avisos_pagamento_de(sessoes: dict) -> dict:
         elif status in ("nao_conferida", "falhou"):
             avisos[nome] = (
                 f"<b>Atenção — {rotulo}:</b> não consegui confirmar a condição "
-                f"de pagamento{forma_txt}. Os preços PODEM estar na condição "
-                "errada. Confira um item conhecido antes de gerar a planilha.")
+                f"de pagamento{forma_txt} agora — normalmente é instabilidade "
+                "momentânea do site do fornecedor, não erro da condição. Tente "
+                "buscar de novo em alguns minutos; se persistir, confira um item "
+                "conhecido antes de gerar a planilha.")
     return avisos
 
 
