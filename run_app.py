@@ -92,7 +92,34 @@ def _abrir_navegador() -> None:
         pass  # sem navegador (raro); o operador abre o endereço manualmente
 
 
+def _garantir_saida_padrao() -> None:
+    """No .exe SEM console (console=False no .spec — sem a "tela preta"), o
+    Python zera ``sys.stdout``/``sys.stderr`` e QUALQUER ``print`` do Streamlit
+    ou do Playwright quebraria com AttributeError, derrubando o boot em silêncio.
+    Redireciona para ``data/console.log`` (ao lado do app) — não trava e ainda
+    dá diagnóstico. No dev (com console) é no-op."""
+    if sys.stdout is not None and sys.stderr is not None:
+        return
+    try:
+        base = (os.path.dirname(sys.executable) if getattr(sys, "frozen", False)
+                else os.path.dirname(os.path.abspath(__file__)))
+        pasta = os.path.join(base, "data")
+        os.makedirs(pasta, exist_ok=True)
+        destino = open(os.path.join(pasta, "console.log"), "a",
+                       encoding="utf-8", buffering=1)
+    except Exception:
+        import io
+        destino = io.StringIO()   # último recurso: descarta, mas nunca quebra
+    if sys.stdout is None:
+        sys.stdout = destino
+    if sys.stderr is None:
+        sys.stderr = destino
+
+
 def main() -> None:
+    # SEM console (console=False): garante stdout/err válidos ANTES de tudo,
+    # senão o 1º print do Streamlit/Playwright derruba o boot.
+    _garantir_saida_padrao()
     # Empacotado pelo PyInstaller, o Streamlit fica em _internal\streamlit\ —
     # sem "site-packages" no caminho, ele se acha em modo de DESENVOLVIMENTO
     # (streamlit/config.py:_global_development_mode) e aí bloqueia

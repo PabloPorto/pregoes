@@ -77,7 +77,16 @@ a = Analysis(
 pyz = PYZ(a.pure)
 exe = EXE(
     pyz, a.scripts, [], exclude_binaries=True,
-    name="Pregoes", console=True,  # console=True mostra erros — útil no piloto
-    disable_windowed_traceback=False, icon=None,
+    name="Pregoes",
+    # console=False: SEM a "tela preta" para o operador leigo (pedido do cliente
+    # 2026-07-09). O app abre direto no navegador. IMPORTANTE: sem console o
+    # Python zera sys.stdout/err — run_app.py os redireciona p/ data/console.log
+    # logo no início, senão qualquer print do Streamlit/Playwright quebraria com
+    # AttributeError. Rollback: volte para True se um erro de boot ficar invisível.
+    console=False,
+    # Mostra um diálogo se houver crash não tratado (melhor que sumir calado).
+    disable_windowed_traceback=False,
+    # Ícone embutido no .exe → o atalho do Windows mostra o "P" da marca.
+    icon="packaging/pregoes.ico",
 )
 coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="Pregoes")
