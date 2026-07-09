@@ -153,6 +153,38 @@ def salvar_preferencia_pagamento(
     CAMINHO.write_text(json.dumps(dados, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+def carregar_pasta_backup() -> Optional[str]:
+    """Pasta EXTERNA de backup (tipicamente uma pasta do Google Drive na máquina
+    do cliente) — o off-site que protege contra pane do disco C:. None se não
+    configurada."""
+    if not CAMINHO.exists():
+        return None
+    try:
+        dados = json.loads(CAMINHO.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+        return None
+    if not isinstance(dados, dict):
+        return None
+    caminho = (dados.get("pasta_backup") or "").strip()
+    return caminho or None
+
+
+def salvar_pasta_backup(caminho: str) -> None:
+    """Persiste a pasta externa de backup (preserva as outras entradas)."""
+    if CAMINHO.exists():
+        try:
+            dados = json.loads(CAMINHO.read_text(encoding="utf-8"))
+            if not isinstance(dados, dict):
+                dados = {}
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+            dados = {}
+    else:
+        dados = {}
+    dados["pasta_backup"] = (caminho or "").strip()
+    CAMINHO.parent.mkdir(parents=True, exist_ok=True)
+    CAMINHO.write_text(json.dumps(dados, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
 def salvar_chave_api(provider: str, api_key: str) -> None:
     """Persiste uma chave API. Cria o arquivo se não existir, sobrescreve a
     entrada do provider, preserva outras entradas."""

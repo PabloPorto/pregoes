@@ -74,6 +74,14 @@ if "backup_feito" not in st.session_state:
         _db.backup("diario")
     except Exception:
         _log.exception("falha no backup diário de boot")
+    # Backup EXTERNO (Google Drive) — off-site, protege contra pane do disco C:.
+    # Em thread para NÃO atrasar o boot; best-effort (nunca derruba o app).
+    try:
+        import threading
+        from pregoes import backup as _backup
+        threading.Thread(target=_backup.fazer_backup_externo, daemon=True).start()
+    except Exception:
+        _log.exception("falha ao disparar o backup externo no boot")
     st.session_state.backup_feito = True
 
 # === Estado da sessão ===
@@ -877,6 +885,15 @@ def _gerar_excel(itens: list, markup: float, selecoes: dict,
     # operador mexer em qualquer insumo, o hash deixa de bater e o aviso volta.
     st.session_state["pregao_gerado_hash"] = _hash_pregao()
 
+    # Backup EXTERNO (Google Drive) logo após concluir — é o momento em que há
+    # MAIS a proteger (edital novo + aprendizado). Em thread; best-effort.
+    try:
+        import threading
+        from pregoes import backup as _backup
+        threading.Thread(target=_backup.fazer_backup_externo, daemon=True).start()
+    except Exception:
+        _log.exception("falha ao disparar o backup externo pós-geração")
+
     style.bloco_aviso(f"Planilha gerada: <code>{destino.name}</code>", tipo="success")
     if selecoes:
         st.caption(f"Inclui preço/marca/código para {len(selecoes)} de {len(itens)} itens.")
@@ -1216,8 +1233,8 @@ def tela_configuracoes():
         "computador, sem envio para servidores externos.",
     )
 
-    aba_almeida, aba_dantas, aba_ia, aba_cat = st.tabs(
-        ["Almeida", "Dantas", "IA (Gemini)", "Catálogo histórico"]
+    aba_almeida, aba_dantas, aba_ia, aba_cat, aba_backup = st.tabs(
+        ["Almeida", "Dantas", "IA (Gemini)", "Catálogo histórico", "Backup"]
     )
 
     with aba_almeida:
@@ -1384,6 +1401,9 @@ def tela_configuracoes():
 
     with aba_cat:
         _aba_catalogo()
+
+    with aba_backup:
+        _aba_backup_externo()
 
 
 # === Tela: BUSCA DE PREÇOS ===
@@ -3372,6 +3392,83 @@ def tela_mapeamento():
         st.session_state.extracao = novo_res
         st.session_state.df_editavel = None  # força refresh do data_editor
         ir_para("revisao")
+
+
+# === Aba Backup (em Configurações) ===
+
+def _aba_backup_externo():
+    """Backup FORA da máquina (Google Drive) — protege contra pane/perda do
+    disco C:. O app só grava um arquivo numa pasta LOCAL do Google Drive; é o
+    Drive do cliente que sincroniza para a nuvem. Sem API do Google, sem senha
+    de Google no sistema.
+    """
+    from pregoes import backup as _backup
+
+    style.bloco_aviso(
+        "Tudo do sistema (catálogo, aprendizado, histórico e credenciais) "
+        "fica só neste computador. Se o computador falhar, isso se perde. "
+        "Aponte abaixo uma <b>pasta do Google Drive</b> e o sistema guarda uma "
+        "cópia lá <b>sozinho</b> (ao abrir e ao gerar cada planilha) — o Google "
+        "Drive envia para a nuvem automaticamente.",
+        tipo="info",
+    )
+
+    st.markdown(
+        "**Como preparar (uma vez):**\n"
+        "1. Instale o **Google Drive** para computador e faça login.\n"
+        "2. Crie uma pasta, por exemplo `Backup Pregões`, dentro do seu Drive.\n"
+        "3. Abra essa pasta, copie o caminho da barra de endereço "
+        "(algo como `G:\\Meu Drive\\Backup Pregões`) e cole abaixo."
+    )
+
+    atual = credenciais.carregar_pasta_backup() or ""
+    with st.form("form_backup_externo"):
+        caminho = st.text_input(
+            "Pasta de backup (Google Drive)",
+            value=atual,
+            placeholder=r"G:\Meu Drive\Backup Pregões",
+            help="Pasta no seu computador que o Google Drive sincroniza. "
+                 "Deixe em branco para desligar o backup automático.",
+        )
+        c_salvar, c_agora = st.columns(2)
+        salvar_b = c_salvar.form_submit_button("Salvar pasta", type="primary")
+        backup_agora = c_agora.form_submit_button("Fazer backup agora")
+
+    if salvar_b:
+        credenciais.salvar_pasta_backup(caminho)
+        if caminho.strip():
+            from pathlib import Path as _Path
+            if _Path(caminho.strip()).is_dir():
+                style.bloco_aviso(
+                    "Pasta de backup salva. A partir de agora o sistema guarda "
+                    "uma cópia lá sozinho.", tipo="success")
+            else:
+                style.bloco_aviso(
+                    "Pasta salva, mas <b>não encontrei</b> ela no computador "
+                    "agora. Confira se o Google Drive está aberto e se o caminho "
+                    "está certo — o backup só grava quando a pasta existe.",
+                    tipo="warning")
+        else:
+            style.bloco_aviso("Backup automático desligado (pasta em branco).",
+                              tipo="info")
+
+    if backup_agora:
+        # Grava o que estiver no campo, mesmo sem clicar em "Salvar" antes.
+        destino_dir = caminho.strip() or None
+        if destino_dir:
+            credenciais.salvar_pasta_backup(destino_dir)
+        with st.spinner("Copiando para o Google Drive…"):
+            destino = _backup.fazer_backup_externo(destino_dir)
+        if destino is not None:
+            style.bloco_aviso(
+                f"Backup feito: <code>{destino.name}</code> na pasta indicada. "
+                "O Google Drive vai enviar para a nuvem em seguida.",
+                tipo="success")
+        else:
+            style.bloco_aviso(
+                "Não consegui gravar o backup. Verifique se o <b>Google Drive "
+                "está aberto</b> e se o caminho da pasta está correto.",
+                tipo="danger")
 
 
 # === Aba Catálogo (em Configurações) ===
