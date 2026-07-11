@@ -1780,6 +1780,14 @@ def buscar_precos_para_itens(
                     progresso_callback(idx + 1, total,
                                        (item.descricao or "")[:60])
         else:
+            # GARANTIA: a conexão PRINCIPAL não pode entrar na fase paralela com
+            # uma transação de escrita ABERTA — senão segura o write lock do WAL e
+            # os workers batem em 'database is locked'. Commita aqui qualquer
+            # escrita de pré-processamento (invalidação de cache, canonização)
+            # antes de abrir os workers. Defesa em profundidade junto do fix na
+            # própria invalidação (Windows 2026-07-11).
+            if conn is not None:
+                conn.commit()
             import threading
             from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -1941,6 +1949,14 @@ def _invalidar_cache_se_versao_mudou(conn) -> None:
         if atual != BUSCA_VERSAO:
             n = db.cache_limpar(conn)
             arq.write_text(BUSCA_VERSAO)
+            # COMMIT imediato: cache_limpar faz um DELETE e o sqlite3 (isolation
+            # padrão) mantém a transação ABERTA até um commit explícito. Sem isto,
+            # a conexão PRINCIPAL segura o write lock do WAL durante TODA a busca e
+            # os workers (conexões próprias) batem em 'database is locked' na 1ª
+            # busca pós-instalação — quando .busca_versao ainda não existe e a
+            # invalidação dispara (traceback Windows 2026-07-11). É manutenção
+            # auto-contida: commita já e libera o lock.
+            conn.commit()
             if n:
                 from .logconf import get_logger
                 get_logger("scraper").info(
