@@ -172,6 +172,7 @@ def exportar(
     markups: dict[int, float] | None = None,
     itens_com_st: set[int] | None = None,
     selecoes: dict[int, "SelecaoFornecedor"] | None = None,
+    margem_venda: str | None = None,
     destino: Path | str | None = None,
     template: Path | str | None = None,
 ) -> Path:
@@ -198,6 +199,11 @@ def exportar(
         selecoes: mapa `{offset: SelecaoFornecedor}` com a escolha do operador —
             preenche L (custo), T (código), U (marca). Itens ausentes ficam sem
             preço (o operador completa no Excel).
+        margem_venda: coluna do cenário de margem que PRÉ-PREENCHE o PREÇO VENDA
+            (G) dos itens com preço — "Z" (15%), "AA" (12%) ou "AB" (7%). G sai
+            como FÓRMULA (`=Z{linha}` etc.), então mostra o preço sugerido já
+            ajustado para ST e continua editável (digitar por cima sobrescreve).
+            None ou valor inválido → G fica em branco (preço 100% manual).
         destino: caminho de saída (default: data/exports/<auto>.xlsx)
         template: caminho do template (default: config.TEMPLATE_MATRIZ)
 
@@ -210,6 +216,11 @@ def exportar(
     # Falha cedo e com mensagem clara se o cliente moveu/apagou coluna ou
     # corrompeu o template — antes de copiar e preencher (P1.4).
     validar_template(template_path)
+
+    # Cenário de margem para pré-preencher G: só aceitamos uma das colunas
+    # conhecidas (Z/AA/AB) — qualquer outra coisa vira "não pré-preencher"
+    # (defensivo: nunca gravamos uma fórmula para uma coluna que não existe).
+    col_margem = margem_venda if margem_venda in config.MARGENS_VENDA else None
 
     itens = list(itens)
     if not itens:
@@ -284,6 +295,14 @@ def exportar(
                 codigo = f"{codigo}D"
             _escrever_texto(ws[f"T{linha}"], codigo)
             _escrever_texto(ws[f"U{linha}"], sel.marca)
+            # PREÇO VENDA (G) pré-preenchido com o cenário de margem escolhido
+            # (15/12/7% → Z/AA/AB). FÓRMULA, não número: a planilha já mostra o
+            # preço sugerido — ajustado para ST pela própria Z/AA/AB — e o
+            # operador pode digitar por cima. Só nos itens COM preço (custo em L):
+            # sem custo, a sugestão seria 0 e enganaria. Sem col_margem, G fica
+            # em branco (preço manual, como era).
+            if col_margem:
+                ws[f"G{linha}"] = f"={col_margem}{linha}"
 
         # Substituição Tributária → flag NATIVA da coluna AC (modelo do contador).
         # Item é ST se veio marcado (itens_com_st) OU se o NCM da opção escolhida

@@ -38,7 +38,7 @@ def _raiz_bundle() -> Path:
 # Versão do aplicativo — aparece na sidebar e no log de boot. Sem ela, o
 # suporte remoto fica às cegas sobre o que o cliente está rodando (auditoria
 # 2026-06). Bump a cada .exe entregue ao cliente.
-VERSAO_APP = "1.1.5"
+VERSAO_APP = "1.1.6"
 
 # Estrutura de diretórios
 BASE_DIR = _raiz_gravavel()
@@ -77,6 +77,16 @@ MARKUP_ST = 1.30                    # item COM ST (NCM consta no Anexo 05 do est
 # este desconto no CUSTO (coluna L). O markup incide sobre o custo já com
 # desconto. Almeida e catálogo não recebem (decisão do cliente 2026-06-27).
 DESCONTO_DANTAS = 0.17              # 17% de desconto no custo dos itens da Dantas
+
+# === Margem do preço de venda (modelo do contador, 2026-07) ===
+# A planilha calcula 3 preços sugeridos por gross-up, um por margem-alvo, nas
+# colunas Z/AA/AB. O app pré-preenche o PREÇO VENDA (G) apontando por FÓRMULA
+# para a coluna do cenário que o operador escolher (G = "=Z{linha}" etc.) — sai
+# pronto, já ajustado para ST, e continua editável. Espelha Z2/AA2/AB2 do
+# template: se o contador mudar as margens lá, atualizar aqui.
+MARGENS_VENDA = {"Z": 0.15, "AA": 0.12, "AB": 0.07}   # coluna → margem-alvo (ordem = exibição)
+MARGEM_VENDA_PADRAO = "AB"                            # padrão de fábrica: 7% (decisão 2026-07-11)
+
 PERC_OPERACIONAL = 0.03             # 3% operacional
 PERC_COMISSAO = 0.05                # 5% comissão
 PERC_IMPOSTOS_FEDERAIS = 0.07       # 7% impostos federais

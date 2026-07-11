@@ -333,7 +333,8 @@ def test_markup_e_coluna_st_na_planilha_exportada(banco, tmp_path):
              destino=destino)
 
     ws = load_workbook(destino).active
-    # G (PREÇO VENDA) é MANUAL no modelo novo — o app nunca escreve a fórmula.
+    # Sem `margem_venda`, o exportador NÃO pré-preenche G (contrato antigo). Com
+    # margem escolhida, G vira =Z/AA/AB — coberto em test_margem_venda.py.
     assert ws["G3"].value is None           # ST  (offset 0 → linha 3)
     assert ws["G4"].value is None           # normal (offset 1 → linha 4)
     # A condição tributária vai na flag nativa AC (a planilha lê IF(AC="SIM",...)):

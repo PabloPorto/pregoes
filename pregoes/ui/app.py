@@ -842,6 +842,13 @@ def _gerar_excel(itens: list, markup: float, selecoes: dict,
         sorted(itens_com_st) if itens_com_st else itens_com_st,
     )
 
+    # Margem que pré-preenche o PREÇO VENDA (G): escolha da sessão (seletor da
+    # tela de preços) → padrão salvo do cliente → padrão de fábrica. Assim TODO
+    # caminho de geração sai com G pronto no cenário certo, sem o caller repassar.
+    margem_venda = (st.session_state.get("margem_venda_col")
+                    or credenciais.carregar_margem_venda()
+                    or config.MARGEM_VENDA_PADRAO)
+
     with st.spinner("Gerando planilha matriz a partir do template..."):
         try:
             destino = exportar(
@@ -852,6 +859,7 @@ def _gerar_excel(itens: list, markup: float, selecoes: dict,
                 markups=markups,
                 itens_com_st=itens_com_st,
                 selecoes=selecoes,
+                margem_venda=margem_venda,
             )
         except Exception as exc:
             _log.exception("falha ao gerar planilha")
@@ -2570,6 +2578,42 @@ def _painel_markup(selecoes: dict, itens: list) -> tuple[dict, set]:
     return markups, com_st
 
 
+def _seletor_margem_venda() -> None:
+    """Seletor da margem que PRÉ-PREENCHE o PREÇO VENDA (G) da planilha.
+
+    A planilha calcula 3 preços sugeridos (15/12/7%, colunas Z/AA/AB). Aqui o
+    operador escolhe QUAL entra pré-preenchido em PREÇO VENDA. A escolha é
+    LEMBRADA (vira o padrão do cliente) e pode ser trocada a cada pregão. G sai
+    como fórmula, então continua editável e já ajustado para ST. Grava a coluna
+    escolhida em ``margem_venda_col`` (lida por _gerar_excel)."""
+    cols = list(config.MARGENS_VENDA.keys())                       # ["Z","AA","AB"]
+    label = {c: f"{int(round(p * 100))}%" for c, p in config.MARGENS_VENDA.items()}
+    atual = (st.session_state.get("margem_venda_col")
+             or credenciais.carregar_margem_venda()
+             or config.MARGEM_VENDA_PADRAO)
+    if atual not in cols:
+        atual = config.MARGEM_VENDA_PADRAO
+
+    st.markdown("#### Margem do preço de venda")
+    st.caption("A planilha já sai com o PREÇO VENDA preenchido nesta margem "
+               "(você pode alterar célula a célula no Excel). Fica salvo como seu "
+               "padrão para os próximos pregões.")
+    escolha = st.selectbox(
+        "Margem aplicada ao preço de venda",
+        options=cols,
+        index=cols.index(atual),
+        format_func=lambda c: label[c],
+        key="sel_margem_venda",
+    )
+    st.session_state["margem_venda_col"] = escolha
+    # Persiste SÓ quando o operador escolhe algo diferente do default EFETIVO
+    # (salvo ou de fábrica). Sem isto, só abrir a tela já gravava o padrão de
+    # fábrica no credenciais.json (e poluiria o arquivo em cada rerun/teste).
+    efetiva = credenciais.carregar_margem_venda() or config.MARGEM_VENDA_PADRAO
+    if escolha != efetiva:
+        credenciais.salvar_margem_venda(escolha)
+
+
 def _carregar_catalogo_sessao():
     """Carrega o catálogo do cliente (produtos) UMA vez por sessão para a
     busca manual. Lista vazia se o catálogo não foi populado."""
@@ -3142,6 +3186,9 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
 
     # Markup por item via Substituição Tributária (Fase 4).
     markups, itens_com_st = _painel_markup(st.session_state.selecoes, itens)
+
+    # Margem que pré-preenche o PREÇO VENDA da planilha (15/12/7%).
+    _seletor_margem_venda()
 
     if st.button("Gerar planilha matriz com preços", type="primary",
                  width="stretch"):

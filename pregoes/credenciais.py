@@ -185,6 +185,39 @@ def salvar_pasta_backup(caminho: str) -> None:
     CAMINHO.write_text(json.dumps(dados, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+def carregar_margem_venda() -> Optional[str]:
+    """Coluna do cenário de margem escolhido para pré-preencher o PREÇO VENDA
+    ('Z'=15%, 'AA'=12%, 'AB'=7%). None se não configurada — o app usa o padrão
+    de fábrica (config.MARGEM_VENDA_PADRAO)."""
+    if not CAMINHO.exists():
+        return None
+    try:
+        dados = json.loads(CAMINHO.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+        return None
+    if not isinstance(dados, dict):
+        return None
+    col = (dados.get("margem_venda") or "").strip()
+    return col or None
+
+
+def salvar_margem_venda(coluna: str) -> None:
+    """Persiste a coluna do cenário de margem escolhido (preserva as outras
+    entradas). Vira o 'padrão' do cliente para os próximos pregões."""
+    if CAMINHO.exists():
+        try:
+            dados = json.loads(CAMINHO.read_text(encoding="utf-8"))
+            if not isinstance(dados, dict):
+                dados = {}
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+            dados = {}
+    else:
+        dados = {}
+    dados["margem_venda"] = (coluna or "").strip()
+    CAMINHO.parent.mkdir(parents=True, exist_ok=True)
+    CAMINHO.write_text(json.dumps(dados, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
 def salvar_chave_api(provider: str, api_key: str) -> None:
     """Persiste uma chave API. Cria o arquivo se não existir, sobrescreve a
     entrada do provider, preserva outras entradas."""
