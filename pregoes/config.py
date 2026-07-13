@@ -38,7 +38,7 @@ def _raiz_bundle() -> Path:
 # Versão do aplicativo — aparece na sidebar e no log de boot. Sem ela, o
 # suporte remoto fica às cegas sobre o que o cliente está rodando (auditoria
 # 2026-06). Bump a cada .exe entregue ao cliente.
-VERSAO_APP = "1.1.7"
+VERSAO_APP = "1.1.8"
 
 # Estrutura de diretórios
 BASE_DIR = _raiz_gravavel()
@@ -58,10 +58,16 @@ TEMPLATE_MATRIZ = TEMPLATES_DIR / "matriz_template.xlsx"
 for d in (DATA_DIR, TEMPLATES_DIR, EDITAIS_DIR, EXPORTS_DIR, HISTORICO_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
-# Semente do template: empacotado, o template vem do bundle (read-only) e é
-# copiado UMA vez para a pasta gravável, para a exportação e o restauro do
-# ORIGINAL funcionarem. Em dev, origem == destino → no-op (não copia nada).
-_TEMPLATE_BUNDLE = _raiz_bundle() / "data" / "templates" / "matriz_template.xlsx"
+# Semente do template: vem de DENTRO do pacote (`pregoes/dados/`), que viaja
+# SEMPRE junto com o código. A pasta `data/` (fora do pacote) pode não ser
+# copiada por inteiro — o Google Drive deixou de baixar o `matriz_template.xlsx`
+# numa cópia de pasta (incidente 2026-07-11), quebrando o build/exportação.
+# Copiado UMA vez para a pasta gravável `data/templates/`. Em dev, se o destino
+# já existe, é no-op. Fallback: bundles antigos traziam o template em
+# data/templates/ dentro do _MEIPASS.
+_TEMPLATE_BUNDLE = Path(__file__).resolve().parent / "dados" / "matriz_template.xlsx"
+if not _TEMPLATE_BUNDLE.exists():
+    _TEMPLATE_BUNDLE = _raiz_bundle() / "data" / "templates" / "matriz_template.xlsx"
 if (not TEMPLATE_MATRIZ.exists() and _TEMPLATE_BUNDLE.exists()
         and _TEMPLATE_BUNDLE.resolve() != TEMPLATE_MATRIZ.resolve()):
     shutil.copy2(_TEMPLATE_BUNDLE, TEMPLATE_MATRIZ)

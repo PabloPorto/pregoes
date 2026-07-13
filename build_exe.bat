@@ -80,6 +80,27 @@ if not exist ".streamlit" mkdir ".streamlit"
 echo [build] .streamlit\config.toml criado automaticamente.
 :config_ok
 
+REM 3c. Garante o template da planilha. MESMA fragilidade do .streamlit: a pasta
+REM      data\ (fora de pregoes\) pode NAO ser baixada por inteiro — o Google
+REM      Drive deixou o matriz_template.xlsx no Drive mas nao baixou no cliente
+REM      (incidente 2026-07-11), e o PyInstaller aborta por nao achar o arquivo.
+REM      O template TAMBEM viaja DENTRO do pacote (pregoes\dados\), que baixa
+REM      junto com o codigo — recuperamos dali se faltar. (goto p/ nao quebrar o
+REM      cmd com ')' interno, igual ao bloco do .streamlit acima.)
+if exist "data\templates\matriz_template.xlsx" goto :template_ok
+if not exist "data\templates" mkdir "data\templates"
+if not exist "pregoes\dados\matriz_template.xlsx" goto :template_sem_fonte
+copy /Y "pregoes\dados\matriz_template.xlsx" "data\templates\matriz_template.xlsx" >nul
+echo [build] template recuperado de pregoes\dados\ (a pasta data\ nao veio completa).
+goto :template_ok
+:template_sem_fonte
+echo.
+echo [ERRO] data\templates\matriz_template.xlsx nao encontrado, e sem copia em
+echo        pregoes\dados\ para recuperar. Baixe o matriz_template.xlsx (uns
+echo        125 KB^) e coloque em data\templates\, depois rode de novo.
+pause & exit /b 1
+:template_ok
+
 REM 4. Build
 pyinstaller pregoes.spec --noconfirm --clean || (echo [ERRO] PyInstaller falhou. & pause & exit /b 1)
 
