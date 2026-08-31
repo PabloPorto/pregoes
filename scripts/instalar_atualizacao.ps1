@@ -83,11 +83,24 @@ Titulo "2/7  Localizando a instalação"
 
 $raizApp = $null
 if (Test-Path -LiteralPath $Destino) {
-    $exes = Get-ChildItem -LiteralPath $Destino -Filter "Pregoes.exe" -Recurse -File -ErrorAction SilentlyContinue
+    $exes = @(Get-ChildItem -LiteralPath $Destino -Filter "Pregoes.exe" -Recurse -File -ErrorAction SilentlyContinue)
+
+    # Máquinas onde alguém rodou o build_exe.bat no lugar têm DOIS Pregoes.exe:
+    # o de verdade em dist\Pregoes\ e um artefato intermediário do PyInstaller em
+    # build\pregoes\. Só o primeiro é executável — o modo onedir põe as
+    # dependências numa pasta `_internal` ao lado do .exe, e o intermediário não
+    # tem essa pasta. Filtrar por `_internal` distingue pela ESTRUTURA, sem
+    # depender do nome da pasta (mais robusto que ignorar "build\" no caminho).
+    $reais = @($exes | Where-Object { Test-Path -LiteralPath (Join-Path $_.Directory.FullName "_internal") })
+    if ($reais.Count -gt 0 -and $reais.Count -lt $exes.Count) {
+        Aviso "Ignorando $($exes.Count - $reais.Count) Pregoes.exe sem pasta _internal (sobra de build, não é instalação)."
+        $exes = $reais
+    }
+
     if ($exes.Count -eq 1) {
         $raizApp = $exes[0].Directory.FullName
     } elseif ($exes.Count -gt 1) {
-        Aviso "Mais de um Pregoes.exe em $Destino :"
+        Aviso "Mais de um Pregoes.exe instalável em $Destino :"
         $exes | ForEach-Object { Write-Host "       $($_.FullName)" }
         Erro "Ambíguo — rode de novo apontando -Destino para a pasta certa."
     }

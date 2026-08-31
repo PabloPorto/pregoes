@@ -42,6 +42,13 @@ New-Item -ItemType Directory -Path $base -Force | Out-Null
 $cliente = Join-Path $base "C_Pregoes"
 $app = Join-Path $cliente "dist\Pregoes"
 New-Item -ItemType Directory -Path (Join-Path $app "_internal\pregoes") -Force | Out-Null
+
+# Sobra do build_exe.bat rodado no lugar (campo 2026-08-31): um Pregoes.exe
+# intermediário do PyInstaller em build\pregoes\, SEM a pasta _internal. O
+# instalador tem que ignorá-lo e não travar por ambiguidade.
+$iscaBuild = Join-Path $cliente "build\pregoes"
+New-Item -ItemType Directory -Path $iscaBuild -Force | Out-Null
+Set-Content -Path (Join-Path $iscaBuild "Pregoes.exe") -Value "ARTEFATO-DE-BUILD" -Encoding utf8
 New-Item -ItemType Directory -Path (Join-Path $app "data\backups") -Force | Out-Null
 Set-Content -Path (Join-Path $app "Pregoes.exe") -Value "EXE-VERSAO-ANTIGA" -Encoding utf8
 Set-Content -Path (Join-Path $app "lixo_versao_antiga.dll") -Value "sobra" -Encoding utf8
@@ -94,6 +101,10 @@ if ($cred.margem_venda   -ne "AB")                  { $falhas += "margem de vend
 if (-not $cred.preferencias_pagamento)              { $falhas += "condição de pagamento perdida" }
 if (-not (Test-Path (Join-Path $app "data\backups\bk1.db")))    { $falhas += "backups antigos perdidos" }
 if (Test-Path (Join-Path $app "lixo_versao_antiga.dll"))        { $falhas += "sobra da versão antiga não foi removida" }
+# a isca de build\ não pode ter sido escolhida como alvo nem sido tocada
+$isca = Join-Path $cliente "build\pregoes\Pregoes.exe"
+if (-not (Test-Path $isca))                                       { $falhas += "o instalador mexeu na pasta build\ (não deveria)" }
+elseif ((Get-Content $isca -Raw) -notmatch "ARTEFATO-DE-BUILD")    { $falhas += "o instalador instalou por cima do artefato de build" }
 if (-not (Get-ChildItem $bkDir -Filter *.zip))                  { $falhas += "backup de segurança não foi gerado" }
 
 Write-Host ""
