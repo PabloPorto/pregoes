@@ -43,6 +43,17 @@
 
 ## 2. ATUALIZAÇÃO (máquina que já tem o sistema)
 
+> **Jeito rápido e seguro — use este.** O passo manual "apague tudo EXCETO
+> `data\`" é onde mora o risco de perda irreversível. O script faz isso com
+> backup automático antes, recusa rodar com o app aberto e lista no fim as
+> credenciais que sobreviveram:
+>
+> ```powershell
+> powershell -ExecutionPolicy Bypass -File scripts\instalar_atualizacao.ps1 -Zip D:\Pregoes_v1.1.9.zip
+> ```
+>
+> O checklist manual abaixo continua valendo como referência e plano B.
+
 - [ ] **Fechar o app** (janela do navegador E o console preto, se houver).
 - [ ] **Backup externo antes de tudo**: copiar a pasta `C:\Pregoes\data\`
       inteira para o pendrive (ou zipar com a data no nome).

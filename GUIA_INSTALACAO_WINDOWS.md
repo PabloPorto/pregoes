@@ -171,6 +171,34 @@ operadores.
 
 > O objetivo é trocar o **programa** sem encostar nos **dados** do cliente.
 
+### C0. Jeito automatizado (recomendado)
+
+O passo 3 abaixo — "apague tudo EXCETO a pasta `data\`" — é o ponto onde um
+deslize custa o catálogo, o aprendizado e as credenciais. Existe um script que
+faz o processo inteiro com rede de segurança:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\instalar_atualizacao.ps1 -Zip D:\Pregoes_v1.1.9.zip
+```
+
+O que ele garante, e que a mão humana costuma esquecer:
+
+- **Acha o `Pregoes.exe` de verdade.** Há instalações de campo com um nível a
+  mais (`C:\Pregoes\dist\Pregoes\`). Atualizar a pasta errada dá o pior tipo de
+  bug: "atualizei e não mudou nada".
+- **Recusa rodar com o app aberto** daquela pasta — arquivo travado deixa a
+  instalação pela metade.
+- **Zipa a `data\` antes** de tocar em qualquer coisa.
+- **Ignora um `data\` que venha dentro do .zip.** O pacote de build carrega o
+  banco de teste do desenvolvedor; copiá-lo por cima seria a perda irreversível.
+- **Lista no fim o que sobreviveu**: credenciais dos dois fornecedores, chave do
+  Gemini, pasta de backup do Drive, condição de pagamento e margem.
+
+Se mexer no script, rode antes `scripts\testar_instalar_atualizacao.ps1` — ele
+monta um cenário falso e valida que nada do cliente se perde.
+
+O passo a passo manual abaixo continua valendo como referência e plano B.
+
 1. **Feche o app**: a janela do navegador **e** a janela preta de console (se
    houver).
 2. **Backup externo primeiro** (inegociável): copie a pasta inteira
