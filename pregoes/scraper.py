@@ -807,6 +807,55 @@ def _resetar_playwright_compartilhado() -> None:
         _pw_driver = None
 
 
+_CHROME_VERSAO_FALLBACK = "131.0.0.0"
+
+
+def _user_agent_real(browser) -> str:
+    """User-Agent de Chrome comum, montado a partir da versão real do Chromium.
+
+    O Chromium headless anuncia ``HeadlessChrome/<versão>`` no User-Agent, e
+    AMBOS os fornecedores passaram a devolver **403 Forbidden** (117 bytes, sem
+    formulário) para qualquer requisição com essa assinatura — confirmado em
+    2026-08-31 com teste controlado: mesmo IP e mesmo instante, trocando só o
+    UA, o /entrar responde 403 com `HeadlessChrome` e 200 com `Chrome`.
+
+    O sintoma era enganoso: `page.goto()` NÃO levanta exceção em 403 (para o
+    Playwright a navegação "deu certo"), então a falha só aparecia 30s depois
+    como timeout do `input[name='email']`, apontando para o seletor errado.
+
+    Derivamos de `browser.version` em vez de fixar a string na mão porque o
+    Chromium é atualizado junto com o Playwright — um literal envelhece e volta
+    a destoar do motor que está de fato rodando.
+
+    Se a versão não estiver acessível (API do Playwright muda, dublê de teste),
+    cai num literal recente: um UA levemente desatualizado ainda passa pelo
+    filtro, enquanto estourar aqui derrubaria o login inteiro por causa de uma
+    string."""
+    try:
+        versao = browser.version or _CHROME_VERSAO_FALLBACK
+    except Exception:
+        versao = _CHROME_VERSAO_FALLBACK
+    return (f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            f"AppleWebKit/537.36 (KHTML, like Gecko) "
+            f"Chrome/{versao} Safari/537.36")
+
+
+def _abrir_pagina_login(page, url: str, fornecedor: str) -> None:
+    """Abre a página de login e FALHA RÁPIDO se o site recusou o acesso.
+
+    Sem a conferência de status, uma recusa do servidor (403 de bloqueio, 503
+    de manutenção) vira um timeout de 30s no primeiro seletor — erro que culpa
+    o campo de e-mail e esconde a causa real do operador e do log."""
+    resp = page.goto(url, wait_until="networkidle",
+                     timeout=config.SCRAPER_TIMEOUT_SEGUNDOS * 1000)
+    if resp is not None and resp.status >= 400:
+        raise RuntimeError(
+            f"O site da {fornecedor} recusou o acesso (HTTP {resp.status}). "
+            f"Isso é bloqueio ou indisponibilidade do site, não credencial "
+            f"errada — tente de novo em alguns minutos."
+        )
+
+
 class AlmeidaDistribuidor:
     """
     Scraper de almeidadistribuidor.com.br.
@@ -870,7 +919,12 @@ class AlmeidaDistribuidor:
                 _resetar_playwright_compartilhado()
                 self._playwright = _playwright_compartilhado()
                 self._browser = self._playwright.chromium.launch(headless=self._headless)
-            self._context = self._browser.new_context(viewport={"width": 1280, "height": 900})
+            # user_agent explícito: sem ele o headless se anuncia como
+            # `HeadlessChrome` e os dois sites respondem 403 (ver _user_agent_real).
+            self._context = self._browser.new_context(
+                viewport={"width": 1280, "height": 900},
+                user_agent=_user_agent_real(self._browser),
+            )
             self._page = self._context.new_page()
             # Bound de tempo por operação Playwright (navegação, espera de
             # seletor, clique). Centralizado em config.SCRAPER_TIMEOUT_SEGUNDOS
@@ -917,8 +971,7 @@ class AlmeidaDistribuidor:
             self._playwright = None
 
     def _login(self, page) -> None:
-        page.goto(f"{_BASE_URL_ALMEIDA}/entrar",
-                  wait_until="networkidle", timeout=config.SCRAPER_TIMEOUT_SEGUNDOS * 1000)
+        _abrir_pagina_login(page, f"{_BASE_URL_ALMEIDA}/entrar", self.nome)
         page.locator("input[name='email']").first.fill(self._email)
         senha_input = page.locator("input[name='senha']").first
         senha_input.fill(self._senha)
@@ -1162,7 +1215,12 @@ class DantasDistribuidora:
                 _resetar_playwright_compartilhado()
                 self._playwright = _playwright_compartilhado()
                 self._browser = self._playwright.chromium.launch(headless=self._headless)
-            self._context = self._browser.new_context(viewport={"width": 1280, "height": 900})
+            # user_agent explícito: sem ele o headless se anuncia como
+            # `HeadlessChrome` e os dois sites respondem 403 (ver _user_agent_real).
+            self._context = self._browser.new_context(
+                viewport={"width": 1280, "height": 900},
+                user_agent=_user_agent_real(self._browser),
+            )
             self._page = self._context.new_page()
             # Bound de tempo por operação Playwright (navegação, espera de
             # seletor, clique). Centralizado em config.SCRAPER_TIMEOUT_SEGUNDOS
@@ -1208,8 +1266,7 @@ class DantasDistribuidora:
             self._playwright = None
 
     def _login(self, page) -> None:
-        page.goto(f"{_BASE_URL_DANTAS}/entrar",
-                  wait_until="networkidle", timeout=config.SCRAPER_TIMEOUT_SEGUNDOS * 1000)
+        _abrir_pagina_login(page, f"{_BASE_URL_DANTAS}/entrar", self.nome)
         page.locator("input[name='email']").first.fill(self._email)
         senha_input = page.locator("input[name='senha']").first
         senha_input.fill(self._senha)

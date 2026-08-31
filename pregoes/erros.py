@@ -33,6 +33,21 @@ def mensagem_amigavel(exc: Exception, contexto: str = "") -> str:
         return ("A chave da IA (Gemini) parece inválida. Verifique em "
                 "Configurações → IA." + _RODAPE_LOG)
 
+    # Site do fornecedor RECUSOU o acesso (403/503). Vem antes da regra de
+    # login porque o operador não deve sair conferindo e-mail e senha: a
+    # credencial está certa, quem barrou foi o site. Sem esta regra a
+    # mensagem cairia no fallback genérico ("algo deu errado").
+    if "recusou o acesso" in texto:
+        forn = ""
+        if "almeida" in texto:
+            forn = " da Almeida"
+        elif "dantas" in texto:
+            forn = " da Dantas"
+        return (f"O site{forn} recusou o acesso agora — não é problema de "
+                "e-mail ou senha. Costuma ser bloqueio temporário por excesso "
+                "de acessos ou instabilidade do site. Espere alguns minutos e "
+                "tente de novo." + _RODAPE_LOG)
+
     # Login no fornecedor
     if ("cookies de sessão" in texto or "falha no login" in texto
             or "login" in texto):

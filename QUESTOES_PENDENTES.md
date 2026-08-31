@@ -579,7 +579,7 @@ textual.
 | Item | Decisão | Origem |
 |---|---|---|
 | Fornecedores | almeidadistribuidor.com.br + dantasdistribuidora.com.br, navegação pública | Resp. 1, 2 |
-| Anti-bot | Sem proteção visível, scraping autorizado pelos parceiros | Resp. 5, 6 |
+| Anti-bot | Scraping autorizado pelos parceiros, mas **NÃO é mais "sem proteção"**: desde ~ago/2026 os dois sites respondem 403 a User-Agent com `HeadlessChrome`. Resolvido em v1.1.9 mandando UA de Chrome comum | Resp. 5, 6 + campo 2026-08-31 |
 | Onde roda | Local na máquina do cliente, Streamlit em localhost:8501 | Resp. 11 + recomendação |
 | Operadores | Ele + 1 ajudante, dividem volume, mesmas permissões | Resp. 3, 12 |
 | Stack | 100% local, grátis, offline-first | Resp. 13 |

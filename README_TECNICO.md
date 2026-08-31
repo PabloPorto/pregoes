@@ -72,6 +72,33 @@ normal (1,45) a partir daí.
 - ❌ Não criamos abstrações para "futuros fornecedores" — quando aparecer
   o terceiro fornecedor, refatoramos com contexto real
 
+### User-Agent do scraper — por que não pode ser o default (2026-08-31)
+
+O Chromium headless se anuncia como `HeadlessChrome/<versão>` no User-Agent.
+Desde ~agosto/2026 **os dois fornecedores respondem 403** (117 bytes, sem
+formulário) a qualquer requisição com essa assinatura. Por isso
+`AlmeidaDistribuidor.__enter__` e `DantasDistribuidora.__enter__` passam
+`user_agent=_user_agent_real(browser)` ao `new_context()`.
+
+Comprovado com teste controlado — mesmo IP, mesmo instante, trocando só o UA:
+
+| User-Agent | HTTP | `input[name='email']` |
+|---|---|---|
+| `HeadlessChrome/147...` | 403 | ausente → timeout de 30s |
+| `Chrome/131...` | 200 | presente |
+
+`_user_agent_real` deriva a string de `browser.version` em vez de fixá-la, para
+não envelhecer a cada atualização do Chromium.
+
+**Armadilha de diagnóstico:** `page.goto()` **não levanta exceção em 403** — para
+o Playwright a navegação deu certo. O sintoma chegava ao suporte como
+`TimeoutError` no `input[name='email']`, culpando o seletor. Por isso o login
+passa por `_abrir_pagina_login`, que confere `response.status` e falha na hora
+com o status no texto. Se um dia o campo de e-mail "sumir", **confira o status
+HTTP antes de suspeitar do seletor**.
+
+O transporte HTTP (`_http_get`) manda `User-Agent: Mozilla/5.0` e não é afetado.
+
 ### Busca de preços em camadas (estado atual, 2026-06)
 
 Por item, do mais preciso ao mais cobertor:

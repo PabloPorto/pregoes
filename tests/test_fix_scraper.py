@@ -81,11 +81,16 @@ class _FakeContext:
 
 
 class _FakeBrowser:
+    # `version` existe porque `__enter__` monta o User-Agent a partir dela
+    # (`_user_agent_real`) — sem o atributo, o dublê exercitaria só o fallback.
+    version = "131.0.6778.86"
+
     def __init__(self, context):
         self._context = context
         self.fechado = False
 
     def new_context(self, *a, **k):
+        self.kwargs_context = k   # o teste do User-Agent inspeciona daqui
         return self._context
 
     def close(self):
@@ -400,3 +405,109 @@ def test_sem_duplicatas_sem_codigo_cai_para_desc_marca_preco():
         return ResultadoBusca(d, "X", p, "", "variacao", "almeida")
     out = _sem_duplicatas([r("CANO PVC", 2.0), r("CANO PVC", 2.0), r("CANO PVC", 9.0)])
     assert len(out) == 2   # os dois idênticos colapsam; o de preço diferente fica
+
+
+# === User-Agent: 403 dos fornecedores contra `HeadlessChrome` (campo 2026-08-31) ===
+#
+# Os dois sites passaram a devolver 403 (117 bytes, sem formulário) para
+# requisição cujo User-Agent contém `HeadlessChrome` — assinatura padrão do
+# Chromium headless. Como `page.goto()` NÃO levanta em 403, a falha só aparecia
+# 30s depois como timeout do `input[name='email']`, culpando o seletor errado.
+# Estes testes falhariam antes do fix.
+
+def test_user_agent_nao_anuncia_headless():
+    """A regressão que quebrou o cliente: UA com `HeadlessChrome` → 403."""
+    from pregoes.scraper import _user_agent_real
+
+    class _B:
+        version = "147.0.7727.15"
+
+    ua = _user_agent_real(_B())
+    assert "HeadlessChrome" not in ua, "UA headless é bloqueado com 403 pelos sites"
+    assert "Chrome/147.0.7727.15" in ua, "deve derivar da versão real do Chromium"
+
+
+def test_user_agent_cai_no_fallback_sem_versao():
+    """Sem `version` acessível, um UA levemente velho ainda passa — estourar
+    aqui derrubaria o login inteiro por causa de uma string."""
+    from pregoes.scraper import _user_agent_real, _CHROME_VERSAO_FALLBACK
+
+    class _BSemVersao:
+        @property
+        def version(self):
+            raise AttributeError("API mudou")
+
+    ua = _user_agent_real(_BSemVersao())
+    assert _CHROME_VERSAO_FALLBACK in ua
+    assert "HeadlessChrome" not in ua
+
+
+@pytest.mark.parametrize("classe", [AlmeidaDistribuidor, DantasDistribuidora])
+def test_enter_passa_user_agent_ao_criar_contexto(monkeypatch, classe):
+    """Não basta a função existir: o `__enter__` precisa de fato entregar o
+    `user_agent` ao `new_context` — nos DOIS fornecedores."""
+    fake_pw, browser = _montar_fake(_COOKIES_LOGIN_OK)
+    _instalar_fake_playwright(monkeypatch, fake_pw)
+
+    forn = classe(email="x@y", senha="z")
+    forn.__enter__()
+
+    ua = browser.kwargs_context.get("user_agent")
+    assert ua, "sem user_agent explícito o Chromium se anuncia como HeadlessChrome"
+    assert "HeadlessChrome" not in ua
+    assert browser.kwargs_context.get("viewport") == {"width": 1280, "height": 900}
+
+
+# === Falha rápida quando o site RECUSA o acesso ===
+
+def test_abrir_pagina_login_levanta_em_403():
+    """403 tem que virar erro imediato e nomeado, não timeout de 30s no
+    seletor seguinte."""
+    from pregoes.scraper import _abrir_pagina_login
+
+    class _Resp:
+        status = 403
+
+    class _Pg:
+        def goto(self, url, **kw):
+            return _Resp()
+
+    with pytest.raises(RuntimeError) as e:
+        _abrir_pagina_login(_Pg(), "https://x/entrar", "almeida")
+
+    msg = str(e.value)
+    assert "403" in msg, "o status precisa aparecer para o suporte diagnosticar"
+    assert "almeida" in msg.lower()
+
+
+def test_abrir_pagina_login_segue_em_200_e_sem_resposta():
+    """200 passa direto; `None` (dublê/redirect sem resposta) não pode
+    virar falso positivo de bloqueio."""
+    from pregoes.scraper import _abrir_pagina_login
+
+    class _Resp:
+        status = 200
+
+    class _PgOk:
+        def goto(self, url, **kw):
+            return _Resp()
+
+    class _PgNone:
+        def goto(self, url, **kw):
+            return None
+
+    _abrir_pagina_login(_PgOk(), "https://x/entrar", "almeida")    # não levanta
+    _abrir_pagina_login(_PgNone(), "https://x/entrar", "dantas")   # não levanta
+
+
+def test_mensagem_amigavel_do_403_nao_culpa_a_senha():
+    """O operador não pode ser mandado conferir e-mail/senha quando quem
+    barrou foi o site — nem cair no fallback genérico 'algo deu errado'."""
+    from pregoes.erros import mensagem_amigavel
+
+    msg = mensagem_amigavel(
+        RuntimeError("O site da almeida recusou o acesso (HTTP 403)."))
+
+    assert "Almeida" in msg
+    assert "não é problema de e-mail ou senha" in msg
+    assert "Algo deu errado" not in msg
