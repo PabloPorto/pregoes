@@ -36,6 +36,13 @@
 .PARAMETER PastaBackup
     Onde guardar o backup da `data\`. Padrão: a área de trabalho do usuário.
 
+.PARAMETER InstalacaoNova
+    Permite instalar numa máquina que NUNCA teve o sistema. Sem este switch o
+    script recusa quando não encontra instalação no -Destino, e vasculha a
+    máquina para dizer onde ela está de fato. Sem essa trava, um -Destino
+    errado criaria uma segunda instalação enquanto o cliente continua abrindo
+    a antiga — e o operador iria embora achando que atualizou.
+
 .EXAMPLE
     .\instalar_atualizacao.ps1 -Zip D:\Pregoes_v1.1.9.zip
 
@@ -49,7 +56,12 @@ param(
 
     [string]$Destino = "C:\Pregoes",
 
-    [string]$PastaBackup = [Environment]::GetFolderPath("Desktop")
+    [string]$PastaBackup = [Environment]::GetFolderPath("Desktop"),
+
+    # Sem este switch, o script RECUSA instalar onde não há instalação anterior
+    # — protege contra -Destino errado, que criaria uma segunda instalação e
+    # deixaria o cliente rodando a antiga.
+    [switch]$InstalacaoNova
 )
 
 $ErrorActionPreference = "Stop"
@@ -108,10 +120,47 @@ if (Test-Path -LiteralPath $Destino) {
 
 $instalacaoNova = $false
 if ($null -eq $raizApp) {
+    # NÃO seguir sozinho como "instalação nova". Se o -Destino estiver errado
+    # (pasta com outro nome, outra letra de disco), instalar aqui criaria uma
+    # SEGUNDA instalação enquanto o cliente continua abrindo a antiga, quebrada
+    # — e o operador iria embora achando que atualizou. Exigimos o switch
+    # explícito e, antes de desistir, procuramos o Pregoes.exe pela máquina
+    # para dizer onde ele está de fato.
+    if (-not $InstalacaoNova) {
+        Aviso "Nenhuma instalação do Pregões em: $Destino"
+        Write-Host "  Procurando em outros lugares (pode levar um minuto)..." -ForegroundColor DarkGray
+
+        $achados = @()
+        $raizes = @("C:\", $env:USERPROFILE, "D:\", "E:\") |
+                  Where-Object { $_ -and (Test-Path -LiteralPath $_) } |
+                  Select-Object -Unique
+        foreach ($r in $raizes) {
+            $achados += Get-ChildItem -LiteralPath $r -Filter "Pregoes.exe" -Recurse -File `
+                            -ErrorAction SilentlyContinue |
+                        Where-Object { Test-Path -LiteralPath (Join-Path $_.Directory.FullName "_internal") }
+        }
+        $achados = @($achados | Sort-Object FullName -Unique)
+
+        if ($achados.Count -gt 0) {
+            Write-Host "`n  Encontrei instalação(ões) aqui:" -ForegroundColor Yellow
+            $achados | ForEach-Object { Write-Host "       $($_.Directory.FullName)" -ForegroundColor Yellow }
+            Erro @"
+O -Destino aponta para o lugar errado.
+Rode de novo usando um dos caminhos acima, por exemplo:
+
+  -Destino "$($achados[0].Directory.FullName)"
+"@
+        }
+        Erro @"
+Não achei nenhuma instalação do Pregões nesta máquina.
+Confira o caminho e passe em -Destino a pasta que contém o Pregoes.exe.
+Se esta máquina NUNCA teve o sistema e você quer instalar do zero,
+rode de novo acrescentando:  -InstalacaoNova
+"@
+    }
     $instalacaoNova = $true
     $raizApp = $Destino
-    Aviso "Nenhum Pregoes.exe encontrado — tratando como INSTALAÇÃO NOVA."
-    Aviso "Se esta máquina JÁ tinha o sistema, pare agora (Ctrl+C) e confira o -Destino."
+    Aviso "INSTALAÇÃO NOVA em $Destino (pedida com -InstalacaoNova)."
 } else {
     Ok "Instalação encontrada em: $raizApp"
 }
