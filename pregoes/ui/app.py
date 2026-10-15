@@ -1027,7 +1027,8 @@ def _persistir_edital(itens: list, selecoes: dict, destino, markup) -> None:
 
 # === Tela: HISTÓRICO ===
 def _data_amigavel(criado_em: str | None) -> str:
-    """Converte o timestamp do banco ('AAAA-MM-DD HH:MM:SS') para 'DD/MM HH:MM'.
+    """Converte o timestamp do banco ('AAAA-MM-DD HH:MM:SS', em UTC — é o
+    CURRENT_TIMESTAMP do SQLite) para 'DD/MM HH:MM' no horário de Brasília.
 
     Tolerante: se o formato não bater (banco antigo, valor nulo), devolve o
     texto cru — nunca estoura exceção na cara do operador.
@@ -1035,8 +1036,9 @@ def _data_amigavel(criado_em: str | None) -> str:
     if not criado_em:
         return "data desconhecida"
     try:
-        from datetime import datetime as _dt
-        return _dt.strptime(criado_em[:19], "%Y-%m-%d %H:%M:%S").strftime("%d/%m %H:%M")
+        from datetime import datetime as _dt, timezone as _tz
+        utc = _dt.strptime(criado_em[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=_tz.utc)
+        return utc.astimezone(config.FUSO_HORARIO).strftime("%d/%m %H:%M")
     except (ValueError, TypeError):
         return str(criado_em)
 
