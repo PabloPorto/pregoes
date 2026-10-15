@@ -801,3 +801,26 @@ de proposta (sem a tabela com preço) sairia com esses itens mal-parseados.
 referência). **Resolver se aparecer:** ensinar o detector de cabeçalho a mapear
 a coluna MARCA/MODELO (alinhar UNIDADE/QUANTIDADE/PREÇO corretamente na tabela
 de 7 colunas).
+
+### Q19. Sair da máquina única para um servidor — ✅ DECIDIDA (2026-10-15, pelo responsável)
+
+**Contexto.** O cliente precisa usar o sistema em mais de um computador do
+escritório, e manter o `.exe` (build + instalação à distância) ficou caro. O
+responsável está fora do país, sem acesso à máquina do cliente. Plano e roteiro
+em **`PLANO_SERVIDOR.md`**. Revisa a decisão fechada "Onde roda: local na
+máquina do cliente" (CLAUDE.md §7) e o princípio de não levar dados para fora da
+máquina (§9) — atualizar o CLAUDE.md quando o servidor for validado.
+
+**Decisão (o responsável tem autonomia para decidir pelo cliente):**
+1. VPS Hostinger KVM 1 em São Paulo, 1 mês no plano mensal para validar.
+   Descartados: Oracle Free (cadastro recusado), AWS (créditos de só 6 meses),
+   GCP (1 GB de RAM, só EUA), PC do escritório (exige configurar no local).
+2. Acesso pelo Cloudflare Tunnel + Access (código no e-mail, só e-mails
+   autorizados), com domínio `.com.br` próprio.
+3. Um único login por fornecedor: a fila única do scraper mantém UMA sessão por
+   fornecedor, como hoje.
+4. Dados migram pelo `Pregoes_backup.zip` do Google Drive do cliente.
+5. Caminho mais simples sempre.
+
+**Condição.** Vale se o teste de IP (Fase 1) passar; se os fornecedores
+bloquearem o IP da VPS, pedir reembolso e repensar.

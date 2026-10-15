@@ -1,0 +1,17 @@
+# Serviço do Pregões no servidor (systemd). Instalado por deploy/instalar_servidor.sh.
+# Sobe sozinho com a máquina e reinicia se cair. Log: journalctl -u pregoes -f
+[Unit]
+Description=Pregoes (Streamlit)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=pregoes
+WorkingDirectory=/home/pregoes/pregoes
+Environment=PREGOES_SERVIDOR=1
+ExecStart=/home/pregoes/pregoes/.venv/bin/python run_app.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

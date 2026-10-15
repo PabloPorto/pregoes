@@ -194,7 +194,10 @@ def main() -> None:
     # pt-BR (navegador não traduz/quebra) + neutraliza os atalhos "c"/"r"
     _ajustar_pagina_streamlit()
     app_path = _resource(os.path.join("pregoes", "ui", "app.py"))
-    threading.Thread(target=_abrir_navegador, daemon=True).start()
+    # No servidor (deploy/pregoes.service) não há tela: os operadores acessam
+    # de outros computadores, então não abrimos navegador local.
+    if not os.environ.get("PREGOES_SERVIDOR"):
+        threading.Thread(target=_abrir_navegador, daemon=True).start()
     sys.argv = ["streamlit", "run", app_path, *_flags_config()]
     from streamlit.web import cli as stcli
     sys.exit(stcli.main())
