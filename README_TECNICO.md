@@ -99,6 +99,27 @@ HTTP antes de suspeitar do seletor**.
 
 O transporte HTTP (`_http_get`) manda `User-Agent: Mozilla/5.0` e não é afetado.
 
+### Sessão do Streamlit e retomada do pregão (2026-10)
+
+Recarregar a aba cria uma sessão NOVA do Streamlit (`session_state` vazio).
+Em campo isso acontece sem o operador perceber: o Chrome descarta abas em
+segundo plano para poupar memória (ele troca de aba enquanto a busca demora),
+o PC hiberna, um F5 sem querer. Antes, o operador caía no Início no meio do
+pregão ("volta para a página inicial").
+
+- O trabalho em si já sobrevivia: o autosave grava o rascunho do pregão a cada
+  render (`_salvar_rascunho`, `data/rascunhos/<slug>.pkl`).
+- O que faltava era a aba saber QUAL pregão retomar: o slug fica na URL
+  (`?pregao=<slug>`, `_marcar_pregao_na_url`). Recarregar mantém a URL; numa
+  sessão nova, `_retomar_pregao_da_url` restaura o rascunho e volta à tela de
+  trabalho. Uma aba nova (o `.exe` abre o endereço limpo) continua no Início.
+- Slug inválido ou rascunho inexistente (descartado em outra aba) → limpa a
+  URL e fica no Início. O slug é validado (`[a-z0-9-]`) antes de virar caminho.
+- Rede de segurança no roteador (`_renderizar_tela`): erro inesperado numa
+  tela vira aviso em PT-BR com "Tentar de novo" / "Ir para o Início" e
+  traceback no `pregoes.log`, em vez da tela de erro do Streamlit (em inglês).
+  `st.rerun()`/`st.stop()` passam (são `BaseException` no Streamlit).
+
 ### Busca de preços em camadas (estado atual, 2026-06)
 
 Por item, do mais preciso ao mais cobertor:

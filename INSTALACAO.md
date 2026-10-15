@@ -49,7 +49,7 @@
 > credenciais que sobreviveram:
 >
 > ```powershell
-> powershell -ExecutionPolicy Bypass -File scripts\instalar_atualizacao.ps1 -Zip D:\Pregoes_v1.1.9.zip
+> powershell -ExecutionPolicy Bypass -File scripts\instalar_atualizacao.ps1 -Zip D:\Pregoes_v1.1.10.zip
 > ```
 >
 > O checklist manual abaixo continua valendo como referência e plano B.

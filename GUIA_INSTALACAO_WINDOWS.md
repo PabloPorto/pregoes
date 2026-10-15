@@ -178,7 +178,7 @@ deslize custa o catálogo, o aprendizado e as credenciais. Existe um script que
 faz o processo inteiro com rede de segurança:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\instalar_atualizacao.ps1 -Zip D:\Pregoes_v1.1.9.zip
+powershell -ExecutionPolicy Bypass -File scripts\instalar_atualizacao.ps1 -Zip D:\Pregoes_v1.1.10.zip
 ```
 
 O que ele garante, e que a mão humana costuma esquecer:

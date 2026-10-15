@@ -87,6 +87,9 @@ if "backup_feito" not in st.session_state:
 # === Estado da sessão ===
 if "tela" not in st.session_state:
     st.session_state.tela = "home"
+    # Sessão NOVA: pode ser um recarregamento da aba no meio de um pregão —
+    # tratado por _retomar_pregao_da_url(), antes do roteador.
+    st.session_state["_sessao_nova"] = True
 if "extracao" not in st.session_state:
     st.session_state.extracao = None
 if "df_editavel" not in st.session_state:
@@ -2170,6 +2173,12 @@ def _restaurar_rascunho(estado: dict, slug: str | None = None) -> None:
     _limpar_busca_por_item()   # não herda buscas manuais de outro pregão
     for k, v in estado.items():
         st.session_state[k] = v
+    # As telas leem estas chaves por ATRIBUTO (como o boot as deixa). O pop
+    # acima as removeu e o snapshot não traz df_editavel (fica de fora de
+    # propósito) — sem isto, 'Continuar' um pregão parado na revisão quebrava
+    # com AttributeError (achado 2026-10, validando a retomada pela URL).
+    st.session_state.setdefault("extracao", None)
+    st.session_state.setdefault("df_editavel", None)
     st.session_state.pop("_rascunho_disponivel", None)
     st.session_state["_rascunho_slug"] = (
         slug or rascunho.slug_de(estado.get("orgao"), estado.get("numero")))
@@ -2180,6 +2189,48 @@ def _restaurar_rascunho(estado: dict, slug: str | None = None) -> None:
     # "home" e 'Continuar' o deixava preso lá (feedback 2026-07-06). Mesmo
     # cálculo do "Continuar o atual" do modal, para os dois caminhos baterem.
     st.session_state["tela"] = _tela_pregao_em_andamento()
+
+
+# === Retomada após recarregar a aba ===
+# Recarregar a página cria uma sessão NOVA do Streamlit (session_state vazio) e
+# o operador caía no Início no meio do pregão — relato de campo 2026-10 ("vou
+# pesquisar um item e volta para a página inicial"). Gatilhos comuns: o Chrome
+# DESCARTA abas em segundo plano para poupar memória (o operador troca de aba
+# enquanto a busca demora; ao voltar, a aba recarrega), PC que hibernou, F5 sem
+# querer. O trabalho já estava salvo (autosave do rascunho); faltava a aba saber
+# QUAL pregão retomar. Guardamos o slug na URL (?pregao=...): recarregar mantém
+# a URL, e uma aba nova (o .exe abre o endereço limpo) continua indo ao Início.
+_PARAM_PREGAO = "pregao"
+_RE_SLUG = re.compile(r"[a-z0-9-]{1,80}")   # formato de rascunho.novo_slug
+
+
+def _marcar_pregao_na_url() -> None:
+    """Mantém ``?pregao=<slug>`` na URL enquanto esta aba tem um pregão
+    carregado (o slug nasce no 1º autosave e sai em _limpar_pregao)."""
+    slug = st.session_state.get("_rascunho_slug")
+    atual = st.query_params.get(_PARAM_PREGAO)
+    if slug and atual != slug:
+        st.query_params[_PARAM_PREGAO] = slug
+    elif not slug and atual:
+        del st.query_params[_PARAM_PREGAO]
+
+
+def _retomar_pregao_da_url() -> None:
+    """Numa sessão nova, se a URL aponta um pregão com rascunho no disco,
+    restaura-o e volta direto à tela de trabalho. Slug inválido ou rascunho
+    inexistente (descartado em outra aba): limpa a URL e segue no Início."""
+    slug = st.query_params.get(_PARAM_PREGAO)
+    if not slug:
+        return
+    from pregoes import rascunho
+    estado = None
+    if _RE_SLUG.fullmatch(slug):
+        estado = rascunho.carregar_pregao(slug)
+    if estado:
+        _restaurar_rascunho(estado, slug)
+        _log.info("sessão nova: pregão '%s' retomado pela URL (aba recarregada)", slug)
+    else:
+        del st.query_params[_PARAM_PREGAO]
 
 
 def _filtrar_rascunhos_finalizados(pendentes: list) -> list:
@@ -3693,11 +3744,39 @@ TELAS = {
     "configuracoes": tela_configuracoes,
 }
 
+def _renderizar_tela() -> None:
+    """Despacha a tela atual com uma rede de segurança: um erro inesperado vira
+    aviso em português com saída (tentar de novo / Início) e traceback no
+    pregoes.log — em vez da mensagem genérica do Streamlit, em inglês e sem
+    caminho de volta. O rascunho segue salvo (o autosave roda depois disto).
+    Não engole st.rerun()/st.stop(): no Streamlit eles derivam de BaseException."""
+    tela = st.session_state.tela
+    try:
+        TELAS.get(tela, tela_home)()
+    except Exception as exc:
+        _log.exception("erro inesperado na tela '%s'", tela)
+        style.bloco_aviso(
+            f"{erros.mensagem_amigavel(exc, 'mostrar esta tela')}<br>"
+            "<b>Seu trabalho está salvo.</b> Se o erro repetir, vá ao Início e "
+            "use <b>Continuar</b> no pregão.",
+            tipo="danger")
+        col_de_novo, col_inicio = st.columns(2)
+        if col_de_novo.button("Tentar de novo", type="primary", width="stretch",
+                              key="erro_tela_de_novo"):
+            st.rerun()
+        if col_inicio.button("Ir para o Início", width="stretch",
+                             key="erro_tela_inicio"):
+            ir_para("home")
+
+
+if st.session_state.pop("_sessao_nova", False):
+    _retomar_pregao_da_url()
 _renderizar_sidebar()
 # Ao fim de cada render, autosalva o rascunho do pregão em curso; a lista de
 # pregões guardados vive na HOME (cards de retomada — auditoria de UI 2026-07).
-TELAS[st.session_state.tela]()
+_renderizar_tela()
 _salvar_rascunho()
+_marcar_pregao_na_url()
 
 # Confirmação de "Novo pregão" — aberta aqui, no nível superior do script
 # (fora do `with st.sidebar`), para o modal não renderizar dentro da sidebar.

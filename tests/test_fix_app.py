@@ -693,6 +693,128 @@ def test_rascunho_salva_apagao_e_restaura_identico(monkeypatch, tmp_path):
     ss.clear()
 
 
+def test_erro_inesperado_na_tela_vira_aviso_em_portugues(monkeypatch):
+    """Erro não tratado numa tela: aviso PT-BR com saída, e o script segue
+    (o autosave do rascunho roda depois) — não a tela de erro do Streamlit."""
+    def _quebra():
+        raise ValueError("boom")
+    avisos = []
+    monkeypatch.setitem(app.TELAS, "revisao", _quebra)
+    monkeypatch.setattr(app.style, "bloco_aviso",
+                        lambda msg, tipo="info": avisos.append((tipo, msg)))
+    ss = app.st.session_state
+    ss.clear(); ss["tela"] = "revisao"
+    app._renderizar_tela()                            # não levanta
+    assert avisos and avisos[0][0] == "danger"
+    assert "Seu trabalho está salvo" in avisos[0][1]
+    ss.clear()
+
+
+def test_rede_de_seguranca_nao_engole_rerun_nem_stop(monkeypatch):
+    # st.rerun()/st.stop() são BaseException no Streamlit: têm que passar.
+    class _Rerun(BaseException):
+        pass
+
+    def _tela_que_navega():
+        raise _Rerun()
+    monkeypatch.setitem(app.TELAS, "revisao", _tela_que_navega)
+    ss = app.st.session_state
+    ss.clear(); ss["tela"] = "revisao"
+    with pytest.raises(_Rerun):
+        app._renderizar_tela()
+    ss.clear()
+
+
+def test_tela_desconhecida_cai_no_inicio(monkeypatch):
+    # Rascunho antigo com nome de tela que não existe mais não pode quebrar.
+    chamadas = []
+    monkeypatch.setattr(app, "tela_home", lambda: chamadas.append("home"))
+    ss = app.st.session_state
+    ss.clear(); ss["tela"] = "tela_que_nao_existe"
+    app._renderizar_tela()
+    assert chamadas == ["home"]
+    ss.clear()
+
+
+def test_continuar_pregao_parado_na_revisao_nao_quebra(monkeypatch, tmp_path):
+    """O rascunho NÃO guarda df_editavel e a restauração removia a chave da
+    sessão: a tela de revisão lia st.session_state.df_editavel e quebrava com
+    AttributeError ao 'Continuar' (ou retomar pela URL) um pregão parado ali."""
+    rascunho = _isolar_rascunhos(monkeypatch, tmp_path)
+    ss = app.st.session_state
+    ss.clear()
+    ss["extracao"] = {"itens": ["LUVA"]}             # extraído, ainda sem busca
+    ss["df_editavel"] = "tabela-em-edicao"
+    ss["orgao"] = "Prefeitura"; ss["numero"] = "004/2026"; ss["tela"] = "revisao"
+    app._salvar_rascunho()
+    slug = ss["_rascunho_slug"]
+
+    ss.clear()                                       # sessão nova (boot)
+    ss["tela"] = "home"; ss["extracao"] = None; ss["df_editavel"] = None
+    app._restaurar_rascunho(rascunho.carregar_pregao(slug), slug)
+    assert ss["tela"] == "revisao"
+    assert ss["extracao"] == {"itens": ["LUVA"]}
+    assert "df_editavel" in ss and ss["df_editavel"] is None   # revisão reconstrói
+    ss.clear()
+
+
+def test_url_acompanha_o_pregao_carregado(monkeypatch, tmp_path):
+    """Com um pregão carregado, a URL guarda ?pregao=<slug> (é o que sobrevive
+    ao recarregar a aba); ao descartar o pregão, o parâmetro sai."""
+    _isolar_rascunhos(monkeypatch, tmp_path)
+    qp = {}
+    monkeypatch.setattr(app.st, "query_params", qp, raising=False)
+    ss = app.st.session_state
+    ss.clear()
+    _pregao_na_sessao(ss, "Prefeitura", "002/2026")
+
+    app._salvar_rascunho()
+    app._marcar_pregao_na_url()
+    assert qp["pregao"] == ss["_rascunho_slug"]
+
+    app._limpar_pregao()
+    app._marcar_pregao_na_url()
+    assert "pregao" not in qp
+    ss.clear()
+
+
+def test_aba_recarregada_retoma_o_pregao_da_url(monkeypatch, tmp_path):
+    """Relato de campo 2026-10: recarregar a aba (Chrome descarta abas em
+    segundo plano) criava sessão nova e jogava o operador no Início. Com o slug
+    na URL, a sessão nova restaura o pregão e volta à tela de trabalho."""
+    _isolar_rascunhos(monkeypatch, tmp_path)
+    qp = {}
+    monkeypatch.setattr(app.st, "query_params", qp, raising=False)
+    ss = app.st.session_state
+    ss.clear()
+    _pregao_na_sessao(ss, "Prefeitura", "003/2026", codigo="7777")
+    app._salvar_rascunho()
+    app._marcar_pregao_na_url()
+
+    ss.clear(); ss["tela"] = "home"                   # aba recarregada
+    app._retomar_pregao_da_url()
+    assert ss["tela"] == "busca_precos"
+    assert ss["selecoes"][0].codigo_fornecedor == "7777"
+    assert qp["pregao"] == ss["_rascunho_slug"]
+    ss.clear()
+
+
+@pytest.mark.parametrize("slug", ["nao-existe", "../../data/pregoes", "X"])
+def test_url_com_pregao_inexistente_ou_invalido_fica_no_inicio(monkeypatch, tmp_path, slug):
+    """Rascunho descartado em outra aba, ou URL adulterada: não restaura nada,
+    não lê fora da pasta de rascunhos, limpa a URL e segue no Início."""
+    _isolar_rascunhos(monkeypatch, tmp_path)
+    qp = {"pregao": slug}
+    monkeypatch.setattr(app.st, "query_params", qp, raising=False)
+    ss = app.st.session_state
+    ss.clear(); ss["tela"] = "home"
+    app._retomar_pregao_da_url()
+    assert ss["tela"] == "home"
+    assert "itens_revisados" not in ss
+    assert "pregao" not in qp
+    ss.clear()
+
+
 def test_rascunho_nao_salva_sem_pregao_em_andamento(monkeypatch, tmp_path):
     rascunho = _isolar_rascunhos(monkeypatch, tmp_path)
     app.st.session_state.clear()                      # nada em andamento
