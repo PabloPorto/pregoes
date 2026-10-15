@@ -120,6 +120,24 @@ pregão ("volta para a página inicial").
   traceback no `pregoes.log`, em vez da tela de erro do Streamlit (em inglês).
   `st.rerun()`/`st.stop()` passam (são `BaseException` no Streamlit).
 
+### Thread dona dos navegadores (2026-10)
+
+O Playwright sync é preso à thread que o criou, e no Streamlit cada clique roda
+numa thread nova. Antes, a partir do 2º clique a sessão viva relogava à toa e o
+navegador antigo ficava órfão (driver + Chromium somando ao longo do dia). Agora
+TODO trabalho de navegador passa por `scraper.no_navegador()`: uma thread
+permanente, em fila, uma operação por vez.
+
+- Quem chama espera o resultado; callbacks de progresso (`progresso`,
+  `progresso_callback`) voltam para a thread chamadora (o Streamlit só desenha
+  dela). Tela interrompida (rerun) → a operação aborta no próximo aviso
+  (`OperacaoInterrompida`, BaseException) e libera a fila.
+- Na busca em lote, login + busca de todos os fornecedores são UMA operação:
+  outro operador não troca a sessão no meio.
+- Regra para código novo: nada de chamar Playwright direto da tela. Use as
+  funções públicas do scraper (já passam pela fila) ou `no_navegador(fn, ...)`.
+- Troca aceita: com dois operadores, uma busca pode esperar a outra.
+
 ### Busca de preços em camadas (estado atual, 2026-06)
 
 Por item, do mais preciso ao mais cobertor:

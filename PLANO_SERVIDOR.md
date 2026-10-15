@@ -79,9 +79,14 @@ Legenda: 👤 = você · 🤖 = eu
 - 🤖 Abrir o app pelo túnel SSH (`ssh -L 8501:127.0.0.1:8501`) e repetir os
   testes no navegador: novo pregão, busca em lote, busca manual, gerar planilha,
   F5 no meio do pregão.
-- 🤖 **Scraper multiusuário** (1–2 dias): uma thread dona dos navegadores + fila,
-  para dois operadores ao mesmo tempo sem relogin em excesso e sem um "Novo
-  pregão" fechar o navegador do outro.
+- ✅ **Scraper multiusuário** (2026-10-15, commit 1a4eb70): uma thread dona dos
+  navegadores + fila (`scraper.no_navegador`). Validado no servidor com os sites
+  reais: 2º clique reusa a sessão (0,7 s, sem relogin), dois operadores ao mesmo
+  tempo OK, 1 login por fornecedor, nenhum Chromium órfão ao fechar.
+  **Troca aceita:** operações de navegador são uma por vez — a busca de um
+  operador pode esperar a do outro (a tela avisa "Aguardando a busca de outro
+  operador terminar…"). Medir na Fase 5; se incomodar, a evolução é uma fila
+  por fornecedor.
 
 ### Fase 3 — Acesso para o cliente (👤 ~30 min + 🤖 ~1 h)
 
