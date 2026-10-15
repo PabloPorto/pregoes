@@ -693,6 +693,30 @@ def test_rascunho_salva_apagao_e_restaura_identico(monkeypatch, tmp_path):
     ss.clear()
 
 
+def _aba_backup_com(monkeypatch, ultimo):
+    from pregoes import backup
+    monkeypatch.setattr(backup, "ultimo_envio_servidor", lambda: ultimo)
+    avisos = []
+    monkeypatch.setattr(app.style, "bloco_aviso",
+                        lambda msg, tipo="info": avisos.append((tipo, msg)))
+    app._aba_backup_servidor()
+    return [t for t, _ in avisos]
+
+
+def test_aba_backup_servidor_sem_envio_ainda_avisa(monkeypatch):
+    assert _aba_backup_com(monkeypatch, None) == ["info", "warning"]
+
+
+def test_aba_backup_servidor_envio_recente_ok(monkeypatch):
+    from datetime import datetime, timedelta
+    assert _aba_backup_com(monkeypatch, datetime.now() - timedelta(hours=5))         == ["info", "success"]
+
+
+def test_aba_backup_servidor_envio_velho_alerta(monkeypatch):
+    from datetime import datetime, timedelta
+    assert _aba_backup_com(monkeypatch, datetime.now() - timedelta(days=3))         == ["info", "danger"]
+
+
 def test_erro_inesperado_na_tela_vira_aviso_em_portugues(monkeypatch):
     """Erro não tratado numa tela: aviso PT-BR com saída, e o script segue
     (o autosave do rascunho roda depois) — não a tela de erro do Streamlit."""

@@ -76,12 +76,15 @@ if "backup_feito" not in st.session_state:
         _log.exception("falha no backup diário de boot")
     # Backup EXTERNO (Google Drive) — off-site, protege contra pane do disco C:.
     # Em thread para NÃO atrasar o boot; best-effort (nunca derruba o app).
-    try:
-        import threading
-        from pregoes import backup as _backup
-        threading.Thread(target=_backup.fazer_backup_externo, daemon=True).start()
-    except Exception:
-        _log.exception("falha ao disparar o backup externo no boot")
+    # No servidor não: lá o envio é o diário das 03:00 (pregoes-backup.timer),
+    # e cada operador abrindo o app dispararia um envio.
+    if not config.MODO_SERVIDOR:
+        try:
+            import threading
+            from pregoes import backup as _backup
+            threading.Thread(target=_backup.fazer_backup_externo, daemon=True).start()
+        except Exception:
+            _log.exception("falha ao disparar o backup externo no boot")
     st.session_state.backup_feito = True
 
 # === Estado da sessão ===
@@ -903,7 +906,7 @@ def _gerar_excel(itens: list, markup: float, selecoes: dict,
     try:
         import threading
         from pregoes import backup as _backup
-        threading.Thread(target=_backup.fazer_backup_externo, daemon=True).start()
+        threading.Thread(target=_backup.backup_externo_agora, daemon=True).start()
     except Exception:
         _log.exception("falha ao disparar o backup externo pós-geração")
 
@@ -1242,6 +1245,8 @@ def tela_historico():
 def tela_configuracoes():
     style.header_pagina(
         "Configurações",
+        "Credenciais dos fornecedores. Ficam guardadas no servidor do sistema, "
+        "com backup diário." if config.MODO_SERVIDOR else
         "Credenciais dos fornecedores. Tudo fica salvo apenas no seu "
         "computador, sem envio para servidores externos.",
     )
@@ -1416,7 +1421,10 @@ def tela_configuracoes():
         _aba_catalogo()
 
     with aba_backup:
-        _aba_backup_externo()
+        if config.MODO_SERVIDOR:
+            _aba_backup_servidor()
+        else:
+            _aba_backup_externo()
 
 
 # === Tela: BUSCA DE PREÇOS ===
@@ -3512,6 +3520,44 @@ def tela_mapeamento():
 
 
 # === Aba Backup (em Configurações) ===
+
+def _aba_backup_servidor():
+    """No servidor o backup é automático (deploy/backup_drive.sh, todo dia de
+    madrugada, para o Google Drive do responsável): não há pasta a configurar.
+    A aba só mostra quando foi o último envio e permite um envio na hora."""
+    from datetime import datetime, timedelta
+    from pregoes import backup as _backup
+
+    style.bloco_aviso(
+        "O sistema faz backup <b>sozinho</b>: todo dia de madrugada e a cada "
+        "planilha gerada, uma cópia completa (pregões, catálogo, histórico, "
+        "planilhas e credenciais) é guardada <b>fora do servidor</b>, com os "
+        "últimos 30 dias. Não precisa configurar nada.",
+        tipo="info",
+    )
+    ultimo = _backup.ultimo_envio_servidor()
+    if ultimo is None:
+        style.bloco_aviso(
+            "Ainda não houve nenhum backup. O primeiro acontece esta madrugada "
+            "— ou clique em <b>Fazer backup agora</b>.", tipo="warning")
+    elif datetime.now(ultimo.tzinfo) - ultimo > timedelta(days=2):
+        style.bloco_aviso(
+            f"O último backup é de <b>{ultimo:%d/%m/%Y às %H:%M}</b> — há mais de "
+            "2 dias. Clique em <b>Fazer backup agora</b>; se não funcionar, fale "
+            "com o suporte.", tipo="danger")
+    else:
+        style.bloco_aviso(
+            f"Último backup: <b>{ultimo:%d/%m/%Y às %H:%M}</b>.", tipo="success")
+
+    if st.button("Fazer backup agora", key="backup_servidor_agora"):
+        with st.spinner("Fazendo o backup…"):
+            ok = _backup.enviar_backup_servidor()
+        if ok:
+            st.rerun()      # redesenha com a data do envio que acabou de acontecer
+        style.bloco_aviso(
+            "Não consegui fazer o backup agora. Tente de novo em alguns minutos; "
+            "se persistir, fale com o suporte.", tipo="danger")
+
 
 def _aba_backup_externo():
     """Backup FORA da máquina (Google Drive) — protege contra pane/perda do

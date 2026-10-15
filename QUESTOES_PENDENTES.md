@@ -819,7 +819,8 @@ máquina (§9) — atualizar o CLAUDE.md quando o servidor for validado.
    autorizados), com domínio `.com.br` próprio.
 3. Um único login por fornecedor: a fila única do scraper mantém UMA sessão por
    fornecedor, como hoje.
-4. Dados migram pelo `Pregoes_backup.zip` do Google Drive do cliente.
+4. Sem migração: o servidor começa do zero — o cliente não tem dados que
+   precisem ser levados (decidido em 2026-10-15).
 5. Caminho mais simples sempre.
 
 **Condição.** Vale se o teste de IP (Fase 1) passar; se os fornecedores

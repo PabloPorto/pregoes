@@ -150,3 +150,43 @@ def test_pasta_em_branco_desliga(ambiente):
     _data, _drive = ambiente
     credenciais.salvar_pasta_backup("")
     assert credenciais.carregar_pasta_backup() is None
+
+
+# === Servidor: backup no Google Drive via deploy/backup_drive.sh (2026-10) ===
+
+def test_ultimo_envio_servidor_le_a_data_gravada_pelo_script(tmp_path, monkeypatch):
+    monkeypatch.setattr(backup, "PASTA_BACKUP_SERVIDOR", tmp_path)
+    assert backup.ultimo_envio_servidor() is None            # nunca enviou
+    (tmp_path / "ultimo_envio.txt").write_text("2026-10-15T03:01:22-03:00\n",
+                                               encoding="utf-8")
+    quando = backup.ultimo_envio_servidor()
+    assert (quando.day, quando.hour, quando.minute) == (15, 3, 1)
+    (tmp_path / "ultimo_envio.txt").write_text("lixo", encoding="utf-8")
+    assert backup.ultimo_envio_servidor() is None            # ilegível ≠ ok
+
+
+@pytest.mark.parametrize("codigo,esperado", [(0, True), (1, False)])
+def test_enviar_backup_servidor_reflete_o_script(monkeypatch, codigo, esperado):
+    import subprocess as _sp
+    monkeypatch.setattr(backup.subprocess, "run", lambda *a, **k:
+                        _sp.CompletedProcess(a, codigo, "Backup enviado", "erro"))
+    assert backup.enviar_backup_servidor() is esperado
+
+
+def test_enviar_backup_servidor_nunca_levanta(monkeypatch):
+    def _explode(*_a, **_k):
+        raise OSError("bash ausente")
+    monkeypatch.setattr(backup.subprocess, "run", _explode)
+    assert backup.enviar_backup_servidor() is False
+
+
+@pytest.mark.parametrize("servidor", [True, False])
+def test_backup_externo_agora_escolhe_o_caminho_certo(monkeypatch, servidor):
+    chamou = []
+    monkeypatch.setattr(config, "MODO_SERVIDOR", servidor)
+    monkeypatch.setattr(backup, "enviar_backup_servidor",
+                        lambda: chamou.append("drive") or True)
+    monkeypatch.setattr(backup, "fazer_backup_externo",
+                        lambda *a: chamou.append("pasta") or "zip")
+    assert backup.backup_externo_agora() is True
+    assert chamou == (["drive"] if servidor else ["pasta"])

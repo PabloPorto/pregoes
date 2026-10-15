@@ -13,9 +13,11 @@ from __future__ import annotations
 import os
 import shutil
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import zipfile
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -97,6 +99,51 @@ def fazer_backup_externo(destino_dir: "str | Path | None" = None) -> Optional[Pa
     finally:
         if tmp_dir is not None:
             shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+# === Servidor: backup no Google Drive do responsável (deploy/backup_drive.sh) ===
+# No servidor não há Google Drive Desktop: o script gera o mesmo zip numa pasta
+# local e o rclone envia ao Drive (todo dia às 03:00 pelo pregoes-backup.timer).
+PASTA_BACKUP_SERVIDOR = Path.home() / "backup-drive"
+_ULTIMO_ENVIO = "ultimo_envio.txt"      # gravado pelo script após enviar
+
+
+def _script_backup_servidor() -> Path:
+    return config.BASE_DIR / "deploy" / "backup_drive.sh"
+
+
+def ultimo_envio_servidor() -> Optional[datetime]:
+    """Quando o último backup chegou ao Drive (None se nunca, ou ilegível)."""
+    try:
+        texto = (PASTA_BACKUP_SERVIDOR / _ULTIMO_ENVIO).read_text(encoding="utf-8")
+        return datetime.fromisoformat(texto.strip())
+    except (OSError, ValueError):
+        return None
+
+
+def enviar_backup_servidor() -> bool:
+    """Roda o envio ao Drive na hora. Nunca levanta: falha vira log + False."""
+    try:
+        r = subprocess.run(["bash", str(_script_backup_servidor())],
+                           capture_output=True, text=True, timeout=600)
+    except Exception:
+        _log.warning("Backup no Google Drive não rodou", exc_info=True)
+        return False
+    if r.returncode != 0:
+        _log.warning("Backup no Google Drive falhou (código %s): %s",
+                     r.returncode, (r.stderr or r.stdout).strip()[-800:])
+        return False
+    _log.info("Backup no Google Drive: %s", r.stdout.strip()[-200:])
+    return True
+
+
+def backup_externo_agora() -> bool:
+    """Cópia FORA da máquina, no meio do uso (ex.: logo após gerar uma
+    planilha). No servidor, envia ao Drive do responsável; no .exe, grava na pasta
+    do Google Drive configurada. Best-effort, nunca levanta."""
+    if config.MODO_SERVIDOR:
+        return enviar_backup_servidor()
+    return fazer_backup_externo() is not None
 
 
 def main(argv: list[str] | None = None) -> int:

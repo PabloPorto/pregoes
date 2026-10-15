@@ -109,14 +109,11 @@ cliente:** Zero Trust → Access → Applications → Self-hosted no hostname do
 app, política "Allow" só com os e-mails dos operadores, login por código no
 e-mail.
 
-### Fase 4 — Dados do cliente (👤🤖, sem tocar na máquina dele)
+### Fase 4 — Dados: o servidor começa do zero (decidido em 2026-10-15)
 
-1. 👤 Pedir ao cliente para compartilhar o **`Pregoes_backup.zip`** do Google
-   Drive dele (o app grava esse backup completo: banco + credenciais +
-   histórico). Se o backup externo nunca foi configurado, alguém no escritório
-   envia a pasta `data\` zipada.
-2. 🤖 Restaurar no servidor, conferir, liberar o link para o cliente.
-3. O `.exe` continua instalado no cliente durante a validação (plano de volta).
+Sem migração: o cliente não tem dados que precisem ser levados (decisão do
+responsável). Nada é pedido da máquina dele. O `.exe` continua instalado no
+cliente durante a validação, como plano de volta.
 
 ### Fase 5 — Uso real acompanhado (cliente, restante do mês)
 
@@ -125,8 +122,31 @@ e-mail.
 - [ ] Gerar e baixar a planilha (fórmulas preservadas).
 - [ ] Nenhuma queda/lentidão relevante na semana.
 
-**Validou →** contratar por período maior, ligar backup diário off-site
-(rclone → Google Drive) e atualizar o CLAUDE.md (§7 "Onde roda").
+**Validou →** contratar por período maior e atualizar o CLAUDE.md (§7 "Onde roda").
+
+## Backup (servidor)
+
+- **Diário dentro do servidor**: o app já faz (data/backups, com rotação) —
+  protege contra erro/corrupção do banco, não contra perder a VPS.
+- **Fora do servidor** (`deploy/backup_drive.sh`, `pregoes-backup.timer`):
+  todo dia às 03:00 e a cada planilha gerada, o zip completo do app (banco,
+  credenciais, histórico, pregões guardados, planilhas) vai para o **Google
+  Drive do responsável** (decisão 2026-10-15: nada da conta do cliente) como
+  `Pregoes_backup_AAAA-MM-DD.zip`, na pasta `Pregoes-servidor`; 30 dias.
+- **Acesso mínimo**: escopo `drive.file` — o servidor só enxerga o que ele mesmo
+  criou no Drive. A ligação `drive-backup` é fixada (`root_folder_id`) na pasta
+  `Pregoes-servidor`, criada pelo rclone; ela pode ser movida no Drive. Sem a
+  pasta fixada o script se recusa a rodar.
+- **Autorizar (uma vez, no computador do responsável)**: `ssh -t … "sudo -u
+  pregoes -H rclone config reconnect drive-backup:"` → responder `n` → rodar no
+  próprio PC o `rclone authorize "drive" "…"` que aparecer → aceitar com a conta
+  Google → colar o código de volta no ssh.
+- **Tela**: Configurações → Backup mostra a data do último envio (alerta com
+  mais de 2 dias) e tem "Fazer backup agora".
+- **Restaurar**: baixar o zip do dia no Drive → `systemctl stop pregoes` →
+  extrair em `/home/pregoes/pregoes` (sobrescreve `data/`) → `chown -R
+  pregoes:pregoes` → `systemctl start pregoes`. Numa VPS nova: antes, rodar o
+  `deploy/instalar_servidor.sh` e religar o túnel (Fase 3).
 
 ## Operação (depois de validado)
 

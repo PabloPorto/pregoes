@@ -1,7 +1,7 @@
-# Backup diário no Google Drive do cliente (disparado por pregoes-backup.timer).
+# Backup diário no Google Drive do responsável (disparado por pregoes-backup.timer).
 # Rodar agora: systemctl start pregoes-backup · Log: journalctl -u pregoes-backup
 [Unit]
-Description=Pregoes - backup no Google Drive do cliente
+Description=Pregoes - backup diario no Google Drive
 Wants=network-online.target
 After=network-online.target
 
