@@ -100,14 +100,14 @@ Feito:
 - Serviço `deploy/pregoes-tunel.service` (sobe sozinho, reinicia se cair).
 - O endereço fica só no servidor e com o responsável — **não versionar**.
 
-**Decisão do responsável: login por e-mail (Cloudflare Access) adiado.**
-Enquanto isso, quem tiver o link abre o app (e a tela de Configurações, com as
-senhas dos fornecedores e a chave do Gemini). Mitigação: subdomínio aleatório,
-não adivinhável — o certificado gratuito da Cloudflare é curinga
-(`*.dominio`), então o nome exato não aparece nos registros públicos de
-certificados. **Ligar o Access antes do uso real com dados do cliente:**
-Zero Trust → Access → Applications → Self-hosted no hostname do app, política
-"Allow" só com os e-mails dos operadores, login por código no e-mail.
+**Decisão do responsável: endereço simples `pregoes.<dominio>` e login por
+e-mail (Cloudflare Access) adiado.** No ar e validado num navegador em
+2026-10-15. Enquanto o login não for ligado, quem tiver o link abre o app (e a
+tela de Configurações, com as senhas dos fornecedores e a chave do Gemini) —
+não divulgar o link. **Ligar o Access antes do uso real com dados do
+cliente:** Zero Trust → Access → Applications → Self-hosted no hostname do
+app, política "Allow" só com os e-mails dos operadores, login por código no
+e-mail.
 
 ### Fase 4 — Dados do cliente (👤🤖, sem tocar na máquina dele)
 
