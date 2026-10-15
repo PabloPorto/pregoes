@@ -259,6 +259,33 @@ def _identifica_cabecalho_multilinha(tabela: list[list], max_linhas: int = 3) ->
     return {}, 0
 
 
+def _colunas_mescladas(cabecalho: list[list], mapa: dict[str, int]) -> dict[str, tuple[int, ...]]:
+    """Colunas físicas cobertas pela MESMA célula de cabeçalho de cada campo.
+
+    Cabeçalho mesclado ('ITEM' ou 'QUANT.' ocupando 2 colunas da grade): o
+    pdfplumber devolve None nas colunas cobertas pela mesclagem (célula vazia
+    de verdade vem como ''). Nas linhas de dados o valor cai ora na 1ª, ora na
+    2ª coluna — no edital de Catingueira 25/2026, 64 de 67 itens saíam sem nº e
+    sem quantidade (campo 2026-10). As colunas cobertas viram RESERVA do campo:
+    lidas só quando a coluna do cabeçalho está vazia na linha. A vizinha com
+    cabeçalho próprio (ex.: o preço ao lado da quantidade) nunca entra."""
+    if not cabecalho:
+        return {}
+    n_cols = max(len(l or []) for l in cabecalho)
+    usadas = set(mapa.values())
+    reservas: dict[str, tuple[int, ...]] = {}
+    for campo, idx in mapa.items():
+        extras = []
+        c = idx + 1
+        while (c < n_cols and c not in usadas
+               and all(c < len(l or []) and l[c] is None for l in cabecalho)):
+            extras.append(c)
+            c += 1
+        if extras:
+            reservas[campo] = tuple(extras)
+    return reservas
+
+
 def _eh_cabecalho_valido(mapa: dict[str, int]) -> bool:
     """Cabeçalho útil precisa ter descrição + quantidade. Unidade ajuda mas
     não é obrigatória (algumas tabelas-itens não têm coluna unidade isolada
@@ -292,6 +319,63 @@ class _TabelaCandidata:
     linha_inicial_dados: int
     itens: list[ItemExtraido]
     score: ScoreTabela
+    # Colunas de reserva por campo (cabeçalho mesclado) — ver _colunas_mescladas.
+    reservas: dict[str, tuple[int, ...]] = field(default_factory=dict)
+
+
+def _texto_na_area(chars: list[dict], bbox: tuple) -> str:
+    """Texto dos caracteres cujo CENTRO cai em `bbox` — o mesmo critério que o
+    pdfplumber usa para preencher as células da tabela."""
+    from pdfplumber.utils import extract_text
+    x0, top, x1, bottom = bbox
+    dentro = [c for c in chars
+              if x0 <= (c["x0"] + c["x1"]) / 2 < x1
+              and top <= (c["top"] + c["bottom"]) / 2 < bottom]
+    return (extract_text(dentro) or "").strip()
+
+
+def _reparar_linhas_truncadas(linhas: list[list], celulas: list[list],
+                              faixas: list[tuple], chars: list[dict]) -> list[list]:
+    """Preenche as células que o pdfplumber não criou numa linha TRUNCADA.
+
+    A 1ª linha depois de uma quebra de página costuma vir com a grade
+    incompleta: as linhas verticais das colunas começam abaixo dela, e o
+    pdfplumber só cria as células das primeiras colunas — o texto está lá, mas
+    a linha sai ['', '46', None, None, ...] e o item SOME (item 46 do edital de
+    Catingueira 25/2026, campo 2026-10). Aqui, cada célula ausente é lida na
+    posição da coluna correspondente da linha-padrão da tabela (o desenho de
+    células mais comum), dentro da faixa vertical da linha.
+
+    Só preenche onde NENHUMA célula da tabela cobre aquele ponto (coluna ×
+    faixa da linha): uma célula mesclada — na horizontal (título que ocupa a
+    linha toda, cabeçalho 'ITEM' sobre 2 colunas) ou na vertical (descrição
+    de várias linhas que desce sobre as linhas seguintes) — fica como está;
+    lê-la por linha picotava a descrição em fragmentos.
+
+    ``celulas``/``faixas``: ``row.cells``/``row.bbox`` de cada linha do
+    ``pdfplumber.Table``, na mesma ordem de ``linhas`` (= ``Table.extract()``).
+    """
+    from collections import Counter
+    if not linhas or len(celulas) != len(linhas):
+        return linhas
+    padroes = Counter(tuple(i for i, c in enumerate(cs) if c is not None)
+                      for cs in celulas)
+    # O desenho mais comum; no empate (tabela curta), o mais completo.
+    padrao = max(padroes.items(), key=lambda kv: (kv[1], len(kv[0])))[0]
+    ref = next(cs for cs in celulas
+               if tuple(i for i, c in enumerate(cs) if c is not None) == padrao)
+    todas = [c for cs in celulas for c in cs if c is not None]
+    for i, (cs, faixa) in enumerate(zip(celulas, faixas)):
+        y_meio = (faixa[1] + faixa[3]) / 2
+        for j in padrao:
+            if j >= len(cs) or cs[j] is not None or j >= len(linhas[i]):
+                continue
+            x0, x1 = ref[j][0], ref[j][2]
+            x_meio = (x0 + x1) / 2
+            if any(c[0] <= x_meio <= c[2] and c[1] <= y_meio <= c[3] for c in todas):
+                continue   # coberta por célula mesclada (horizontal ou vertical)
+            linhas[i][j] = _texto_na_area(chars, (x0, faixa[1], x1, faixa[3]))
+    return linhas
 
 
 def _coletar_tabelas(caminho_pdf: Path) -> list[_TabelaBruta]:
@@ -300,17 +384,33 @@ def _coletar_tabelas(caminho_pdf: Path) -> list[_TabelaBruta]:
     with pdfplumber.open(caminho_pdf) as pdf:
         for n_pag, page in enumerate(pdf.pages, start=1):
             try:
-                tabs = page.extract_tables() or []
+                tabs = page.find_tables() or []
             except Exception:
                 continue
-            for idx, tab in enumerate(tabs):
-                if tab and len(tab) >= 1:
-                    out.append(_TabelaBruta(pagina=n_pag, indice_pagina=idx, linhas=tab))
+            for idx, t in enumerate(tabs):
+                try:
+                    tab = t.extract()
+                except Exception:
+                    continue
+                if not tab:
+                    continue
+                try:
+                    tab = _reparar_linhas_truncadas(
+                        tab, [r.cells for r in t.rows], [r.bbox for r in t.rows],
+                        page.chars)
+                except Exception:
+                    pass   # reparo é bônus: na falha, segue a tabela como veio
+                out.append(_TabelaBruta(pagina=n_pag, indice_pagina=idx, linhas=tab))
     return out
 
 
-def _extrair_item_da_linha(linha: list, mapa: dict[str, int], pagina: int) -> Optional[ItemExtraido]:
+def _extrair_item_da_linha(linha: list, mapa: dict[str, int], pagina: int,
+                           reservas: dict[str, tuple[int, ...]] | None = None,
+                           ) -> Optional[ItemExtraido]:
     """Extrai uma linha de tabela em ItemExtraido seguindo o mapa de colunas.
+
+    ``reservas``: colunas cobertas por cabeçalho mesclado (ver
+    _colunas_mescladas), lidas quando a coluna principal do campo está vazia.
 
     Retorna None apenas quando a linha está completamente vazia. Filtragem
     de lixo (totais, fragmentos) acontece DEPOIS via score, não aqui — esta
@@ -320,13 +420,16 @@ def _extrair_item_da_linha(linha: list, mapa: dict[str, int], pagina: int) -> Op
         return None
 
     def _get(campo: str) -> Optional[str]:
-        idx = mapa.get(campo)
-        if idx is None or idx >= len(linha):
-            return None
-        v = linha[idx]
-        if v is None:
-            return None
-        return str(v).strip().replace("\n", " ")
+        principal: Optional[str] = None
+        for n, idx in enumerate((mapa.get(campo), *(reservas or {}).get(campo, ()))):
+            if idx is None or idx >= len(linha) or linha[idx] is None:
+                continue
+            valor = str(linha[idx]).strip().replace("\n", " ")
+            if n == 0:
+                principal = valor
+            if valor:
+                return valor
+        return principal
 
     descricao = _get("descricao") or ""
     if not descricao or len(descricao) < 3:
@@ -347,11 +450,15 @@ def _extrair_item_da_linha(linha: list, mapa: dict[str, int], pagina: int) -> Op
     )
 
 
-def _processar_tabela(bruta: _TabelaBruta, mapa_herdado: dict[str, int]) -> Optional[_TabelaCandidata]:
+def _processar_tabela(bruta: _TabelaBruta, mapa_herdado: dict[str, int],
+                      reservas_herdadas: dict[str, tuple[int, ...]] | None = None,
+                      ) -> Optional[_TabelaCandidata]:
     """
     Tenta tornar uma tabela bruta em candidata. Devolve:
     - candidata com cabeçalho próprio (se conseguiu detectar)
-    - candidata usando mapa_herdado (se a tabela parece continuação)
+    - candidata usando mapa_herdado (se a tabela parece continuação) — com as
+      colunas de reserva herdadas junto (a continuação não tem cabeçalho para
+      revelar a mesclagem)
     - None se nem isso funciona
 
     Ignora tabelas que parecem 'modelo de proposta'.
@@ -362,28 +469,33 @@ def _processar_tabela(bruta: _TabelaBruta, mapa_herdado: dict[str, int]) -> Opti
 
     mapa, n_consumidas = _identifica_cabecalho_multilinha(bruta.linhas)
     if mapa:
-        itens = _extrair_itens(bruta, mapa, n_consumidas)
+        reservas = _colunas_mescladas(bruta.linhas[:n_consumidas], mapa)
+        itens = _extrair_itens(bruta, mapa, n_consumidas, reservas)
         sc = score_tabela([
             score_linha(i.descricao, i.quantidade, i.unidade, i.valor_referencia)
             for i in itens
         ])
-        return _TabelaCandidata(bruta=bruta, mapa=mapa, linha_inicial_dados=n_consumidas, itens=itens, score=sc)
+        return _TabelaCandidata(bruta=bruta, mapa=mapa, linha_inicial_dados=n_consumidas,
+                                itens=itens, score=sc, reservas=reservas)
 
     if mapa_herdado:
-        itens = _extrair_itens(bruta, mapa_herdado, 0)
+        reservas = dict(reservas_herdadas or {})
+        itens = _extrair_itens(bruta, mapa_herdado, 0, reservas)
         sc = score_tabela([
             score_linha(i.descricao, i.quantidade, i.unidade, i.valor_referencia)
             for i in itens
         ])
-        return _TabelaCandidata(bruta=bruta, mapa=mapa_herdado, linha_inicial_dados=0, itens=itens, score=sc)
+        return _TabelaCandidata(bruta=bruta, mapa=mapa_herdado, linha_inicial_dados=0,
+                                itens=itens, score=sc, reservas=reservas)
 
     return None
 
 
-def _extrair_itens(bruta: _TabelaBruta, mapa: dict[str, int], linha_inicial: int) -> list[ItemExtraido]:
+def _extrair_itens(bruta: _TabelaBruta, mapa: dict[str, int], linha_inicial: int,
+                   reservas: dict[str, tuple[int, ...]] | None = None) -> list[ItemExtraido]:
     out: list[ItemExtraido] = []
     for linha in bruta.linhas[linha_inicial:]:
-        it = _extrair_item_da_linha(linha, mapa, bruta.pagina)
+        it = _extrair_item_da_linha(linha, mapa, bruta.pagina, reservas)
         if it is not None:
             out.append(it)
     return out
@@ -568,11 +680,13 @@ def processar_tabelas_brutas(
 
     candidatas: list[_TabelaCandidata] = []
     mapa_herdado: dict[str, int] = {}
+    reservas_herdadas: dict[str, tuple[int, ...]] = {}
     for bruta in tabelas_brutas:
-        cand = _processar_tabela(bruta, mapa_herdado)
+        cand = _processar_tabela(bruta, mapa_herdado, reservas_herdadas)
         if cand is not None:
             candidatas.append(cand)
             mapa_herdado = cand.mapa
+            reservas_herdadas = cand.reservas
 
     if not candidatas:
         resultado.avisos.append(

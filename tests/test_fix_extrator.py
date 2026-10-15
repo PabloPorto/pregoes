@@ -262,3 +262,121 @@ def test_dedup_mesmo_numero_duas_completas_distintas_nao_funde():
     b = _it_dedup(7, "CABO B DIFERENTE", 20, "M", None)
     out = _deduplicar_itens([a, b])
     assert len(out) == 2   # ambas com dados → preserva
+
+
+# ---------------------------------------------------------------------------
+# Cabeçalho mesclado e linha truncada (edital de Catingueira 25/2026, campo
+# 2026-10): 64 de 67 itens saíam sem nº e sem quantidade, e o item 46 sumia.
+# ---------------------------------------------------------------------------
+
+# Como o pdfplumber devolve a tabela: 'ITEM' e 'QUANT.' ocupam 2 colunas da
+# grade (None = coluna coberta pela mesclagem) e o valor cai ora numa, ora
+# noutra.
+_CAB_MESCLADO = ['ITEM', None, 'ESPECIFICAÇÃO', 'UNID', 'QUANT.', None,
+                 'Preço\nmáximo', 'TOTAL']
+
+
+def _tabela(pagina, linhas):
+    from pregoes.extrator import _TabelaBruta
+    return _TabelaBruta(pagina=pagina, indice_pagina=0, linhas=linhas)
+
+
+def test_cabecalho_mesclado_le_numero_e_quantidade_das_duas_colunas():
+    from pregoes.extrator import processar_tabelas_brutas
+    pag1 = _tabela(19, [
+        _CAB_MESCLADO,
+        ['', '1', "ALICATE UNIVERSAL 8'' ( SIMPLES )", 'Unidade', '', '15', 'R$ 43,77', 'R$ 656,55'],
+        ['3', None, 'ALAVANCA DE FERRO PEDREIRO 1 X 1,50 METROS', 'Unidade', '6', None, 'R$ 159,99', 'R$ 959,94'],
+    ])
+    # Continuação na página seguinte: sem cabeçalho, herda mapa E reservas.
+    pag2 = _tabela(20, [
+        ['', '47', 'PICARETA EM AÇO', 'Unidade', '', '10', 'R$ 102,87', 'R$ 1.028,70', None, None],
+    ])
+    r = processar_tabelas_brutas([pag1, pag2], arquivo="x.pdf")
+    lidos = [(i.item_numero, i.quantidade) for i in r.itens]
+    assert lidos == [(1, 15.0), (3, 6.0), (47, 10.0)]
+
+
+def test_cabecalho_mesclado_nunca_le_a_coluna_vizinha_com_cabecalho_proprio():
+    """Sem quantidade em nenhuma das colunas de QUANT., o preço ao lado NÃO
+    pode virar quantidade."""
+    from pregoes.extrator import _colunas_mescladas, _extrair_item_da_linha
+    mapa = {"codigo_orgao": 0, "descricao": 2, "unidade": 3, "quantidade": 4,
+            "valor_referencia": 6}
+    reservas = _colunas_mescladas([_CAB_MESCLADO], mapa)
+    assert reservas == {"codigo_orgao": (1,), "quantidade": (5,)}
+    it = _extrair_item_da_linha(
+        ['', '9', 'BROXA P/PINTURA 15 CM', 'Unidade', '', '', 'R$ 9,23', ''],
+        mapa, 19, reservas)
+    assert it.item_numero == 9 and it.quantidade is None
+
+
+def test_cabecalho_sem_mesclagem_nao_cria_reserva():
+    from pregoes.extrator import _colunas_mescladas
+    cab = ['ITEM', 'DESCRIÇÃO', 'UNID', 'QUANT.', 'VALOR UNIT.']
+    mapa = {"codigo_orgao": 0, "descricao": 1, "unidade": 2, "quantidade": 3,
+            "valor_referencia": 4}
+    assert _colunas_mescladas([cab], mapa) == {}
+
+
+def _chars(texto, x0, top, larg=5.0, alt=9.0):
+    """Caracteres no formato do pdfplumber (só o que _texto_na_area usa)."""
+    out = []
+    for k, ch in enumerate(texto):
+        cx = x0 + k * larg
+        out.append({"text": ch, "x0": cx, "x1": cx + larg, "top": top,
+                    "bottom": top + alt, "upright": True, "size": alt,
+                    "doctop": top, "fontname": "F", "adv": larg, "matrix": (1, 0, 0, 1, cx, top)})
+    return out
+
+
+def test_linha_truncada_pela_quebra_de_pagina_e_reconstruida():
+    """1ª linha da página com a grade incompleta: só as células das 2 primeiras
+    colunas existem; o resto é lido na posição das colunas das demais linhas."""
+    from pregoes.extrator import _reparar_linhas_truncadas
+    cheia = [(45, 88, 49, 99), (49, 88, 73, 99), (73, 88, 325, 99),
+             (325, 88, 373, 99), (373, 88, 418, 99)]
+    celulas = [
+        [(45, 77, 49, 88), (49, 77, 73, 88), None, None, None],   # truncada
+        cheia,
+    ]
+    faixas = [(45, 77, 418, 88), (45, 88, 418, 99)]
+    linhas = [['', '46', None, None, None], ['', '47', 'PICARETA', 'Unidade', '10']]
+    chars = (_chars("PENEIRA", 80, 78) + _chars("Unidade", 330, 78)
+             + _chars("10", 390, 78))
+    out = _reparar_linhas_truncadas(linhas, celulas, faixas, chars)
+    assert out[0] == ['', '46', 'PENEIRA', 'Unidade', '10']
+    assert out[1] == ['', '47', 'PICARETA', 'Unidade', '10']   # intacta
+
+
+def test_linha_com_celula_mesclada_nao_e_quebrada_em_colunas():
+    """Título que ocupa a linha toda (célula única cobrindo as colunas) fica
+    como está — não é linha truncada."""
+    from pregoes.extrator import _reparar_linhas_truncadas
+    cheia = [(45, 88, 73, 99), (73, 88, 325, 99), (325, 88, 418, 99)]
+    celulas = [[(45, 77, 418, 88), None, None], cheia]
+    faixas = [(45, 77, 418, 88), (45, 88, 418, 99)]
+    linhas = [['LOTE 1 - FERRAMENTAS', None, None], ['1', 'PICARETA', '10']]
+    chars = _chars("LOTE 1 - FERRAMENTAS", 100, 78)
+    out = _reparar_linhas_truncadas(linhas, celulas, faixas, chars)
+    assert out[0] == ['LOTE 1 - FERRAMENTAS', None, None]
+
+
+def test_celula_mesclada_na_vertical_nao_e_picotada():
+    """Descrição de várias linhas que desce sobre a linha seguinte (rowspan):
+    a 2ª linha vem sem a célula da descrição, mas ela está COBERTA pela de
+    cima — ler a faixa da 2ª linha picotava a descrição (regressão vista em
+    edital real ao validar o reparo)."""
+    from pregoes.extrator import _reparar_linhas_truncadas
+    celulas = [
+        [(45, 77, 73, 88), (73, 77, 325, 99), (325, 77, 373, 88)],   # descrição alta
+        [(45, 88, 73, 99), None, (325, 88, 373, 99)],
+        [(45, 99, 73, 110), (73, 99, 325, 110), (325, 99, 373, 110)],
+    ]
+    faixas = [(45, 77, 373, 99), (45, 88, 373, 99), (45, 99, 373, 110)]
+    linhas = [['1', 'DOBRADIÇA DE 04 POLEGADAS (REFORÇADA', '982'],
+              ['', None, ''],
+              ['2', 'CILINDRO', '10']]
+    chars = _chars("PAREDE GROSSA)", 80, 89)
+    out = _reparar_linhas_truncadas(linhas, celulas, faixas, chars)
+    assert out[1] == ['', None, '']
