@@ -55,7 +55,12 @@ App ~150 MB + Chromium Almeida ~350 MB + Chromium Dantas ~650 MB = **~1,2 GB**.
 
 Legenda: 👤 = você · 🤖 = eu
 
-### Fase 1 — Máquina no ar e teste de IP (👤 15 min + 🤖 1–2 h)
+### Fase 1 — Máquina no ar e teste de IP — ✅ CONCLUÍDA em 2026-10-15
+
+> VPS Hostinger em Campinas/SP (IP no painel da Hostinger). Instalador rodou; serviço no ar.
+> `teste_ao_vivo` pelo servidor: login + preços nos **dois** fornecedores
+> (4 de 5 itens com preço; o 5º é relevância, não bloqueio). Sem recusa no log.
+
 
 1. 👤 Contratar **KVM 1**, local **São Paulo (Brasil)** — se não aparecer, me
    avisar antes de pagar. Sistema: **Ubuntu 24.04** (sem painel).
