@@ -254,10 +254,12 @@ def _limpar_pregao(preservar_rascunho: bool = False) -> None:
         st.session_state.pop(k, None)
     _limpar_busca_por_item()
     # Fecha as sessões manuais ao vivo em cache (navegador logado): um novo
-    # pregão começa do zero e não herda navegador/sessão do anterior.
+    # pregão começa do zero e não herda navegador/sessão do anterior. Sem
+    # esperar: se outro operador estiver buscando, o fechamento entra na fila
+    # depois da busca dele, e esta tela segue na hora.
     try:
         from pregoes import scraper as _scraper
-        _scraper.fechar_sessoes_vivas()
+        _scraper.fechar_sessoes_vivas(esperar=False)
     except Exception:
         pass
 
@@ -1627,11 +1629,12 @@ def _buscar_fornecedores_paralelo(itens_alvo: list, sessoes: dict,
     Só é chamada quando TODAS as sessões têm transporte HTTP (``_http_cookie``):
     os workers ficam em modo ``_http_only`` e NUNCA tocam o Playwright — objetos
     de navegador são presos à thread que os criou (greenlet; foi exatamente o
-    crash do ThreadPoolExecutor de 2026-05). Login/pagamento já aconteceram na
-    thread principal (``obter_sessao_viva``).
+    crash do ThreadPoolExecutor de 2026-05). Roda dentro da thread dona dos
+    navegadores, onde o login/pagamento já aconteceu (``obter_sessao_viva``).
 
-    ``progresso(nome, atual, total, msg)`` é chamado NA THREAD PRINCIPAL (os
-    workers só empurram numa fila — Streamlit não é thread-safe).
+    ``progresso(nome, atual, total, msg)`` é chamado na thread que chamou esta
+    função (os workers só empurram numa fila) — e o ``no_navegador`` o repassa
+    à thread da tela (Streamlit não é thread-safe).
 
     Devolve ``{nome: ResultadoLote | Exception}`` — exceção por fornecedor não
     derruba o outro."""
@@ -1803,7 +1806,8 @@ def _executar_busca(itens: list, fornecedores_nomes: list[str],
         stats_concluidos=stats_concluidos,
     )
 
-    from pregoes.scraper import ErroBusca, fechar_sessao_viva, obter_sessao_viva
+    from pregoes.scraper import (ErroBusca, fechar_sessao_viva, no_navegador,
+                                 obter_sessao_viva)
 
     def _absorver_lote(nome: str, lote) -> None:
         """Sumário + mesclagem de um ResultadoLote no agregado (remapeando a
@@ -1842,85 +1846,100 @@ def _executar_busca(itens: list, fornecedores_nomes: list[str],
         ))
         stats_concluidos.append((nome, 0, 0, total_itens))
 
-    # --- Sessões na THREAD PRINCIPAL (Playwright é preso à thread criadora):
-    # login + condição de pagamento reusados do cache; falha vira erro global.
-    sessoes: dict = {}
-    for forn_idx, nome in enumerate(fornecedores_nomes):
-        if credenciais.carregar(nome) is None:
-            continue
-        _render(
-            frac=forn_idx / max(n_forn, 1) * 0.05,
-            fornecedor=nome, forn_idx=forn_idx,
-            item_atual=0, item_total=total_itens,
-            item_desc=f"Fazendo login em {nome.capitalize()}…",
-            stats_concluidos=stats_concluidos,
-        )
-        try:
-            sessoes[nome] = obter_sessao_viva(nome)
-        except Exception as exc:
-            _registrar_falha_grave(nome, exc)
-
-    # Condição de pagamento não confirmada vira alerta NA TELA de resultados
-    # (persiste na sessão; a próxima busca recalcula).
-    st.session_state["avisos_pagamento"] = _avisos_pagamento_de(sessoes)
-
-    # --- PARALELO (Fase 2 de perf): 1 thread por fornecedor, consultas via
-    # HTTP (thread-safe). Requer TODAS as sessões com transporte HTTP; o modo
-    # diagnóstico (objeto compartilhado) roda sequencial.
-    paralelo = (len(sessoes) > 1 and log_diag is None
-                and all(getattr(f, "_http_cookie", None) for f in sessoes.values()))
-    if paralelo:
-        prog = {n: (0, total_itens) for n in sessoes}
-
-        def _cb_paralelo(nome, atual, total, _msg):
-            prog[nome] = (atual, total)
-            frac = sum(a / max(t, 1) for a, t in prog.values()) / max(len(prog), 1)
-            _render(
-                frac=frac, fornecedor="", forn_idx=0,
-                item_atual=sum(a for a, _ in prog.values()),
-                item_total=sum(t for _, t in prog.values()),
-                item_desc=" · ".join(
-                    f"{n.capitalize()} {a}/{t}" for n, (a, t) in prog.items()),
+    # --- Login + busca de TODOS os fornecedores numa ÚNICA operação da thread
+    # dona dos navegadores (scraper.no_navegador). O Playwright é preso à thread
+    # que o criou, e cada clique no Streamlit roda numa thread nova; fazer
+    # login e busca juntos ainda impede que outro operador troque a sessão de
+    # um fornecedor no meio. Aqui dentro NADA de Streamlit: o painel é
+    # desenhado por `progresso`, que o no_navegador devolve à thread da tela.
+    def _buscar_na_thread_dona(progresso) -> dict:
+        # Login + condição de pagamento reusados do cache; falha vira erro global.
+        sessoes: dict = {}
+        for forn_idx, nome in enumerate(fornecedores_nomes):
+            if credenciais.carregar(nome) is None:
+                continue
+            progresso(
+                frac=forn_idx / max(n_forn, 1) * 0.05,
+                fornecedor=nome, forn_idx=forn_idx,
+                item_atual=0, item_total=total_itens,
+                item_desc=f"Fazendo login em {nome.capitalize()}…",
                 stats_concluidos=stats_concluidos,
             )
+            try:
+                sessoes[nome] = obter_sessao_viva(nome)
+            except Exception as exc:
+                _registrar_falha_grave(nome, exc)
 
-        saida = _buscar_fornecedores_paralelo(itens_alvo, sessoes, _cb_paralelo)
-        for nome in sessoes:
-            r = saida.get(nome)
-            if r is None or isinstance(r, Exception):
-                _registrar_falha_grave(
-                    nome, r if isinstance(r, Exception)
-                    else RuntimeError("fornecedor terminou sem resultado"))
-            else:
-                _absorver_lote(nome, r)
-    else:
-        for forn_idx, nome in enumerate(fornecedores_nomes):
-            forn = sessoes.get(nome)
-            if forn is None:
-                continue   # sem credencial ou login já falhou (registrado)
+        # PARALELO (Fase 2 de perf): 1 thread por fornecedor, consultas via
+        # HTTP (thread-safe). Requer TODAS as sessões com transporte HTTP; o
+        # modo diagnóstico (objeto compartilhado) roda sequencial.
+        paralelo = (len(sessoes) > 1 and log_diag is None
+                    and all(getattr(f, "_http_cookie", None) for f in sessoes.values()))
+        if paralelo:
+            prog = {n: (0, total_itens) for n in sessoes}
 
-            def cb(atual, total, msg, _forn_idx=forn_idx, _nome=nome):
-                frac_dentro = atual / max(total, 1)
-                frac_total = (_forn_idx + frac_dentro) / max(n_forn, 1)
-                _render(
-                    frac=frac_total,
-                    fornecedor=_nome, forn_idx=_forn_idx,
-                    item_atual=atual, item_total=total,
-                    item_desc=msg,
+            def _cb_paralelo(nome, atual, total, _msg):
+                prog[nome] = (atual, total)
+                frac = sum(a / max(t, 1) for a, t in prog.values()) / max(len(prog), 1)
+                progresso(
+                    frac=frac, fornecedor="", forn_idx=0,
+                    item_atual=sum(a for a, _ in prog.values()),
+                    item_total=sum(t for _, t in prog.values()),
+                    item_desc=" · ".join(
+                        f"{n.capitalize()} {a}/{t}" for n, (a, t) in prog.items()),
                     stats_concluidos=stats_concluidos,
                 )
 
-            try:
-                # judge/canônico ligados por padrão no orquestrador — sem
-                # controle de UI (operador não precisa saber).
-                lote = buscar_precos_para_itens(
-                    itens_alvo, [forn], progresso_callback=cb,
-                    diagnostico=log_diag,
-                )
-            except Exception as exc:
-                _registrar_falha_grave(nome, exc)
-                continue
-            _absorver_lote(nome, lote)
+            saida = _buscar_fornecedores_paralelo(itens_alvo, sessoes, _cb_paralelo)
+            for nome in sessoes:
+                r = saida.get(nome)
+                if r is None or isinstance(r, Exception):
+                    _registrar_falha_grave(
+                        nome, r if isinstance(r, Exception)
+                        else RuntimeError("fornecedor terminou sem resultado"))
+                else:
+                    _absorver_lote(nome, r)
+        else:
+            for forn_idx, nome in enumerate(fornecedores_nomes):
+                forn = sessoes.get(nome)
+                if forn is None:
+                    continue   # sem credencial ou login já falhou (registrado)
+
+                def cb(atual, total, msg, _forn_idx=forn_idx, _nome=nome):
+                    frac_dentro = atual / max(total, 1)
+                    frac_total = (_forn_idx + frac_dentro) / max(n_forn, 1)
+                    progresso(
+                        frac=frac_total,
+                        fornecedor=_nome, forn_idx=_forn_idx,
+                        item_atual=atual, item_total=total,
+                        item_desc=msg,
+                        stats_concluidos=stats_concluidos,
+                    )
+
+                try:
+                    # judge/canônico ligados por padrão no orquestrador — sem
+                    # controle de UI (operador não precisa saber).
+                    lote = buscar_precos_para_itens(
+                        itens_alvo, [forn], progresso_callback=cb,
+                        diagnostico=log_diag,
+                    )
+                except Exception as exc:
+                    _registrar_falha_grave(nome, exc)
+                    continue
+                _absorver_lote(nome, lote)
+        return _avisos_pagamento_de(sessoes)
+
+    # Condição de pagamento não confirmada vira alerta NA TELA de resultados
+    # (persiste na sessão; a próxima busca recalcula).
+    st.session_state["avisos_pagamento"] = no_navegador(
+        _buscar_na_thread_dona, progresso=_render,
+        aguardando=lambda: _render(
+            frac=0.0, fornecedor="", forn_idx=0,
+            item_atual=0, item_total=total_itens,
+            item_desc="Aguardando a busca de outro operador terminar…",
+            stats_concluidos=stats_concluidos,
+        ),
+    )
 
     # Empacota como ResultadoLote para preservar API que a UI espera
     lote = ResultadoLote(
@@ -2028,7 +2047,7 @@ def _form_condicao_pagamento(fornecedor: str) -> None:
             # todas para a próxima busca relogar já com a nova.
             try:
                 from pregoes import scraper as _scraper
-                _scraper.fechar_sessoes_vivas()
+                _scraper.fechar_sessoes_vivas(esperar=False)
             except Exception:
                 pass
             _cond = html.escape(forma["texto"])
