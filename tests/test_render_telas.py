@@ -149,13 +149,59 @@ def test_home_esconde_pregao_finalizado_e_mostra_aberto(env):
                             "itens_edital": [1]})
     at = _at(env)
     assert not at.exception
-    txt = " ".join(m.value for m in at.markdown)
-    assert "002/2026" in txt, "pregão em aberto deveria aparecer no Início"
-    assert "001/2026" not in txt, "pregão finalizado NÃO pode aparecer no Início"
+    # A lista "Em andamento" é a dos botões "Continuar" (rasc_cont_<slug>). O
+    # finalizado pode aparecer em "Planilhas recentes" (para baixar), mas NÃO
+    # como pregão a continuar.
+    continuar = {b.key for b in at.button if (b.key or "").startswith("rasc_cont_")}
+    assert "rasc_cont_002-2026-prefeitura-y" in continuar, \
+        "pregão em aberto deveria aparecer em 'Em andamento'"
+    assert "rasc_cont_001-2026-prefeitura-x" not in continuar, \
+        "pregão finalizado NÃO pode aparecer em 'Em andamento'"
     # ambos os arquivos CONTINUAM no disco — o Início oculta, não deleta.
     slugs = {p.stem for p in rascunho.DIR.glob("*.pkl")}
     assert "002-2026-prefeitura-y" in slugs
     assert "001-2026-prefeitura-x" in slugs, "o rascunho finalizado NÃO pode ser apagado"
+
+
+def test_home_descartar_pede_confirmacao_e_remove(env):
+    """A lixeira de um pregão em andamento NÃO apaga direto: pede confirmação
+    na própria linha; 'Cancelar' desiste; 'Descartar' remove o rascunho."""
+    from pregoes import rascunho
+    rascunho.salvar_pregao({"orgao": "Prefeitura Y", "numero": "002/2026",
+                            "itens_edital": [1]})
+    slug = "002-2026-prefeitura-y"
+    at = _at(env)
+    at.button(key=f"rasc_del_{slug}").click().run()
+    assert not at.exception
+    assert (rascunho.DIR / f"{slug}.pkl").exists(), "lixeira não pode apagar sem confirmar"
+    at.button(key=f"rasc_del_nao_{slug}").click().run()
+    assert any(b.key == f"rasc_cont_{slug}" for b in at.button), "Cancelar deve desistir"
+    at.button(key=f"rasc_del_{slug}").click().run()
+    at.button(key=f"rasc_del_sim_{slug}").click().run()
+    assert not at.exception
+    assert not (rascunho.DIR / f"{slug}.pkl").exists()
+
+
+def test_render_historico_com_pregao(env):
+    """Histórico com um pregão e sua planilha: a linha renderiza com as ações
+    (editar, baixar, excluir) e a exclusão pede confirmação."""
+    from pregoes import config, db
+    with db.get_conn(config.DB_PATH) as conn:
+        cur = conn.execute(
+            "INSERT INTO editais (orgao, numero_pregao, arquivo_pdf, status) "
+            "VALUES ('Prefeitura X', '001/2026', 'x.pdf', 'precificado')")
+        eid = cur.lastrowid
+        db.export_log_gravar(conn, eid, "p.xlsx", 3, 1, 1.45)
+    (config.EXPORTS_DIR / "p.xlsx").write_bytes(b"xlsx")
+    at = _at(env)
+    at.session_state["tela"] = "historico"
+    at.run()
+    assert not at.exception, f"histórico quebrou no render: {at.exception}"
+    chaves = {b.key for b in at.button}
+    assert {f"btn_edit_{eid}", f"btn_del_{eid}"} <= chaves
+    at.button(key=f"btn_del_{eid}").click().run()
+    assert not at.exception
+    assert any(b.key == f"excl_sim_{eid}" for b in at.button)
 
 
 def test_render_revisao_sem_crash(env):
@@ -176,6 +222,72 @@ def test_render_revisao_sem_crash(env):
     at.session_state["tela"] = "revisao"
     at.run()
     assert not at.exception, f"revisão quebrou no render: {at.exception}"
+
+
+def _linhas_listadas(at) -> set[int]:
+    """Índices dos itens com linha na lista de preços (botão abrir/fechar)."""
+    return {int(b.key.split("_")[1]) for b in at.button
+            if (b.key or "").startswith("tg_")}
+
+
+def test_lista_precos_filtra_por_situacao(env):
+    """Lista de preços (redesign 2026-10): o filtro mostra só os itens daquela
+    situação — no seed, 1 com preço e 2 sem resultado."""
+    from streamlit.testing.v1 import AppTest
+    at = AppTest.from_file(APP, default_timeout=30)
+    at.run()
+    _seed_busca_precos(at)
+    at.run()
+    assert not at.exception
+    assert _linhas_listadas(at) == {0, 1, 2}
+    filtro = at.segmented_control(key="filtro_busca")
+    assert set(filtro.options) >= {"Todos · 3", "Com preço · 1", "Sem resultado · 2"}
+    filtro.set_value("sem_resultado").run()
+    assert not at.exception
+    assert _linhas_listadas(at) == {1, 2}
+    at.segmented_control(key="filtro_busca").set_value("com_preco").run()
+    assert _linhas_listadas(at) == {0}
+
+
+def test_lista_precos_abrir_linha_e_escolher_outra_opcao(env):
+    """A linha abre as opções; 'Escolher' troca a seleção do item. Fechada, a
+    linha não renderiza as opções (nem os campos de busca manual)."""
+    from streamlit.testing.v1 import AppTest
+    from pregoes.scraper import ResultadoBusca
+    at = AppTest.from_file(APP, default_timeout=30)
+    at.run()
+    _seed_busca_precos(at)
+    outra = ResultadoBusca(descricao_encontrada="CABO FLEXIVEL 0 AZUL", marca="COBRECOM",
+                           preco=6.10, codigo_fornecedor="7777", confianca="exato",
+                           fornecedor="almeida")
+    at.session_state["resultados_busca"][0].append(outra)
+    at.run()
+    assert not any((b.key or "").startswith("esc_0_") for b in at.button)
+    at.button(key="tg_0").click().run()
+    assert not at.exception
+    escolher = [b for b in at.button if (b.key or "").startswith("esc_0_")]
+    assert len(escolher) == 1, "a opção não escolhida ganha o botão Escolher"
+    escolher[0].click().run()
+    assert not at.exception
+    assert at.session_state["selecoes"][0].marca == "COBRECOM"
+
+
+def test_lista_precos_nao_usar_item(env):
+    """'Não usar este item' tira a seleção e marca a linha como 'Sem preço';
+    'Voltar a usar' desfaz a marcação."""
+    from streamlit.testing.v1 import AppTest
+    at = AppTest.from_file(APP, default_timeout=30)
+    at.run()
+    _seed_busca_precos(at)
+    at.run()
+    at.button(key="tg_0").click().run()
+    at.button(key="naousar_0").click().run()
+    assert not at.exception
+    assert 0 not in at.session_state["selecoes"]
+    assert 0 in at.session_state["itens_nao_usar"]
+    assert "Sem preço · 1" in at.segmented_control(key="filtro_busca").options
+    at.button(key="naousar_0").click().run()
+    assert 0 not in at.session_state["itens_nao_usar"]
 
 
 def test_busca_manual_vazia_avisa_site_pode_estar_instavel(env):

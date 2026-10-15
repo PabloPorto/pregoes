@@ -106,8 +106,9 @@ def _flags_como_dict() -> dict[str, str]:
 def test_flags_trazem_o_config_toml_do_app():
     # O toml empacotado chega ao Streamlit (tema, etc.) mesmo fora da pasta.
     op = _flags_como_dict()
-    assert op["theme.primaryColor"] == "#1E40AF"
+    assert op["theme.primaryColor"] == "#1D3F8F"
     assert op["theme.base"] == "light"
+    assert op["theme.font"].startswith("'IBM Plex Sans':https://")
 
 
 def test_flags_forcam_as_opcoes_de_producao():

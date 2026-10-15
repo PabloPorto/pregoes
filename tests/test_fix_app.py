@@ -301,6 +301,22 @@ def test_idempotencia_path_name_estavel(tmp_path):
     assert f"import:{p1.name}" == f"import:{p2.name}"
 
 
+# === Datas no horário de Brasília (o SQLite grava em UTC) ===
+
+def test_data_amigavel_converte_utc_para_brasilia():
+    # 18:57 UTC = 15:57 em Brasília; virada de dia também converte.
+    assert app._data_amigavel("2026-10-15 18:57:03") == "15/10 15:57"
+    assert app._data_amigavel("2026-10-16 01:30:00") == "15/10 22:30"
+    assert app._data_amigavel(None) == "data desconhecida"
+    assert app._data_amigavel("ontem") == "ontem"   # formato estranho: texto cru
+
+
+def test_quando_usa_horario_de_brasilia():
+    from datetime import datetime, timezone
+    ts = datetime(2020, 3, 1, 2, 15, tzinfo=timezone.utc).timestamp()
+    assert app._quando(ts) == "29/02, 23:15"   # 02:15 UTC = 23:15 do dia anterior
+
+
 # === Dedup de candidatos duplicados na seleção ===
 
 def test_dedup_opcoes_remove_duplicados_preserva_ordem():

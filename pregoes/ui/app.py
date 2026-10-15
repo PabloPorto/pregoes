@@ -199,6 +199,10 @@ CHAVES_PREGAO = ("extracao", "df_editavel", "resultados_busca",
                  "markup_overrides", "pregao_gerado_hash",
                  "avisos_lote_vazio")
 
+# Identidade do pregão, fora de CHAVES_PREGAO. pdf_nome = nome ORIGINAL do
+# arquivo enviado (o pdf_path em disco é um nome temporário).
+_CHAVES_IDENTIDADE = ("orgao", "numero", "pdf_path", "pdf_nome")
+
 # O rascunho (autosave anti-apagão) salva o estado do pregão (CHAVES_PREGAO) MAIS
 # os metadados que ficam fora dele (órgão/número/PDF) e a tela atual — para
 # restaurar EXATAMENTE onde o operador parou.
@@ -210,7 +214,7 @@ CHAVES_PREGAO = ("extracao", "df_editavel", "resultados_busca",
 # de `extracao`/`itens_revisados` (mesmo caminho do boot). O resto do snapshot
 # são dataclasses NOSSAS + primitivos — estáveis entre atualizações.
 _CHAVES_RASCUNHO = tuple(k for k in CHAVES_PREGAO if k != "df_editavel") + (
-    "orgao", "numero", "pdf_path", "tela")
+    _CHAVES_IDENTIDADE + ("tela",))
 
 # Passos do fluxo principal — alimentam o stepper de progresso no topo das telas
 # do fluxo (redesign UX 2026-06). "Planilha" é o passo-meta (concluído ao gerar).
@@ -222,8 +226,11 @@ PASSOS_FLUXO = ["Edital", "Itens", "Preços", "Planilha"]
 # limpas ao trocar de pregão, o novo herda no MESMO índice o resultado/termo do
 # anterior (ex.: 'Nada encontrado' de outro pregão, sem re-buscar — feedback
 # 2026-07). `site_res_` é o pior (resultado em cache exibido sem re-buscar).
+# `linha_aberta_`/`procurar_` = linha da lista de preços aberta / busca manual
+# aberta naquele índice.
 _PREFIXOS_BUSCA_ITEM = ("site_res_", "siteq_", "siteforn_", "sitego_",
-                        "catq_", "fonte_busca_", "naousar_")
+                        "catq_", "fonte_busca_", "naousar_",
+                        "linha_aberta_", "procurar_")
 
 
 def _limpar_busca_por_item() -> None:
@@ -253,7 +260,7 @@ def _limpar_pregao(preservar_rascunho: bool = False) -> None:
         _limpar_rascunho()
     # Identidade sai junto (órgão/número/PDF são DESTE pregão): um novo começa
     # limpo, e o slug de fallback não aponta mais para o pregão guardado.
-    for k in CHAVES_PREGAO + ("orgao", "numero", "pdf_path"):
+    for k in CHAVES_PREGAO + _CHAVES_IDENTIDADE:
         st.session_state.pop(k, None)
     _limpar_busca_por_item()
     # Fecha as sessões manuais ao vivo em cache (navegador logado): um novo
@@ -366,21 +373,23 @@ def _renderizar_sidebar():
         # Navegação principal — botão "ativo" via type='primary'
         tela_atual = st.session_state.tela
         nav_items = [
-            ("home",          "Início"),
-            ("historico",     "Histórico"),
-            ("upload",        "Novo pregão"),
-            ("configuracoes", "Configurações"),
+            ("home",          "Início",        ":material/home:"),
+            ("upload",        "Novo pregão",   ":material/add_box:"),
+            ("historico",     "Histórico",     ":material/history:"),
+            ("configuracoes", "Configurações", ":material/settings:"),
         ]
         # Telas de meio-de-fluxo não viram itens de menu, mas mantêm a navegação
         # consistente sem botão "ativo" (revisão, busca_precos, mapeamento).
-        for tela_id, rotulo in nav_items:
+        for tela_id, rotulo, icone in nav_items:
             # Só a tela EXATA acende. Nas telas do fluxo (revisão/preços)
             # nenhum botão fica ativo — o stepper é a âncora de localização
             # (auditoria de UI 2026-07: 'Novo pregão' aceso em Preços confundia).
+            # O visual de item de menu vem do style.py (botões da sidebar).
             ativo = tela_atual == tela_id
             if st.button(
                 rotulo,
                 key=f"nav_{tela_id}",
+                icon=icone,
                 width="stretch",
                 type="primary" if ativo else "secondary",
             ):
@@ -391,13 +400,12 @@ def _renderizar_sidebar():
                 else:
                     ir_para(tela_id)
 
-        st.markdown("###### Status", unsafe_allow_html=True)
         cred_almeida = credenciais.carregar("almeida")
         cred_dantas = credenciais.carregar("dantas")
         cred_gemini = credenciais.carregar_chave_api("gemini")
-        almeida_status = ("Configurada", "success") if cred_almeida else ("Pendente", "warning")
-        dantas_status = ("Configurada", "success") if cred_dantas else ("Pendente", "warning")
-        gemini_status = ("Configurada", "success") if cred_gemini else ("Opcional", "neutro")
+        almeida_status = ("ativa", "success") if cred_almeida else ("pendente", "warning")
+        dantas_status = ("ativa", "success") if cred_dantas else ("pendente", "warning")
+        gemini_status = ("ativa", "success") if cred_gemini else ("opcional", "neutro")
         style.sidebar_status([
             ("Almeida", almeida_status[0], almeida_status[1]),
             ("Dantas", dantas_status[0], dantas_status[1]),
@@ -408,36 +416,92 @@ def _renderizar_sidebar():
 
 # === Tela: HOME ===
 def tela_home():
-    style.header_pagina(
-        "Início",
-        "Visão geral dos pregões processados e atalho para um novo.",
-    )
+    c_tit, c_acao = st.columns([3, 1], vertical_alignment="bottom")
+    with c_tit:
+        style.header_pagina("Início", "Seus pregões e o que falta fazer em cada um.")
+    # Ação principal da tela, à direita do título (o menu tem o mesmo atalho).
+    with c_acao, st.container(horizontal=True, horizontal_alignment="right"):
+        if st.button("Novo pregão", type="primary", icon=":material/add:",
+                     key="home_novo"):
+            _novo_pregao()
 
-    _banner_rascunhos()
+    from pregoes import rascunho
+    pendentes = _filtrar_rascunhos_finalizados(rascunho.listar_pregoes())
 
-    # KPIs simples — contagem total e por status relevante para o operador.
-    # Usa COUNT direto no SQL (mais barato que carregar todas as linhas).
+    # Indicadores — COUNT direto no SQL (mais barato que carregar as linhas).
     with get_conn() as conn:
         total = conn.execute("SELECT COUNT(*) FROM editais").fetchone()[0]
         contagens = dict(conn.execute("""
             SELECT status, COUNT(*) FROM editais GROUP BY status
         """).fetchall())
+        recentes = conn.execute("""
+            SELECT e.orgao, e.numero_pregao, x.arquivo, x.n_itens, x.n_selecoes,
+                   x.criado_em AS gerado_em, x.id AS export_id
+            FROM exports_log x JOIN editais e ON e.id = x.edital_id
+            ORDER BY x.criado_em DESC, x.id DESC
+            LIMIT 3
+        """).fetchall()
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Pregões registrados", total)
-    c2.metric("Em rascunho", contagens.get("rascunho", 0))
-    c3.metric("Precificados", contagens.get("precificado", 0))
+    style.linha_metricas([
+        ("Em andamento", len(pendentes), "neutro", "pregões guardados"),
+        ("Precificados", contagens.get("precificado", 0), "neutro",
+         "com planilha gerada"),
+        ("Registrados", total, "neutro", "pregões no total"),
+    ])
 
-    # Atalho principal — sidebar tem o mesmo, mas o CTA principal aqui ajuda
-    # quem chega na tela home e quer começar imediatamente.
-    st.write("")
-    col_novo, col_hist = st.columns(2)
-    with col_novo:
-        if st.button("Iniciar novo pregão", type="primary", width="stretch"):
-            _novo_pregao()
-    with col_hist:
-        if st.button("Ver pregões processados", width="stretch"):
+    style.secao("Em andamento")
+    _banner_rascunhos(pendentes)
+
+    with style.secao_com_acao("Planilhas recentes", "recentes"):
+        if st.button("Ver histórico", type="tertiary", key="home_hist",
+                     icon=":material/arrow_forward:", icon_position="right"):
             ir_para("historico")
+    _planilhas_recentes(recentes)
+
+
+def _quando(ts: float) -> str:
+    """Data/hora amigável de um arquivo: 'hoje, 10:42' · 'ontem, 17:15' ·
+    '11/07, 19:51'."""
+    from datetime import datetime, timedelta
+    try:
+        # No fuso do operador — o servidor roda em UTC.
+        dt = datetime.fromtimestamp(ts, config.FUSO_HORARIO)
+    except (OSError, OverflowError, ValueError, TypeError):
+        return ""
+    hoje = datetime.now(config.FUSO_HORARIO).date()
+    if dt.date() == hoje:
+        return f"hoje, {dt:%H:%M}"
+    if dt.date() == hoje - timedelta(days=1):
+        return f"ontem, {dt:%H:%M}"
+    return f"{dt:%d/%m, %H:%M}"
+
+
+def _planilhas_recentes(recentes) -> None:
+    """Últimas planilhas geradas, com 'Baixar' — no Início, para o caso comum
+    de reenviar a planilha de um pregão recente sem ir ao Histórico."""
+    if not recentes:
+        st.caption("Nenhuma planilha gerada ainda.")
+        return
+    mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    with st.container(border=True, key="ppcard-recentes"):
+        for i, r in enumerate(recentes):
+            if i:
+                st.markdown('<hr class="pp-sep">', unsafe_allow_html=True)
+            numero = (r["numero_pregao"] or "").strip()
+            titulo = f"Pregão {numero}" if numero else "Pregão sem identificação"
+            c1, c2, c3 = st.columns([5, 4, 4], vertical_alignment="center")
+            c1.markdown(f"**{html.escape(titulo)}**  \n:gray[{html.escape(r['orgao'] or '')}]")
+            c2.markdown(f"{r['n_itens']} itens · **{r['n_selecoes']} com preço**  \n"
+                        f":gray[{_data_amigavel(r['gerado_em'])}]")
+            acoes = c3.container(horizontal=True, horizontal_alignment="right")
+            caminho = config.EXPORTS_DIR / r["arquivo"]
+            if caminho.exists():
+                with open(caminho, "rb") as f:
+                    acoes.download_button(
+                        "Baixar", data=f.read(), file_name=r["arquivo"], mime=mime,
+                        key=f"home_dl_{r['export_id']}", icon=":material/download:")
+            else:
+                acoes.caption("arquivo não encontrado")
 
 
 def _tentar_mapa_aprendido(resultado, conn, arquivo: str):
@@ -491,7 +555,12 @@ def tela_upload():
         numero = st.text_input("Número do pregão",
                                placeholder="Ex: 00006/2026")
 
-    if arquivo and st.button("Extrair itens do PDF", type="primary"):
+    # Visível desde o início (desabilitado até escolher o PDF): o operador vê
+    # qual é o próximo passo.
+    extrair = st.button("Extrair itens do PDF", type="primary", disabled=not arquivo,
+                        icon=":material/arrow_forward:", icon_position="right",
+                        key="btn_extrair")
+    if arquivo and extrair:
         # Órgão + número são OBRIGATÓRIOS (decisão do cliente): garantem que
         # cada pregão tem identidade desde o início — base do histórico e da
         # dedup por re-geração. Barrar aqui (antes da extração) pega o caso
@@ -535,6 +604,7 @@ def tela_upload():
         st.session_state.orgao = orgao
         st.session_state.numero = numero
         st.session_state.pdf_path = str(tmp_path)
+        st.session_state.pdf_nome = arquivo.name
         ir_para("revisao")
 
 
@@ -546,64 +616,48 @@ def tela_revisao():
         return
 
     style.stepper(PASSOS_FLUXO, 1)
+    _contexto_pregao_editavel()
     style.header_pagina(
-        "Revisão dos itens extraídos",
-        "Confira o que foi lido do PDF, edite o que precisar e marque o que entra na planilha.",
+        "Revisão dos itens",
+        "Confira o que foi lido do edital antes de buscar os preços.",
     )
 
-    # Órgão + número continuam EDITÁVEIS aqui (já foram exigidos no upload):
-    # o operador pode corrigir antes de gerar a planilha. Reescreve no
-    # session_state a cada render para o exportador/persistência usarem o
-    # valor atual. Se o operador limpar um deles, _gerar_excel revalida e
-    # barra a geração — a identidade nunca chega vazia ao histórico.
-    col_org, col_num = st.columns(2)
-    with col_org:
-        st.session_state.orgao = st.text_input(
-            "Órgão", value=st.session_state.get("orgao", ""),
-            key="rev_orgao")
-    with col_num:
-        st.session_state.numero = st.text_input(
-            "Número do pregão", value=st.session_state.get("numero", ""),
-            key="rev_numero")
-
-    # Badge de confiança da extração — semáforo para o operador entender
-    # rapidamente se pode confiar no resultado ou precisa revisar com lupa.
+    # Estado da leitura em pílulas (arquivo · confiança · o que conferir) —
+    # caixa colorida só quando há PROBLEMA (abaixo).
     conf = res.confianca_global
     rotulo_conf, tipo_conf = style.confianca_para_badge(conf)
-    style.bloco_aviso(
-        {
-            "success": f"<b>{rotulo_conf}</b> — pode seguir para precificar.",
-            "warning": f"<b>{rotulo_conf}</b> — revise com atenção antes de gerar a planilha.",
-            "danger":  f"<b>{rotulo_conf}</b> — recomendado usar o mapeamento manual.",
-        }[tipo_conf],
-        tipo=tipo_conf,
-    )
-
-    # Indicadores
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Total de itens", res.total_itens)
-    c2.metric("OK", res.total_itens - res.total_duvidosos)
-    c3.metric("Duvidosos", res.total_duvidosos,
-              delta="conferir" if res.total_duvidosos else None,
-              delta_color="off")
-    c4.metric("Tabelas detectadas", len(res.tabelas_brutas))
+    duvidosos = [i.item_numero for i in res.itens if i.confianca == "duvidoso"]
+    chips = []
+    nome_pdf = st.session_state.get("pdf_nome")
+    if nome_pdf:
+        chips.append((f'{style.icone("documento", 14)} {html.escape(nome_pdf)}', "neutro"))
+    chips.append((rotulo_conf, tipo_conf))
+    if duvidosos:
+        numeros = [str(n) for n in duvidosos if n is not None]
+        if 0 < len(numeros) <= 5 and len(numeros) == len(duvidosos):
+            plural = "itens" if len(numeros) > 1 else "item"
+            chips.append((f"Conferir {plural} {', '.join(numeros)}", "warning"))
+        else:
+            n = len(duvidosos)
+            chips.append((f"{n} {'itens' if n > 1 else 'item'} para conferir", "warning"))
+    style.linha_chips(chips)
 
     if res.avisos:
         style.bloco_avisos(res.avisos, tipo="warning")
 
-    # Quando a confiança automática não é alta o bastante OU não saiu item
-    # algum, oferece mapeamento manual. O operador escolhe a tabela bruta
-    # certa e indica o que é cada coluna — o sistema aprende e usa em
-    # próximos editais com mesmo cabeçalho.
+    # Leitura abaixo de 95%: pede atenção e, havendo tabelas brutas, oferece o
+    # mapeamento manual — o operador escolhe a tabela de itens e indica o que é
+    # cada coluna; o sistema aprende e usa em editais com o mesmo cabeçalho.
+    if conf < 0.95 and res.total_itens:
+        texto = ("A leitura do edital não saiu perfeita — confira os itens com "
+                 "atenção antes de buscar os preços.")
+        if res.tabelas_brutas:
+            texto += (" Se a tabela saiu errada, use o <b>Mapeamento manual</b>: "
+                      "você indica o que é cada coluna e o sistema reaproveita "
+                      "isso nos próximos editais do mesmo formato.")
+        style.bloco_aviso(texto, tipo=tipo_conf)
     if conf < 0.95 and res.tabelas_brutas:
-        style.bloco_aviso(
-            "A confiança automática ficou abaixo de 95%. Você pode usar o "
-            "<b>Mapeamento Manual</b> para indicar qual é a tabela de itens "
-            "e o que é cada coluna. O sistema aprende e reaproveita o "
-            "mapeamento em próximos editais com o mesmo formato.",
-            tipo="info",
-        )
-        if st.button("Mapeamento Manual"):
+        if st.button("Mapeamento manual", icon=":material/table_chart:"):
             ir_para("mapeamento")
 
     if res.total_itens == 0:
@@ -621,13 +675,10 @@ def tela_revisao():
         else:
             style.bloco_aviso(
                 "Nenhum item foi extraído automaticamente. Se o PDF tem uma "
-                "tabela de itens visível, use o <b>Mapeamento Manual</b> acima.",
+                "tabela de itens visível, use o <b>Mapeamento manual</b> acima.",
                 tipo="danger",
             )
         return
-
-    st.caption("Confira os itens abaixo. Você pode editar qualquer célula clicando nela. "
-               "Linhas em amarelo precisam de atenção.")
 
     # Construir DataFrame editável
     if st.session_state.df_editavel is None:
@@ -665,12 +716,15 @@ def tela_revisao():
         st.session_state.editor_version += 1
         st.rerun()
 
-    bcol1, bcol2 = st.columns(2)
-    with bcol1:
-        if st.button("Marcar todos", width="stretch"):
+    # Linha flexível: a dica ocupa a sobra e os botões ficam no tamanho do
+    # texto, à direita (em colunas fixas eles quebravam de linha).
+    with st.container(horizontal=True, vertical_alignment="center"):
+        st.caption("Clique numa célula para corrigir.")
+        if st.button("Marcar todos", type="tertiary", key="rev_marcar_todos",
+                     icon=":material/select_check_box:"):
             _marcar_todos(True)
-    with bcol2:
-        if st.button("Desmarcar todos", width="stretch"):
+        if st.button("Desmarcar todos", type="tertiary", key="rev_desmarcar_todos",
+                     icon=":material/check_box_outline_blank:"):
             _marcar_todos(False)
 
     # `num_rows="fixed"` (default) em vez de "dynamic": evita que o
@@ -683,35 +737,33 @@ def tela_revisao():
     # sempre reflete os checkboxes atuais. df_editavel é só a *snapshot
     # inicial* — atualizada apenas em "Marcar/Desmarcar todos" ou ao
     # carregar nova extração.
+    #
+    # Altura justa para as linhas (sem a faixa vazia embaixo em editais
+    # curtos); acima de ~15 itens a tabela rola por dentro.
+    n_linhas = len(st.session_state.df_editavel)
     edited = st.data_editor(
         st.session_state.df_editavel,
         width="stretch",
-        height=500,
+        height=min(560, 35 * (n_linhas + 1) + 3),
         column_config={
             "OK": st.column_config.CheckboxColumn(
-                "Buscar preço?", default=True,
+                "Buscar", default=True, width=76,
                 help="Marque os itens cujo preço o sistema deve buscar nos "
                      "fornecedores. TODOS os itens do edital vão para a planilha "
                      "— os desmarcados ficam sem preço, para preencher à mão."),
-            "Item": st.column_config.NumberColumn("Item", format="%d"),
-            "Descrição": st.column_config.TextColumn("Descrição", width="large"),
-            "Unidade": st.column_config.TextColumn("Unidade"),
-            "Quantidade": st.column_config.NumberColumn("Quant", format="%.2f"),
-            "Valor referência": st.column_config.NumberColumn("Ref. (R$)", format="%.2f"),
+            # Larguras somam ~720px: cabem numa tela de 1200px sem rolagem
+            # lateral (com width="large" a coluna Ref. (R$) sumia) e, em telas
+            # maiores, esticam na mesma proporção (a Descrição fica com ~metade).
+            "Item": st.column_config.NumberColumn("Item", format="%d", width=62),
+            "Descrição": st.column_config.TextColumn("Descrição", width=350),
+            "Unidade": st.column_config.TextColumn("Un.", width=64),
+            "Quantidade": st.column_config.NumberColumn("Qtd.", format="%.2f", width=80),
+            "Valor referência": st.column_config.NumberColumn(
+                "Ref. (R$)", format="%.2f", width=92),
         },
         hide_index=True,
         key=f"editor_{st.session_state.editor_version}",
     )
-
-    # Contador DEPOIS do data_editor — agora vê o estado atual via `edited`,
-    # que é a única fonte de verdade dos checkboxes (não tocamos em
-    # df_editavel para evitar race conditions).
-    n_marcados = int(edited["OK"].sum())
-    st.caption(f"**{n_marcados}** de **{len(edited)}** itens marcados para "
-               f"**buscar preço** · todos os **{len(edited)}** vão para a "
-               f"planilha (os demais sem preço).")
-
-    st.divider()
 
     # O markup é definido só na tela de Buscar preços (por item, via
     # Substituição Tributária). Aqui é só revisão/extração.
@@ -723,28 +775,73 @@ def tela_revisao():
     st.session_state.itens_edital = edital
     st.session_state.mapa_busca_edital = mapa
 
-    # Botões em linha própria, com proporções iguais.
-    col_btn1, col_btn2 = st.columns(2)
-    with col_btn1:
-        if st.button("Buscar preços", type="primary", width="stretch",
-                     help="Busca o preço dos itens MARCADOS em Almeida e Dantas (qualquer um configurado). Pode demorar minutos."):
-            if not st.session_state.itens_revisados:
-                style.bloco_aviso("Nenhum item marcado para buscar preço — marque ao menos um.", tipo="danger")
-            elif (credenciais.carregar("almeida") is None
-                  and credenciais.carregar("dantas") is None):
-                style.bloco_aviso(
-                    "Nenhum fornecedor configurado. Acesse <b>Configurações</b> "
-                    "para cadastrar Almeida e/ou Dantas.",
-                    tipo="danger",
-                )
-            else:
-                ir_para("busca_precos")
+    # Barra de ações: o resumo à esquerda (lido DEPOIS do data_editor — `edited`
+    # é a única fonte de verdade dos checkboxes) e as ações à direita. Erros e
+    # o resultado de "Gerar sem buscar" saem ABAIXO, na largura toda.
+    n_marcados = int(edited["OK"].sum())
+    with st.container(border=True, key="ppcard-acoes-revisao", horizontal=True,
+                      vertical_alignment="center"):
+        st.markdown(
+            f"**{n_marcados} de {len(edited)} itens** vão buscar preço  \n"
+            f":gray[os {len(edited)} entram na planilha — os demais sem preço]",
+            width="stretch")
+        gerar_sem_busca = st.button(
+            "Gerar sem buscar", key="rev_gerar_sem_buscar",
+            help="Gera a planilha com o EDITAL INTEIRO, sem preços (todas as colunas de preço/código/marca em branco, para preencher à mão).")
+        buscar = st.button(
+            "Buscar preços", type="primary", key="rev_buscar",
+            icon=":material/arrow_forward:", icon_position="right",
+            help="Busca o preço dos itens MARCADOS em Almeida e Dantas (qualquer um configurado). Pode demorar minutos.")
 
-    with col_btn2:
-        if st.button("Gerar sem buscar", width="stretch",
-                     help="Gera a planilha com o EDITAL INTEIRO, sem preços (todas as colunas de preço/código/marca em branco, para preencher à mão)."):
-            _gerar_excel(_df_para_itens(edited), markup=config.MARKUP_DEFAULT,
-                         selecoes={})
+    if buscar:
+        if not st.session_state.itens_revisados:
+            style.bloco_aviso("Nenhum item marcado para buscar preço — marque ao menos um.", tipo="danger")
+        elif (credenciais.carregar("almeida") is None
+              and credenciais.carregar("dantas") is None):
+            style.bloco_aviso(
+                "Nenhum fornecedor configurado. Acesse <b>Configurações</b> "
+                "para cadastrar Almeida e/ou Dantas.",
+                tipo="danger",
+            )
+        else:
+            ir_para("busca_precos")
+    if gerar_sem_busca:
+        _gerar_excel(_df_para_itens(edited), markup=config.MARKUP_DEFAULT,
+                     selecoes={})
+
+
+def _contexto_pregao_editavel() -> None:
+    """Linha de contexto acima do título — 'Pregão 00027/2026 · Prefeitura X'
+    — com 'Editar' (órgão e número num popover).
+
+    Órgão + número continuam EDITÁVEIS (já foram exigidos no upload): o
+    operador corrige antes de gerar a planilha. O conteúdo do popover roda a
+    cada render, mesmo fechado, então orgao/numero são regravados no
+    session_state todo render, como antes, para o exportador/persistência
+    usarem o valor atual. Se o operador limpar um deles, _gerar_excel revalida
+    e barra a geração — a identidade nunca chega vazia ao histórico."""
+    with st.container(horizontal=True, vertical_alignment="center", gap="small",
+                      key="ppctx-revisao"):
+        rotulo = st.empty()   # preenchido DEPOIS dos campos: já com o valor novo
+        with st.popover("Editar", type="tertiary", icon=":material/edit:"):
+            st.session_state.orgao = st.text_input(
+                "Órgão", value=st.session_state.get("orgao", ""),
+                key="rev_orgao")
+            st.session_state.numero = st.text_input(
+                "Número do pregão", value=st.session_state.get("numero", ""),
+                key="rev_numero")
+        rotulo.markdown(
+            f'<div class="pp-contexto">{html.escape(_rotulo_pregao_atual())}</div>',
+            unsafe_allow_html=True, width="content")
+
+
+def _rotulo_pregao_atual() -> str:
+    """'Pregão 00027/2026 · Prefeitura X' — linha de contexto acima do título
+    nas telas do fluxo."""
+    numero = (st.session_state.get("numero") or "").strip()
+    orgao = (st.session_state.get("orgao") or "").strip()
+    return " · ".join([f"Pregão {numero}" if numero else "Pregão sem número",
+                       orgao or "órgão não informado"])
 
 
 def _linha_para_item(r):
@@ -1027,7 +1124,8 @@ def _persistir_edital(itens: list, selecoes: dict, destino, markup) -> None:
 
 # === Tela: HISTÓRICO ===
 def _data_amigavel(criado_em: str | None) -> str:
-    """Converte o timestamp do banco ('AAAA-MM-DD HH:MM:SS') para 'DD/MM HH:MM'.
+    """Converte o timestamp do banco ('AAAA-MM-DD HH:MM:SS', em UTC — é o
+    CURRENT_TIMESTAMP do SQLite) para 'DD/MM HH:MM' no horário de Brasília.
 
     Tolerante: se o formato não bater (banco antigo, valor nulo), devolve o
     texto cru — nunca estoura exceção na cara do operador.
@@ -1035,8 +1133,9 @@ def _data_amigavel(criado_em: str | None) -> str:
     if not criado_em:
         return "data desconhecida"
     try:
-        from datetime import datetime as _dt
-        return _dt.strptime(criado_em[:19], "%Y-%m-%d %H:%M:%S").strftime("%d/%m %H:%M")
+        from datetime import datetime as _dt, timezone as _tz
+        utc = _dt.strptime(criado_em[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=_tz.utc)
+        return utc.astimezone(config.FUSO_HORARIO).strftime("%d/%m %H:%M")
     except (ValueError, TypeError):
         return str(criado_em)
 
@@ -1151,23 +1250,20 @@ def tela_historico():
         ).fetchall()
 
     if not editais:
-        style.bloco_aviso(
-            "Nenhum pregão processado ainda. Comece em <b>Novo pregão</b>.",
-            tipo="info",
-        )
+        st.caption("Nenhum pregão processado ainda. Comece em **Novo pregão**.")
         return
 
     # Filtro por órgão/número do pregão.
     filtro = st.text_input(
         "Buscar pregão", value="", key="filtro_hist",
         placeholder="Filtrar por órgão ou número do pregão…",
+        icon=":material/search:",
         label_visibility="collapsed").strip().lower()
     if filtro:
         editais = [e for e in editais if filtro in _rotulo_pregao(
             e["orgao"], e["numero_pregao"], e["status"], e["criado_em"]).lower()]
         if not editais:
-            style.bloco_aviso(f"Nenhum pregão encontrado para “{filtro}”.",
-                              tipo="info")
+            st.caption(f"Nenhum pregão encontrado para “{html.escape(filtro)}”.")
             return
 
     _MIME_XLSX = (
@@ -1175,8 +1271,9 @@ def tela_historico():
     )
 
     for ed in editais:
-        rotulo = _rotulo_pregao(ed["orgao"], ed["numero_pregao"],
-                                ed["status"], ed["criado_em"])
+        numero = (ed["numero_pregao"] or "").strip()
+        orgao = (ed["orgao"] or "").strip()
+        titulo = f"Pregão {numero}" if numero else "Pregão sem número"
         n_planilhas = ed["n_planilhas"] or 0
         # Planilha mais recente (a que o ícone de download baixa, inline).
         with get_conn() as conn:
@@ -1191,27 +1288,29 @@ def tela_historico():
                 (ed["id"],),
             ).fetchone()
 
-        # Linha do pregão: título + detalhe à esquerda; ícones INLINE à direita
-        # (editar nome, baixar, excluir) — sem precisar expandir o card.
-        with st.container(border=True):
-            c_info, c_edit, c_dl, c_del = st.columns(
-                [12, 1, 1, 1], vertical_alignment="center")
-            with c_info:
-                st.markdown(f"**{rotulo}**")
-                if ultima is not None:
-                    plural = "s" if n_planilhas != 1 else ""
-                    st.caption(
-                        f"{n_planilhas} planilha{plural} · {ultima['n_itens']} "
-                        f"itens · {ultima['n_selecoes']} com preço/marca")
-                else:
-                    st.caption("Nenhuma planilha registrada — gere de novo a "
+        # Linha do pregão: pregão/órgão · planilhas e data · ícones INLINE à
+        # direita (editar nome, baixar, excluir) — sem precisar expandir o card.
+        with st.container(border=True, key=f"ppcard-hist-{ed['id']}"):
+            c_info, c_meta, c_acoes = st.columns([5, 4, 2], vertical_alignment="center")
+            c_info.markdown(f"**{html.escape(titulo)}**  \n"
+                            f":gray[{html.escape(orgao or 'órgão não informado')}]")
+            if ultima is not None:
+                plural = "s" if n_planilhas != 1 else ""
+                c_meta.markdown(
+                    f"{ultima['n_itens']} itens · **{ultima['n_selecoes']} com preço**  \n"
+                    f":gray[{n_planilhas} planilha{plural} · "
+                    f"{_data_amigavel(ed['criado_em'])}]")
+            else:
+                c_meta.caption("Nenhuma planilha registrada — gere de novo a "
                                "partir do pregão.")
+            acoes = c_acoes.container(horizontal=True, horizontal_alignment="right",
+                                      gap="xsmall")
 
             k_edit = f"hist_edit_{ed['id']}"
             k_del = f"conf_excl_{ed['id']}"
-            if c_edit.button("", icon=":material/edit:",
-                             key=f"btn_edit_{ed['id']}",
-                             help="Editar nome do pregão"):
+            if acoes.button("", icon=":material/edit:", type="tertiary",
+                            key=f"btn_edit_{ed['id']}",
+                            help="Editar nome do pregão"):
                 st.session_state[k_edit] = not st.session_state.get(k_edit, False)
                 st.session_state.pop(k_del, None)
                 st.rerun()
@@ -1221,18 +1320,18 @@ def tela_historico():
             caminho = (config.EXPORTS_DIR / ultima["arquivo"]) if ultima else None
             if caminho is not None and caminho.exists():
                 with open(caminho, "rb") as f:
-                    c_dl.download_button(
+                    acoes.download_button(
                         "", data=f.read(), file_name=ultima["arquivo"],
-                        mime=_MIME_XLSX, key=f"dl_{ed['id']}",
+                        mime=_MIME_XLSX, key=f"dl_{ed['id']}", type="tertiary",
                         icon=":material/download:", help="Baixar planilha")
             else:
-                c_dl.button(
-                    "", icon=":material/download:", disabled=True,
+                acoes.button(
+                    "", icon=":material/download:", disabled=True, type="tertiary",
                     key=f"dlx_{ed['id']}",
                     help=("Arquivo não está na pasta — gere de novo a partir "
                           "do pregão." if ultima else "Sem planilha para baixar."))
 
-            if c_del.button("", icon=":material/delete:",
+            if acoes.button("", icon=":material/delete:", type="tertiary",
                             key=f"btn_del_{ed['id']}", help="Excluir pregão"):
                 st.session_state[k_del] = not st.session_state.get(k_del, False)
                 st.session_state.pop(k_edit, None)
@@ -1258,10 +1357,9 @@ def tela_configuracoes():
     with aba_almeida:
         atual = credenciais.carregar("almeida") or {"email": "", "senha": ""}
         if atual.get("email"):
-            style.bloco_aviso(
-                f"Credencial ativa: <code>{atual['email']}</code> (senha oculta).",
-                tipo="success",
-            )
+            # Estado normal: pílula, não caixa (caixa só para o que pede atenção).
+            style.linha_chips([(f"Credencial salva · {html.escape(atual['email'])}",
+                                "success")])
         else:
             style.bloco_aviso(
                 "Nenhuma credencial salva. A busca de preços não funciona até configurar.",
@@ -1286,10 +1384,8 @@ def tela_configuracoes():
     with aba_dantas:
         atual_dantas = credenciais.carregar("dantas") or {"email": "", "senha": ""}
         if atual_dantas.get("email"):
-            style.bloco_aviso(
-                f"Credencial ativa: <code>{atual_dantas['email']}</code> (senha oculta).",
-                tipo="success",
-            )
+            style.linha_chips([(f"Credencial salva · {html.escape(atual_dantas['email'])}",
+                                "success")])
         else:
             style.bloco_aviso(
                 "Nenhuma credencial salva. A busca não inclui Dantas até configurar.",
@@ -1298,8 +1394,9 @@ def tela_configuracoes():
             # Atalho útil: muitos operadores usam a mesma conta nas duas
             cred_almeida_existente = credenciais.carregar("almeida")
             if cred_almeida_existente:
-                if st.button("📋 Usar as mesmas credenciais da Almeida",
-                             key="copia_almeida_dantas"):
+                if st.button("Usar as mesmas credenciais da Almeida",
+                             key="copia_almeida_dantas",
+                             icon=":material/content_copy:"):
                     credenciais.salvar(
                         "dantas",
                         cred_almeida_existente["email"],
@@ -1328,12 +1425,10 @@ def tela_configuracoes():
     with aba_ia:
         gemini_key = credenciais.carregar_chave_api("gemini") or ""
         if gemini_key:
-            style.bloco_aviso(
-                f"Chave configurada: <code>{gemini_key[:8]}…{gemini_key[-4:]}</code>. "
-                "A IA roda automaticamente quando a extração rápida ficar abaixo "
-                "de 95%.",
-                tipo="success",
-            )
+            style.linha_chips([(f"Chave configurada · {html.escape(gemini_key[:8])}…"
+                                f"{html.escape(gemini_key[-4:])}", "success")])
+            st.caption("A IA roda automaticamente quando a extração rápida ficar "
+                       "abaixo de 95%.")
         else:
             style.bloco_aviso(
                 "Sem chave configurada. A IA fica desligada — o sistema usa "
@@ -1356,7 +1451,7 @@ def tela_configuracoes():
                 "Chave de API (Gemini)",
                 value=gemini_key,
                 type="password",
-                help="Começa com 'AIza...'. Salva apenas no seu computador.",
+                help="Começa com 'AIza...'.",
             )
             col_a, col_b = st.columns(2)
             with col_a:
@@ -1435,7 +1530,8 @@ def tela_busca_precos():
     style.stepper(PASSOS_FLUXO, 3 if _gerou else 2)
     style.header_pagina(
         "Busca de preços",
-        "Escolha a marca e o preço de cada item.",
+        "Confira a marca e o preço sugeridos para cada item.",
+        contexto=html.escape(_rotulo_pregao_atual()),
     )
 
     itens = st.session_state.get("itens_revisados") or []
@@ -1490,60 +1586,18 @@ def tela_busca_precos():
         for _aviso in (st.session_state.get("avisos_lote_vazio") or []):
             style.bloco_aviso(_aviso, tipo="warning")
 
-        # Re-busca INCREMENTAL (perf, campo 2026-07): busca SÓ os itens sem
-        # preço, mantendo resultados e escolhas já feitas. É seguro porque a
-        # lista de itens não mudou nesta tela (os índices são estáveis); a
-        # re-busca DESTRUTIVA continua no expander abaixo para o caso de
-        # querer recomeçar ou voltar à revisão (lá os índices podem mudar).
-        _resultados_atuais = st.session_state.resultados_busca
-        _nao_usar = st.session_state.get("itens_nao_usar") or set()
-        faltantes = [i for i in range(len(itens))
-                     if not _resultados_atuais.get(i) and i not in _nao_usar]
-        if faltantes:
-            rotulo_falt = ("Buscar preço do 1 item sem resultado"
-                           if len(faltantes) == 1 else
-                           f"Buscar preços dos {len(faltantes)} itens sem resultado")
-            if st.button(rotulo_falt, width="stretch", key="rebusca_faltantes"):
-                _executar_busca(itens, fornecedores_disponiveis,
-                                indices=faltantes)
-                st.rerun()
-
-        # Saída pós-busca (auditoria 2026-06, achado alto nº 8): se o site
-        # falhou no meio do lote, o operador precisa de um caminho que não
-        # seja recomeçar o pregão do zero. Re-buscar é barato: o que já tem
-        # preço responde do cache (commit incremental por item) e só o que
-        # ficou vazio é consultado de novo (vazio não entra no cache).
-        with st.expander("A busca teve problemas? Re-buscar ou voltar"):
-            st.caption(
-                "Os dois caminhos descartam os resultados e as marcas já "
-                "escolhidas nesta tela — re-buscar é rápido: itens que já têm "
-                "preço respondem da memória (2 dias) e só os sem resultado "
-                "são tentados outra vez."
-            )
-            col_re, col_volta = st.columns(2)
-            # Ambos os botões DESCARTAM resultados/seleções: eles são
-            # indexados pela POSIÇÃO do item, e voltar à revisão permite
-            # remover/editar itens — manter o estado antigo pareava preço
-            # do item errado na planilha (verificação adversarial 2026-06).
-            if col_re.button("Buscar preços novamente", width="stretch"):
-                for k in ("resultados_busca", "selecoes", "pagina_busca"):
-                    st.session_state.pop(k, None)
-                st.rerun()
-            if col_volta.button("Voltar para a revisão", width="stretch"):
-                for k in ("resultados_busca", "selecoes", "pagina_busca"):
-                    st.session_state.pop(k, None)
-                ir_para("revisao")
-        _mostrar_selecao(itens, st.session_state.resultados_busca)
+        _mostrar_selecao(itens, st.session_state.resultados_busca,
+                         fornecedores_disponiveis)
         return
 
-    # === Pré-busca: cards de resumo + CTA ===
+    # === Pré-busca: resumo + ação ===
     # Não usamos mais "estimativa de tempo" (variava muito com latência),
     # mas mostramos o que o operador precisa saber antes de começar.
     fornec_str = " + ".join(f.capitalize() for f in fornecedores_disponiveis)
     style.resumo_pre_busca([
         ("Itens a buscar", str(len(itens))),
         ("Fornecedores", fornec_str),
-        ("Cache de preço", f"{config.CACHE_PRECO_DIAS} dias"),
+        ("Memória de preços", f"{config.CACHE_PRECO_DIAS} dias"),
     ])
 
     # Controles TÉCNICOS (diagnóstico, limpar cache) só aparecem em modo de
@@ -1558,22 +1612,75 @@ def tela_busca_precos():
         with cdb:
             limpar_cache_antes = st.checkbox("[dev] Limpar cache antes", value=False)
 
-    col_a, col_b, _spacer = st.columns([2, 2, 6])
-    with col_a:
-        iniciar = st.button("Iniciar busca", type="primary", width="stretch")
-    with col_b:
-        if st.button("Voltar para revisão", width="stretch"):
-            ir_para("revisao")
-            return
+    with st.container(horizontal=True, vertical_alignment="center"):
+        iniciar = st.button("Iniciar busca", type="primary", key="btn_iniciar_busca",
+                            icon=":material/search:")
+        voltar = st.button("Voltar para a revisão", type="tertiary",
+                           key="btn_voltar_revisao")
+    if voltar:
+        ir_para("revisao")
+        return
     if iniciar:
         if limpar_cache_antes:
             from pregoes import db as _db
             with get_conn() as _conn:
                 _db.cache_limpar(_conn)
-        # IMPORTANTE: chamar fora de `with col_a:` evita que o painel
-        # de progresso herde a largura estreita da coluna do botão.
+        # IMPORTANTE: chamar FORA do container dos botões — senão o painel de
+        # progresso herda a largura dele.
         _executar_busca(itens, fornecedores_disponiveis,
                         salvar_diagnostico=salvar_diag)
+        st.rerun()
+
+
+def _acoes_pos_busca(itens: list, resultados: dict, fornecedores: list) -> None:
+    """Saídas depois da busca, numa linha: buscar de novo SÓ os itens sem
+    resultado e, num popover, recomeçar tudo ou voltar à revisão.
+
+    Re-busca INCREMENTAL (perf, campo 2026-07): busca SÓ os itens sem preço,
+    mantendo resultados e escolhas já feitas. É seguro porque a lista de itens
+    não mudou nesta tela (os índices são estáveis).
+
+    Saída pós-busca (auditoria 2026-06, achado alto nº 8): se o site falhou no
+    meio do lote, o operador precisa de um caminho que não seja recomeçar o
+    pregão do zero. Re-buscar é barato: o que já tem preço responde do cache
+    (commit incremental por item) e só o que ficou vazio é consultado de novo
+    (vazio não entra no cache)."""
+    nao_usar = st.session_state.get("itens_nao_usar") or set()
+    faltantes = [i for i in range(len(itens))
+                 if not resultados.get(i) and i not in nao_usar]
+    rebuscar = False
+    with st.container(horizontal=True, vertical_alignment="center"):
+        if faltantes:
+            rotulo_falt = ("Buscar de novo o item sem resultado"
+                           if len(faltantes) == 1 else
+                           f"Buscar de novo os {len(faltantes)} itens sem resultado")
+            rebuscar = st.button(rotulo_falt, key="rebusca_faltantes",
+                                 icon=":material/refresh:")
+        with st.popover("A busca teve problemas?", type="tertiary",
+                        icon=":material/help:"):
+            st.caption(
+                "Os dois caminhos descartam os resultados e as marcas já "
+                "escolhidas nesta tela — re-buscar é rápido: itens que já têm "
+                "preço respondem da memória (2 dias) e só os sem resultado "
+                "são tentados outra vez."
+            )
+            # Ambos os botões DESCARTAM resultados/seleções: eles são
+            # indexados pela POSIÇÃO do item, e voltar à revisão permite
+            # remover/editar itens — manter o estado antigo pareava preço
+            # do item errado na planilha (verificação adversarial 2026-06).
+            if st.button("Buscar preços novamente", width="stretch",
+                         key="rebusca_tudo"):
+                for k in ("resultados_busca", "selecoes", "pagina_busca"):
+                    st.session_state.pop(k, None)
+                st.rerun()
+            if st.button("Voltar para a revisão", width="stretch",
+                         key="voltar_revisao_pos_busca"):
+                for k in ("resultados_busca", "selecoes", "pagina_busca"):
+                    st.session_state.pop(k, None)
+                ir_para("revisao")
+    if rebuscar:
+        # Fora do container: o painel de progresso usa a largura toda.
+        _executar_busca(itens, fornecedores, indices=faltantes)
         st.rerun()
 
 
@@ -2033,11 +2140,11 @@ def _form_condicao_pagamento(fornecedor: str) -> None:
                 return i
         return 0
 
-    st.markdown("**Condição de pagamento** — o preço no site **muda** conforme a "
-                "forma (e o prazo, quando houver). Escolha a condição sob a qual "
-                "você realmente compra; o sistema busca os preços nela. "
-                "**PIX e pagamento antecipado não têm prazo** — deixe o prazo em "
-                "*Não se aplica*.")
+    style.secao("Condição de pagamento")
+    st.caption("O preço no site **muda** conforme a forma (e o prazo, quando "
+               "houver). Escolha a condição sob a qual você realmente compra; o "
+               "sistema busca os preços nela. **PIX e pagamento antecipado não "
+               "têm prazo** — deixe o prazo em *Não se aplica*.")
     with st.form(f"form_pagto_{fornecedor}"):
         forma = st.selectbox(
             "Forma de Pagamento", forma_ops,
@@ -2088,13 +2195,14 @@ def _mostrar_condicao_pagamento(fornecedores: list) -> None:
             cond = pref.get("forma_texto") or ""
             if pref.get("prazo_texto"):   # PIX/antecipado não têm prazo
                 cond += " · " + pref["prazo_texto"]
-            configuradas.append(f"{nome.capitalize()}: {cond}")
+            configuradas.append(f"{nome.capitalize()} · {cond}")
         else:
             falta.append(nome.capitalize())
     if configuradas:
         st.markdown(
-            "<div style='margin:0.15rem 0 0.4rem'>"
-            + " ".join(style.badge(c, "neutro") for c in configuradas)
+            '<div class="pp-chips"><span class="pp-chips-rotulo">'
+            'Condição de pagamento:</span>'
+            + "".join(style.badge(html.escape(c), "neutro") for c in configuradas)
             + "</div>", unsafe_allow_html=True)
     if falta:
         style.bloco_aviso(
@@ -2195,7 +2303,7 @@ def _restaurar_rascunho(estado: dict, slug: str | None = None) -> None:
     # chaves que existiam só no anterior — ex.: itens_nao_usar, df_editavel —
     # vazariam para o novo (achado 2026-07-06). No boot (recuperação de apagão)
     # não há nada a limpar; é no-op.
-    for k in set(CHAVES_PREGAO) | {"orgao", "numero", "pdf_path"}:
+    for k in set(CHAVES_PREGAO) | set(_CHAVES_IDENTIDADE):
         st.session_state.pop(k, None)
     _limpar_busca_por_item()   # não herda buscas manuais de outro pregão
     for k, v in estado.items():
@@ -2292,69 +2400,77 @@ def _filtrar_rascunhos_finalizados(pendentes: list) -> list:
         return pendentes
 
 
-def _banner_rascunhos() -> None:
-    """Lista, no Início, os pregões guardados para CONTINUAR ou descartar.
+def _banner_rascunhos(pendentes: list) -> None:
+    """Lista, no Início, os pregões em andamento (guardados) para CONTINUAR ou
+    descartar — já filtrados por ``_filtrar_rascunhos_finalizados``.
 
     Aparece SEMPRE que há rascunhos pendentes — INCLUSIVE com um pregão já em
     andamento (feedback do cliente 2026-07-06: ao voltar ao Início querendo
     alternar entre pregões, a lista sumia até recarregar a página). Só é
-    chamada em ``tela_home`` — então não polui as telas de trabalho, e o gate
-    antigo por 'em andamento' (que causava o sumiço) foi removido. O pregão
-    atualmente carregado é marcado 'em andamento'; 'Continuar' nele volta para
+    chamada em ``tela_home`` — então não polui as telas de trabalho. O pregão
+    atualmente carregado é marcado 'aberto agora'; 'Continuar' nele volta para
     a tela onde parou."""
     from pregoes import rascunho
-    pendentes = _filtrar_rascunhos_finalizados(rascunho.listar_pregoes())
     if not pendentes:
+        st.caption("Nenhum pregão em andamento. Comece em **Novo pregão**.")
         return
     ativo = st.session_state.get("_rascunho_slug")
-    n = len(pendentes)
-    style.bloco_aviso(
-        f"<b>{n} {'pregão guardado' if n == 1 else 'pregões guardados'}</b> — "
-        "continue de onde parou ou descarte.", tipo="info")
-    for p in pendentes[:8]:
-        slug = p["slug"]
-        rotulo = " — ".join(x for x in (
-            f"Pregão {p['numero']}" if p["numero"] else None,
-            p["orgao"]) if x) or "Pregão sem identificação"
-        detalhe = f"{p['n_itens']} {'item' if p['n_itens'] == 1 else 'itens'}"
-        if p["tem_busca"]:
-            detalhe += " · busca de preços feita"
-        if slug == ativo:
-            detalhe += " · em andamento"
-        with st.container(border=True):
-            c1, c2, c3 = st.columns([6, 2, 2], vertical_alignment="center")
-            c1.markdown(f"**{rotulo}**  \n:gray[{detalhe}]")
-            chave_conf = f"rasc_conf_del_{slug}"
-            if st.session_state.get(chave_conf):
-                if c2.button("Sim, descartar", key=f"rasc_del_sim_{slug}",
-                             type="primary", width="stretch"):
-                    if slug == st.session_state.get("_rascunho_slug"):
-                        # Descartar o ATIVO: limpa a sessão TAMBÉM — senão o
-                        # autosave do próximo render recria o arquivo.
-                        _limpar_pregao()
-                    else:
-                        rascunho.remover_pregao(slug)
-                    st.session_state.pop(chave_conf, None)
-                    st.rerun()
-                if c3.button("Cancelar", key=f"rasc_del_nao_{slug}",
-                             width="stretch"):
-                    st.session_state.pop(chave_conf, None)
-                    st.rerun()
+    with st.container(border=True, key="ppcard-andamento"):
+        for i, p in enumerate(pendentes[:8]):
+            if i:
+                st.markdown('<hr class="pp-sep">', unsafe_allow_html=True)
+            _linha_rascunho(p, ativo, rascunho)
+
+
+def _linha_rascunho(p: dict, ativo: str | None, rascunho) -> None:
+    """Uma linha da lista 'Em andamento': pregão · onde parou · quando ·
+    ações (com confirmação antes de descartar)."""
+    slug = p["slug"]
+    numero = (p["numero"] or "").strip()
+    titulo = f"Pregão {numero}" if numero else "Pregão sem identificação"
+    etapa = "Preços" if p["tem_busca"] else "Revisão dos itens"
+    n_itens = f"{p['n_itens']} {'item' if p['n_itens'] == 1 else 'itens'}"
+    aberto = " · *aberto agora*" if slug == ativo else ""
+    c1, c2, c3 = st.columns([5, 4, 4], vertical_alignment="center")
+    c1.markdown(f"**{html.escape(titulo)}**  \n:gray[{html.escape(p['orgao'] or '')}]")
+    chave_conf = f"rasc_conf_del_{slug}"
+    confirmando = st.session_state.get(chave_conf)
+    if confirmando:
+        c2.markdown(":red[**Descartar este pregão?**]  \n:gray[O que foi feito nele se perde.]")
+    else:
+        c2.markdown(f"**{etapa}** · {n_itens}{aberto}  \n:gray[{_quando(p.get('mtime'))}]")
+    # As ações lado a lado, à direita, no tamanho do texto (em colunas
+    # estreitas o rótulo quebrava letra a letra).
+    acoes = c3.container(horizontal=True, horizontal_alignment="right")
+    if confirmando:
+        if acoes.button("Descartar", key=f"rasc_del_sim_{slug}",
+                        type="primary"):
+            if slug == st.session_state.get("_rascunho_slug"):
+                # Descartar o ATIVO: limpa a sessão TAMBÉM — senão o
+                # autosave do próximo render recria o arquivo.
+                _limpar_pregao()
             else:
-                # 'Continuar' no pregão ativo é o caminho de VOLTA para a tela
-                # onde ele parou (restaura o mesmo estado + a tela salva).
-                if c2.button("Continuar", key=f"rasc_cont_{slug}",
-                             type="primary", width="stretch"):
-                    estado = rascunho.carregar_pregao(slug)
-                    if estado:
-                        _restaurar_rascunho(estado, slug)
-                    else:   # corrompido entre a listagem e o clique — remove
-                        rascunho.remover_pregao(slug)
-                    st.rerun()
-                if c3.button("Descartar", key=f"rasc_del_{slug}",
-                             width="stretch"):
-                    st.session_state[chave_conf] = True
-                    st.rerun()
+                rascunho.remover_pregao(slug)
+            st.session_state.pop(chave_conf, None)
+            st.rerun()
+        if acoes.button("Cancelar", key=f"rasc_del_nao_{slug}", type="tertiary"):
+            st.session_state.pop(chave_conf, None)
+            st.rerun()
+    else:
+        # 'Continuar' no pregão ativo é o caminho de VOLTA para a tela onde ele
+        # parou (restaura o mesmo estado + a tela salva).
+        if acoes.button("Continuar", key=f"rasc_cont_{slug}",
+                        icon=":material/arrow_forward:", icon_position="right"):
+            estado = rascunho.carregar_pregao(slug)
+            if estado:
+                _restaurar_rascunho(estado, slug)
+            else:   # corrompido entre a listagem e o clique — remove
+                rascunho.remover_pregao(slug)
+            st.rerun()
+        if acoes.button("", key=f"rasc_del_{slug}", type="tertiary",
+                        icon=":material/delete:", help="Descartar este pregão"):
+            st.session_state[chave_conf] = True
+            st.rerun()
 
 
 def _escolher_opcao(idx: int, o) -> None:
@@ -2381,27 +2497,6 @@ def _numero_item_edital(item, idx: int) -> int:
     return n if n is not None else idx + 1
 
 
-def _titulo_item(descricao: str) -> str:
-    """Apresenta a descrição do edital como um título legível.
-
-    Editais chegam em CAIXA ALTA ('CILINDRO PARA FECHADURA 803/1401'), o que
-    soa agressivo num título. Convertemos cada palavra inteiramente maiúscula
-    e 'comprida' para capitalização normal (CILINDRO -> Cilindro), mas
-    preservamos os tokens técnicos — siglas curtas (PVC, CR), medidas (53MM)
-    e códigos com '/' (803/1401) — que perderiam sentido se mexidos.
-    """
-    texto = (descricao or "").strip().rstrip(" .;,-")
-    palavras = []
-    for p in texto.split():
-        tecnico = any(c.isdigit() for c in p) or "/" in p or len(p) <= 3
-        palavras.append(p.capitalize() if (p.isupper() and not tecnico) else p)
-    titulo = " ".join(palavras)
-    # Encurta só o CABEÇALHO (a descrição completa aparece dentro do item).
-    if len(titulo) > 95:
-        titulo = titulo[:95].rstrip() + "…"
-    return (titulo[:1].upper() + titulo[1:]) if titulo else titulo
-
-
 def _card_opcao(idx: int, pos: int, opcao, *, badge_html: str,
                 escolhido: bool, on_escolher) -> None:
     """Renderiza uma opção de marca/preço como card selecionável.
@@ -2415,11 +2510,11 @@ def _card_opcao(idx: int, pos: int, opcao, *, badge_html: str,
     oculta (métrica interna).
 
     O card escolhido recebe um `key` `ppoptsel-*` para o CSS destacá-lo
-    (fundo + acento). ``badge_html`` é uma pílula de ``style.pill`` (ou "").
+    (borda Azul Pregões). ``badge_html`` é uma pílula de ``style.pill`` (ou "").
     """
-    marca = (opcao.marca or "Sem marca").strip()
-    fornecedor = (opcao.fornecedor or "").capitalize()
-    codigo = (opcao.codigo_fornecedor or "").strip()
+    marca = html.escape((opcao.marca or "Sem marca").strip())
+    fornecedor = html.escape((opcao.fornecedor or "").capitalize())
+    codigo = html.escape((opcao.codigo_fornecedor or "").strip())
     desc = (opcao.descricao_encontrada or "").strip()
     if len(desc) > 72:
         desc = desc[:72].rstrip() + "…"
@@ -2429,35 +2524,28 @@ def _card_opcao(idx: int, pos: int, opcao, *, badge_html: str,
                 else f"ppopt-{idx}-{pos}")
     with st.container(border=True, key=key_card):
         c_info, c_preco, c_acao = st.columns(
-            [5.2, 1.8, 1.6], vertical_alignment="center")
+            [5.2, 1.6, 1.8], vertical_alignment="center")
         with c_info:
+            # Linha secundária: descrição · fornecedor · código.
+            partes = [html.escape(desc)] if desc else []
+            if fornecedor:
+                partes.append(fornecedor)
+            if codigo:
+                partes.append(f"<code>cód. {codigo}</code>")
             sufixo = f" {badge_html}" if badge_html else ""
-            # Linha secundária: descrição · fornecedor · código (o código entra
-            # por feedback do cliente, para diferenciar produtos e cruzar com as
-            # tabelas internas). O código vai em destaque leve (monoespaçado).
-            meta = " · ".join(p for p in [fornecedor] if p)
-            cod_html = (f" · <code style='color:#475569;font-size:0.8rem'>"
-                        f"cód. {html.escape(codigo)}</code>") if codigo else ""
-            sub = desc + (f" · {meta}" if meta else "") + cod_html
             st.markdown(
-                f"<span style='font-weight:600;font-size:1.02rem'>{marca}</span>"
-                f"{sufixo}<br>"
-                f"<span style='color:#64748b;font-size:0.85rem'>{sub}</span>",
+                f'<div class="pp-op-marca">{marca}{sufixo}</div>'
+                f'<div class="pp-op-sub">{" · ".join(partes)}</div>',
                 unsafe_allow_html=True,
             )
         with c_preco:
-            st.markdown(
-                "<div style='text-align:right;font-weight:600;"
-                f"font-size:1.05rem'>{_brl(opcao.preco)}</div>",
-                unsafe_allow_html=True,
-            )
+            st.markdown(f'<div class="pp-op-preco">{_brl(opcao.preco)}</div>',
+                        unsafe_allow_html=True)
         with c_acao:
             if escolhido:
                 st.markdown(
-                    "<div style='text-align:right;color:#2563eb;"
-                    "font-weight:600;padding-top:0.25rem'>✓ escolhido</div>",
-                    unsafe_allow_html=True,
-                )
+                    f'<div class="pp-op-escolhido">{style.icone("check", 16, 2.5)}'
+                    'Escolhido</div>', unsafe_allow_html=True)
             elif st.button("Escolher", key=f"esc_{idx}_{pos}",
                            width="stretch"):
                 on_escolher()
@@ -2594,7 +2682,7 @@ def _painel_markup(selecoes: dict, itens: list) -> tuple[dict, set]:
     # ser distintos entre si.
     m_st, m_normal = config.MARKUP_ST, config.MARKUP_NORMAL
 
-    st.markdown("#### Substituição Tributária deste pregão")
+    style.secao("Substituição tributária")
     st.caption("O preço de venda é calculado na planilha (3 cenários de margem). "
                "Aqui você só confirma os itens com ST — eles saem marcados 'SIM' "
                "na coluna correspondente e a planilha ajusta o imposto sozinha.")
@@ -2604,9 +2692,11 @@ def _painel_markup(selecoes: dict, itens: list) -> tuple[dict, set]:
     markups, resumo, sem_ncm = tributacao.classificar_markups(
         ncms, m_st, m_normal, overrides)
 
-    st.caption(
-        f"{resumo['normal']} normais  ·  {resumo['st']} com Substituição "
-        f"Tributária  ·  {resumo['sem_ncm']} sem NCM")
+    style.linha_chips([
+        (f"{resumo['normal']} normais", "neutro"),
+        (f"{resumo['st']} com substituição tributária", "neutro"),
+        (f"{resumo['sem_ncm']} sem NCM", "warning" if resumo["sem_ncm"] else "neutro"),
+    ])
 
     # O NCM mora na página de detalhe do fornecedor (não no card). Este botão
     # visita os produtos ESCOLHIDOS sem NCM e os classifica (cache por pregão).
@@ -2614,7 +2704,7 @@ def _painel_markup(selecoes: dict, itens: list) -> tuple[dict, set]:
     if fetchaveis:
         if st.button(
                 f"Identificar NCM e classificar ({len(fetchaveis)} itens)",
-                key="btn_ncm"):
+                key="btn_ncm", icon=":material/manage_search:"):
             _identificar_ncm(selecoes, fetchaveis)
             st.rerun()
 
@@ -2646,12 +2736,12 @@ def _painel_markup(selecoes: dict, itens: list) -> tuple[dict, set]:
     if n_dantas:
         pct = int(round(config.DESCONTO_DANTAS * 100))
         um = n_dantas == 1
-        style.bloco_aviso(
-            f"<b>Desconto Dantas:</b> {n_dantas} "
+        # Estado normal (não é problema): texto simples, sem caixa.
+        st.caption(
+            f"**Desconto Dantas:** {n_dantas} "
             f"{'item escolhido é' if um else 'itens escolhidos são'} da Dantas e "
             f"{'sairá' if um else 'sairão'} com {pct}% de desconto no custo, "
-            f"já incluído na planilha.",
-            tipo="info")
+            f"já incluído na planilha.")
 
     return markups, com_st
 
@@ -2664,7 +2754,8 @@ def _seletor_margem_venda() -> None:
     LEMBRADA (vira o padrão do cliente) e pode ser trocada a cada pregão. G sai
     como fórmula, então continua editável e já ajustado para ST. Grava a coluna
     escolhida em ``margem_venda_col`` (lida por _gerar_excel)."""
-    cols = list(config.MARGENS_VENDA.keys())                       # ["Z","AA","AB"]
+    # Da menor para a maior margem (7% · 12% · 15%).
+    cols = sorted(config.MARGENS_VENDA, key=config.MARGENS_VENDA.get)
     label = {c: f"{int(round(p * 100))}%" for c, p in config.MARGENS_VENDA.items()}
     atual = (st.session_state.get("margem_venda_col")
              or credenciais.carregar_margem_venda()
@@ -2672,17 +2763,19 @@ def _seletor_margem_venda() -> None:
     if atual not in cols:
         atual = config.MARGEM_VENDA_PADRAO
 
-    st.markdown("#### Margem do preço de venda")
+    style.secao("Margem do preço de venda")
     st.caption("A planilha já sai com o PREÇO VENDA preenchido nesta margem "
                "(você pode alterar célula a célula no Excel). Fica salvo como seu "
                "padrão para os próximos pregões.")
-    escolha = st.selectbox(
+    escolha = st.segmented_control(
         "Margem aplicada ao preço de venda",
         options=cols,
-        index=cols.index(atual),
+        default=atual,
+        required=True,
         format_func=lambda c: label[c],
         key="sel_margem_venda",
-    )
+        label_visibility="collapsed",
+    ) or atual
     st.session_state["margem_venda_col"] = escolha
     # Persiste SÓ quando o operador escolhe algo diferente do default EFETIVO
     # (salvo ou de fábrica). Sem isto, só abrir a tela já gravava o padrão de
@@ -2985,8 +3078,72 @@ def _melhor_opcao(item_desc: str, opcoes: list):
     return min(opcoes, key=lambda o: _chave_default_opcao(item_desc, o))
 
 
-def _mostrar_selecao(itens: list, resultados: dict) -> None:
-    """Lista paginada de itens; cada candidato vira um card. Operador escolhe.
+def _situacao_item(opcoes: list, sel, nao_usar: bool) -> tuple[str, str, str]:
+    """Situação de um item na lista de preços: ``(filtro, rótulo, tipo da
+    pílula)``. O filtro alimenta os botões Todos / Com preço / A conferir /
+    Sem resultado / Sem preço."""
+    if nao_usar:
+        return ("sem_preco", "Sem preço", "neutro")
+    if not opcoes:
+        return ("sem_resultado", "Sem resultado", "danger")
+    if sel is None:
+        return ("conferir", "Escolher", "warning")
+    if any(o.confianca == "variacao" for o in opcoes):
+        # Achado por busca aproximada (nome variado) — o operador confere.
+        return ("conferir", "Conferir", "warning")
+    return ("com_preco", "Com preço", "success")
+
+
+_FILTROS_BUSCA = (("com_preco", "Com preço"), ("conferir", "A conferir"),
+                  ("sem_resultado", "Sem resultado"), ("sem_preco", "Sem preço"))
+
+# Proporção das colunas da lista de preços (cabeçalho e linhas usam a mesma).
+_COLUNAS_LISTA_PRECOS = [0.6, 5.2, 2.6, 1.5, 1.9, 0.6]
+
+
+def _ao_trocar_filtro_busca() -> None:
+    """Guarda o filtro escolhido fora do widget (o rótulo traz contagens, que
+    mudam a cada escolha) e volta para a 1ª página."""
+    st.session_state["_filtro_busca"] = st.session_state.get("filtro_busca") or "todos"
+    st.session_state.pagina_busca = 0
+
+
+def _alternar_linha(idx: int, aberta: bool) -> None:
+    """Abre/fecha a linha de um item. Fechar também recolhe a busca manual
+    (senão um resultado de busca no site reabriria a linha sozinho)."""
+    st.session_state[f"linha_aberta_{idx}"] = not aberta
+    if aberta:
+        st.session_state.pop(f"site_res_{idx}", None)
+        st.session_state.pop(f"procurar_{idx}", None)
+
+
+def _alternar_procurar(idx: int) -> None:
+    chave = f"procurar_{idx}"
+    st.session_state[chave] = not st.session_state.get(chave, False)
+
+
+def _badge_opcao(pos: int, o, preco_min: float) -> str:
+    """Pílula de uma opção pela sua posição no ranking. "Sua escolha anterior"
+    (retroalimentação) é o sinal MAIS forte; depois "no seu catálogo"; depois
+    melhor match / mais barato."""
+    if getattr(o, "veio_por_aprendizado", False):
+        return style.pill("Sua escolha anterior", "aprendido")
+    if getattr(o, "no_catalogo", False):
+        return style.pill("No seu catálogo", "catalogo")
+    if pos == 0:
+        return style.pill("Melhor match", "match")
+    if o.preco == preco_min:
+        return style.pill("Mais barato", "barato")
+    return ""
+
+
+def _mostrar_selecao(itens: list, resultados: dict,
+                     fornecedores: list | None = None) -> None:
+    """Lista dos itens com a marca/preço escolhidos (redesign 2026-10).
+
+    Uma LINHA por item — nº · descrição como veio no edital · escolhido ·
+    preço · situação — que abre para mostrar as opções (cards), a busca manual
+    e o "não usar". Progresso e filtro por situação no topo; paginação no fim.
 
     Default de seleção = candidato com MAIOR RELEVÂNCIA contra a descrição
     do edital, com PREÇO como tiebreaker. Mudou de "mais barato" para
@@ -2998,18 +3155,15 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
     Mantém o princípio do briefing (CLAUDE.md §7): o sistema só sugere,
     o operador escolhe.
     """
+    from collections import Counter
     from pregoes.exportador import SelecaoFornecedor
-
-    # Ranking extraído para nível de módulo (testável sem AppTest).
-    _chave_default = _chave_default_opcao
-    _melhor = _melhor_opcao
 
     # Inicializa estado de seleções com a opção de MAIOR RELEVÂNCIA por item
     if "selecoes" not in st.session_state:
         st.session_state.selecoes = {}
         for idx, opcoes in resultados.items():
             if opcoes:
-                melhor = _melhor(itens[idx].descricao, opcoes)
+                melhor = _melhor_opcao(itens[idx].descricao, opcoes)
                 st.session_state.selecoes[idx] = SelecaoFornecedor(
                     preco=melhor.preco,
                     codigo_fornecedor=melhor.codigo_fornecedor,
@@ -3019,25 +3173,46 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
                     fornecedor=getattr(melhor, "fornecedor", None),
                 )
 
-    # Resumo
     total = len(itens)
-    com_resultado = sum(1 for r in resultados.values() if r)
-    com_variacao = sum(1 for r in resultados.values()
-                       if r and any(x.confianca == "variacao" for x in r))
-    sem_resultado = total - com_resultado
-    selecionados = len(st.session_state.selecoes)
+    nao_usar_set = st.session_state.setdefault("itens_nao_usar", set())
+    # Por item: opções sem duplicatas, na ordem do default ('no seu catálogo' e
+    # melhor match no topo), cortadas nas N mais relevantes — SEMPRE incluindo a
+    # escolhida (ver _opcoes_visiveis) — e a situação da linha.
+    linhas = []
+    for idx, item in enumerate(itens):
+        opcoes_todas = sorted(
+            _dedup_opcoes(resultados.get(idx, [])),
+            key=lambda o, d=item.descricao: _chave_default_opcao(d, o))
+        sel = st.session_state.selecoes.get(idx)
+        opcoes = _opcoes_visiveis(opcoes_todas, config.MAX_OPCOES_EXIBIDAS, sel)
+        situacao = _situacao_item(opcoes, sel, idx in nao_usar_set)
+        linhas.append((idx, item, opcoes, len(opcoes_todas) - len(opcoes), sel,
+                       situacao))
 
-    style.linha_metricas([
-        ("Itens", total, "neutro", None),
-        ("Com preço", com_resultado - com_variacao, "success",
-         "Casamento exato com a descrição do edital"),
-        ("Por variação", com_variacao,
-         "warning" if com_variacao else "neutro",
-         "Encontrado, mas por busca aproximada — conferir"),
-        ("Sem resultado", sem_resultado,
-         "danger" if sem_resultado else "neutro",
-         "Sem preço em nenhum fornecedor — use a re-busca ou a busca manual"),
-    ])
+    # Progresso + filtro por situação.
+    selecionados = len(st.session_state.selecoes)
+    contagem = Counter(sit[0] for *_, sit in linhas)
+    filtros = {"todos": f"Todos · {total}"}
+    filtros.update({chave: f"{rotulo} · {contagem[chave]}"
+                    for chave, rotulo in _FILTROS_BUSCA if contagem.get(chave)})
+    filtro = st.session_state.get("_filtro_busca", "todos")
+    if filtro not in filtros:
+        filtro = "todos"
+    with st.container(horizontal=True, vertical_alignment="center",
+                      key="ppbusca-topo"):
+        frac = selecionados / total if total else 0
+        st.markdown(
+            '<div class="pp-progresso"><div class="pp-progresso-txt">'
+            f'<b>{selecionados} de {total}</b> itens com preço</div>'
+            f'{style.barra_progresso(frac)}</div>',
+            unsafe_allow_html=True, width="stretch")
+        st.segmented_control(
+            "Mostrar", list(filtros), format_func=filtros.get, default=filtro,
+            required=True, key="filtro_busca", label_visibility="collapsed",
+            on_change=_ao_trocar_filtro_busca)
+
+    if fornecedores:
+        _acoes_pos_busca(itens, resultados, fornecedores)
 
     # Painel de erros do batch — só aparece quando há falhas técnicas.
     # Não bloqueia o fluxo: o operador pode prosseguir com o que deu certo.
@@ -3057,219 +3232,64 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
             if len(erros_busca) > 50:
                 st.caption(f"... e mais {len(erros_busca) - 50} erros.")
 
-    st.divider()
-
-    # Paginação simples. A NAVEGAÇÃO (Anterior/Próxima) fica no FIM da lista
-    # (pedido do cliente 2026-06-27) e some quando há só 1 página — no topo era
-    # só ruído. Aqui em cima fica só o cálculo da fatia atual.
+    # Paginação sobre a lista JÁ filtrada. A navegação (Anterior/Próxima) fica
+    # no FIM da lista (pedido do cliente 2026-06-27) e some com 1 página só.
+    visiveis = [l for l in linhas if filtro == "todos" or l[5][0] == filtro]
     POR_PAGINA = 20
-    n_paginas = (total + POR_PAGINA - 1) // POR_PAGINA
-    if "pagina_busca" not in st.session_state:
-        st.session_state.pagina_busca = 0
-    pag = min(st.session_state.pagina_busca, max(0, n_paginas - 1))
+    n_visiveis = len(visiveis)
+    n_paginas = max(1, (n_visiveis + POR_PAGINA - 1) // POR_PAGINA)
+    pag = min(st.session_state.get("pagina_busca", 0), n_paginas - 1)
     st.session_state.pagina_busca = pag
     inicio = pag * POR_PAGINA
-    fim = min(inicio + POR_PAGINA, total)
+    fim = min(inicio + POR_PAGINA, n_visiveis)
 
-    # Lista de itens da página atual
-    for idx in range(inicio, fim):
-        item = itens[idx]
-        # Dedup já aqui: o contador "X opções" e os cards exibidos usam a mesma
-        # lista, e nenhum produto duplicado acende dois "escolhido".
-        opcoes_todas = _dedup_opcoes(resultados.get(idx, []))
-        # Mostra só as N mais relevantes (ordena pela MESMA chave do default —
-        # 'no seu catálogo' e melhor match no topo). Reduz o ruído de 10 opções
-        # (feedback do cliente 2026-06); para outra marca há a busca no catálogo.
-        opcoes_todas = sorted(
-            opcoes_todas, key=lambda o: _chave_default(item.descricao, o))
-        n_total = len(opcoes_todas)
-        sel_atual = st.session_state.selecoes.get(idx)
-        # Sempre inclui a opção ESCOLHIDA nas visíveis (mesmo de baixa relevância,
-        # ex.: busca manual no site) — senão o destaque voltava pra antiga e
-        # parecia que a seleção não pegou (bug 2026-06-27, ver _opcoes_visiveis).
-        opcoes = _opcoes_visiveis(opcoes_todas, config.MAX_OPCOES_EXIBIDAS,
-                                  sel_atual)
-        n_ocultas = n_total - len(opcoes)
-        nao_usar = idx in st.session_state.setdefault("itens_nao_usar", set())
+    with st.container(key="pplista-cab"):
+        cab = st.columns(_COLUNAS_LISTA_PRECOS, vertical_alignment="center")
+        for col, titulo in zip(cab, ("Nº", "Descrição no edital", "Escolhido",
+                                     "Preço", "Situação", "")):
+            if titulo:
+                col.markdown(f'<div class="pp-li-cab">{titulo}</div>',
+                             unsafe_allow_html=True)
+    with st.container(key="pplista", gap="xsmall"):
+        if not visiveis:
+            st.caption("Nenhum item nesta situação.")
+        for idx, item, opcoes, n_ocultas, sel, situacao in visiveis[inicio:fim]:
+            _linha_item_preco(idx, item, opcoes, n_ocultas, sel, situacao,
+                              nao_usar_set)
 
-        n_op = len(opcoes)
-        if nao_usar:
-            label_status = "sem preço (você marcou)"
-            tipo_status: style.TipoBadge = "neutro"
-        elif not opcoes:
-            label_status = "Não encontrado"
-            tipo_status = "danger"
-        elif any(o.confianca == "variacao" for o in opcoes):
-            label_status = f"{n_op} a conferir"
-            tipo_status = "warning"
-        else:
-            label_status = f"{n_op} {'opção' if n_op == 1 else 'opções'}"
-            tipo_status = "success"
-
-        # Cabeçalho: ícone de status (Material Symbols, consistente entre SOs)
-        # + "Item N" (em vez de "#N", que soava pouco profissional) + título
-        # legível + status colorido.
-        cor_status = {"success": "green", "warning": "orange",
-                      "danger": "red", "neutro": "gray"}[tipo_status]
-        icone_status = {"success": ":material/check_circle:",
-                        "warning": ":material/help:",
-                        "danger": ":material/cancel:",
-                        "neutro": ":material/block:"}[tipo_status]
-        # Mostra o NÚMERO DO ITEM NO EDITAL (item.item_numero) — pedido do
-        # cliente 2026-06: ele identifica "que produto é este no edital?" pelo
-        # ID, igual ao da coluna ITEM da planilha. Fallback ao sequencial 1-based
-        # quando o PDF não trouxe o número (ver _numero_item_edital).
-        cabecalho = (
-            f"**Item {_numero_item_edital(item, idx)}** · "
-            f"{_titulo_item(item.descricao)} · :{cor_status}[{label_status}]"
-        )
-        # Escolha visível SEM abrir o item (auditoria de UI 2026-07): marca e
-        # preço escolhidos entram no título fechado — conferir 272 itens vira
-        # leitura corrida, não caça ao clique.
-        if sel_atual is not None and not nao_usar:
-            marca_sel = (sel_atual.marca or "").strip()[:16] or "sem marca"
-            cabecalho += " · :blue[✓ " + marca_sel + " · " + _brl(sel_atual.preco) + "]"
-        with st.expander(cabecalho, expanded=False, icon=icone_status):
-            # Descrição COMPLETA e exata do edital. O cabeçalho encurta para
-            # caber na linha; aqui o operador lê o item inteiro (como veio do
-            # edital, sem capitalização nem corte) para julgar os candidatos.
-            st.markdown(
-                "<div style='background:#f8fafc;border:1px solid #e2e8f0;"
-                "border-radius:8px;padding:0.55rem 0.8rem;margin-bottom:0.75rem;"
-                "font-size:0.82rem;color:#64748b;line-height:1.5'>"
-                f"{html.escape(item.descricao or '')}</div>",
-                unsafe_allow_html=True,
-            )
-            # Sem resultado dos fornecedores: NÃO pula o item (antes havia um
-            # `continue` que escondia a busca no catálogo e o "Não usar").
-            # Mostra o aviso e segue para a busca manual no catálogo (pedido do
-            # cliente 2026-06: poder buscar no catálogo igual aos demais casos).
-            if not opcoes:
-                style.bloco_aviso(
-                    "Nenhum resultado nos fornecedores nesta busca. Use a "
-                    "<b>Buscar no meu catálogo</b> abaixo, ou deixe em branco "
-                    "(a coluna de preço fica vazia para preencher manualmente).",
-                    tipo="warning",
-                )
-            else:
-                # Mesma chave do default (_chave_default): código forte do edital,
-                # depois relevância, depois preço — para o topo da lista coincidir
-                # com a opção pré-selecionada.
-                item_desc_local = item.descricao
-                opcoes_ordenadas = sorted(
-                    opcoes, key=lambda o: _chave_default(item_desc_local, o))
-                preco_min = min(o.preco for o in opcoes_ordenadas)
-
-                def _esta_selecionado(o, s=sel_atual):
-                    return _mesma_selecao(o, s)
-
-                # Badge de uma opção pela sua posição no ranking. "Sua escolha
-                # anterior" (retroalimentação) é o sinal MAIS forte; depois "no
-                # seu catálogo"; depois melhor match / mais barato.
-                def _badge_de(pos, o):
-                    if getattr(o, "veio_por_aprendizado", False):
-                        return style.pill("✓ sua escolha anterior", "aprendido")
-                    if getattr(o, "no_catalogo", False):
-                        return style.pill("✓ no seu catálogo", "catalogo")
-                    if pos == 0:
-                        return style.pill("Melhor match", "match")
-                    if o.preco == preco_min:
-                        return style.pill("Mais barato", "barato")
-                    return ""
-
-                # Divulgação progressiva (redesign 2026-06): uma decisão óbvia por
-                # vez. A opção em DESTAQUE é a já escolhida (se houver) ou o melhor
-                # match; as demais ficam a UM clique, recolhidas. Toda a lógica de
-                # seleção/badge é a mesma — só muda a apresentação.
-                idx_destaque = next(
-                    (p for p, o in enumerate(opcoes_ordenadas)
-                     if _esta_selecionado(o)), 0)
-                o_dest = opcoes_ordenadas[idx_destaque]
-                st.caption("Sugerimos a melhor opção — confira e confirme:")
-                _card_opcao(
-                    idx, idx_destaque, o_dest,
-                    badge_html=_badge_de(idx_destaque, o_dest),
-                    escolhido=_esta_selecionado(o_dest),
-                    on_escolher=lambda o=o_dest: _escolher_opcao(idx, o),
-                )
-
-                outras = [(p, o) for p, o in enumerate(opcoes_ordenadas)
-                          if p != idx_destaque]
-                if outras:
-                    n = len(outras)
-                    rotulo = ("Ver outra opção" if n == 1
-                              else f"Ver outras {n} opções")
-                    if n_ocultas > 0:
-                        rotulo += f"  (+{n_ocultas} menos relevantes)"
-                    with st.expander(rotulo, expanded=False):
-                        for p, o in outras:
-                            _card_opcao(
-                                idx, p, o, badge_html=_badge_de(p, o),
-                                escolhido=_esta_selecionado(o),
-                                on_escolher=lambda o=o: _escolher_opcao(idx, o),
-                            )
-
-            # Rede de segurança (redesign 2026-06-27): UMA seção com um SELETOR de
-            # onde procurar — mostra só uma busca por vez. Antes, catálogo e site
-            # vinham empilhados (dois campos abertos) e o operador não sabia em
-            # qual estava buscando (feedback do cliente). O seletor deixa explícito.
-            with st.expander("Não é essa? Procurar de outro jeito"):
-                fonte = st.segmented_control(
-                    "Onde procurar este item?",
-                    ["Meus produtos", "Site do fornecedor"],
-                    default="Meus produtos",
-                    key=f"fonte_busca_{idx}",
-                )
-                if fonte == "Site do fornecedor":
-                    _busca_site_item(idx, item, dentro=True)
-                else:
-                    _busca_catalogo_item(idx, item, dentro=True)
-
-            # "Não usar este item" — marca EXPLICITAMENTE que o item fica sem
-            # preço na planilha, com confirmação visível (antes não dava sinal
-            # nenhum ao clicar e confundia o operador — feedback do cliente).
-            nao_usar_set = st.session_state.setdefault("itens_nao_usar", set())
-            if nao_usar:
-                style.bloco_aviso(
-                    "Este item ficará <b>sem preço</b> na planilha (em branco).",
-                    tipo="info")
-                if st.button("Voltar a usar este item", key=f"naousar_{idx}",
-                             width="stretch"):
-                    nao_usar_set.discard(idx)
-                    st.rerun()
-            else:
-                if st.button("Não usar este item (deixar sem preço)",
-                             key=f"naousar_{idx}", width="stretch"):
-                    nao_usar_set.add(idx)
-                    st.session_state.selecoes.pop(idx, None)
-                    st.rerun()
-
-    # Navegação de páginas — no FIM da lista, e só quando há mais de uma página.
     if n_paginas > 1:
-        pcol1, pcol2, pcol3 = st.columns([1, 2, 1])
-        with pcol1:
-            if st.button("◀ Anterior", disabled=(pag == 0), key="pag_ant"):
+        with st.container(horizontal=True, vertical_alignment="center"):
+            st.caption(f"Itens {inicio + 1}–{fim} de {n_visiveis}", width="stretch")
+            if st.button("Anterior", disabled=(pag == 0), key="pag_ant",
+                         icon=":material/chevron_left:"):
                 st.session_state.pagina_busca = max(0, pag - 1)
                 st.rerun()
-        with pcol2:
-            st.caption(f"Página {pag + 1} de {n_paginas} — itens {inicio + 1}–{fim}")
-        with pcol3:
-            if st.button("Próxima ▶", disabled=(pag >= n_paginas - 1),
-                         key="pag_prox"):
+            if st.button("Próxima", disabled=(pag >= n_paginas - 1),
+                         key="pag_prox", icon=":material/chevron_right:",
+                         icon_position="right"):
                 st.session_state.pagina_busca = min(n_paginas - 1, pag + 1)
                 st.rerun()
 
-    st.divider()
-    st.caption(f"{selecionados} de {total} itens com marca/preço selecionados.")
-
-    # Markup por item via Substituição Tributária (Fase 4).
+    # Substituição Tributária (Fase 4) e margem do preço de venda.
     markups, itens_com_st = _painel_markup(st.session_state.selecoes, itens)
-
-    # Margem que pré-preenche o PREÇO VENDA da planilha (15/12/7%).
     _seletor_margem_venda()
 
-    if st.button("Gerar planilha matriz com preços", type="primary",
-                 width="stretch"):
+    # Barra final: quantos saem com preço + gerar. O resultado da geração sai
+    # ABAIXO, na largura toda.
+    faltam = total - selecionados
+    if not faltam:
+        detalhe = "todos os itens saem com preço"
+    elif faltam == 1:
+        detalhe = "o item sem preço sai em branco na planilha"
+    else:
+        detalhe = f"os {faltam} sem preço saem em branco na planilha"
+    with st.container(border=True, key="ppcard-acoes-precos", horizontal=True,
+                      vertical_alignment="center"):
+        st.markdown(f"**{selecionados} de {total} itens** com preço  \n"
+                    f":gray[{detalhe}]", width="stretch")
+        gerar = st.button("Gerar planilha", type="primary", key="btn_gerar_planilha",
+                          icon=":material/download:")
+    if gerar:
         # Usa itens_revisados (populado em tela_revisao a partir do
         # estado ATUAL do data_editor, via `edited`). df_editavel não
         # serve aqui porque é só snapshot inicial — não reflete as
@@ -3283,6 +3303,128 @@ def _mostrar_selecao(itens: list, resultados: dict) -> None:
                                 st.session_state.get("resultados_busca") or {})
         _gerar_excel(itens, markup=markup, selecoes=st.session_state.selecoes,
                      markups=markups, itens_com_st=itens_com_st)
+
+
+def _linha_item_preco(idx: int, item, opcoes: list, n_ocultas: int, sel,
+                      situacao: tuple, nao_usar_set: set) -> None:
+    """Uma linha da lista de preços; aberta, mostra o detalhe do item.
+
+    Mostra o NÚMERO DO ITEM NO EDITAL (pedido do cliente 2026-06: ele
+    identifica o produto pelo ID, igual à coluna ITEM da planilha) e a
+    descrição EXATAMENTE como veio no edital (decisão 2026-10). A escolha fica
+    visível SEM abrir a linha (auditoria de UI 2026-07): conferir 272 itens
+    vira leitura corrida, não caça ao clique."""
+    nao_usar = idx in nao_usar_set
+    # Um resultado de busca manual no site mantém a linha aberta (é o que o
+    # operador está fazendo agora).
+    aberta = bool(st.session_state.get(f"linha_aberta_{idx}")
+                  or f"site_res_{idx}" in st.session_state)
+    _, rotulo_sit, tipo_sit = situacao
+    with st.container(border=True,
+                      key=f"pplinhaab-{idx}" if aberta else f"pplinha-{idx}"):
+        c_num, c_desc, c_esc, c_preco, c_sit, c_tg = st.columns(
+            _COLUNAS_LISTA_PRECOS, vertical_alignment="center")
+        c_num.markdown(
+            f'<div class="pp-li-num">{_numero_item_edital(item, idx)}</div>',
+            unsafe_allow_html=True)
+        desc = html.escape((item.descricao or "").strip())
+        c_desc.markdown(f'<div class="pp-li-desc" title="{desc}">{desc}</div>',
+                        unsafe_allow_html=True)
+        if sel is not None and not nao_usar:
+            marca = html.escape((sel.marca or "").strip() or "sem marca")
+            forn = html.escape((sel.fornecedor or "").capitalize())
+            c_esc.markdown(
+                f'<div class="pp-li-escolha"><b>{marca}</b>'
+                + (f"<span> · {forn}</span>" if forn else "") + "</div>",
+                unsafe_allow_html=True)
+            c_preco.markdown(f'<div class="pp-li-preco">{_brl(sel.preco)}</div>',
+                             unsafe_allow_html=True)
+        else:
+            c_esc.markdown('<div class="pp-li-escolha"><span>—</span></div>',
+                           unsafe_allow_html=True)
+            c_preco.markdown('<div class="pp-li-preco pp-li-vazio">—</div>',
+                             unsafe_allow_html=True)
+        # Num <div>: solto, o <span> vira <p> com margem e sai do centro da linha.
+        c_sit.markdown(f"<div>{style.badge(rotulo_sit, tipo_sit)}</div>",
+                       unsafe_allow_html=True)
+        c_tg.button(
+            "", key=f"tg_{idx}", type="tertiary",
+            icon=":material/expand_less:" if aberta else ":material/expand_more:",
+            help="Fechar" if aberta else "Ver opções e procurar",
+            on_click=_alternar_linha, args=(idx, aberta))
+        if aberta:
+            _detalhe_item_preco(idx, item, opcoes, n_ocultas, sel, nao_usar,
+                                nao_usar_set)
+
+
+def _detalhe_item_preco(idx: int, item, opcoes: list, n_ocultas: int, sel,
+                        nao_usar: bool, nao_usar_set: set) -> None:
+    """Miolo da linha aberta: as opções (cards), a busca manual (site ou
+    catálogo) e o "não usar este item"."""
+    desc = item.descricao or ""
+    if len(desc) > 110:   # a linha mostra só 2 linhas; aqui vai inteira
+        st.markdown(f'<div class="pp-desc-completa">{html.escape(desc)}</div>',
+                    unsafe_allow_html=True)
+
+    if opcoes:
+        # Mesma chave do default (_chave_default_opcao): o topo da lista
+        # coincide com a opção pré-selecionada.
+        ordenadas = sorted(opcoes, key=lambda o: _chave_default_opcao(desc, o))
+        preco_min = min(o.preco for o in ordenadas)
+        for pos, o in enumerate(ordenadas):
+            _card_opcao(idx, pos, o, badge_html=_badge_opcao(pos, o, preco_min),
+                        escolhido=_mesma_selecao(o, sel),
+                        on_escolher=lambda o=o: _escolher_opcao(idx, o))
+        if n_ocultas > 0:
+            st.caption(f"+{n_ocultas} {'opção menos relevante' if n_ocultas == 1 else 'opções menos relevantes'} "
+                       "não exibida(s). Para outra marca, procure no site ou no catálogo.")
+    else:
+        # Sem resultado: a busca manual já aparece aberta logo abaixo (pedido
+        # do cliente 2026-06: poder buscar no catálogo igual aos demais casos).
+        st.caption("Nenhum resultado nos fornecedores. Procure no site ou no seu "
+                   "catálogo abaixo — ou deixe sem preço (a célula fica em branco "
+                   "para preencher à mão).")
+
+    # Rede de segurança (redesign 2026-06-27): UMA busca por vez, com um
+    # seletor de onde procurar — antes catálogo e site vinham empilhados e o
+    # operador não sabia em qual estava buscando (feedback do cliente).
+    procurar = (not opcoes or st.session_state.get(f"procurar_{idx}")
+                or f"site_res_{idx}" in st.session_state)
+    with st.container(horizontal=True, vertical_alignment="center"):
+        if opcoes:
+            st.button("Fechar a busca" if procurar else "Procurar no site ou no catálogo",
+                      key=f"procurar_bt_{idx}", type="tertiary",
+                      icon=":material/search:", on_click=_alternar_procurar,
+                      args=(idx,))
+        # "Não usar este item" — marca EXPLICITAMENTE que o item fica sem
+        # preço na planilha (antes não dava sinal nenhum ao clicar e confundia
+        # o operador — feedback do cliente).
+        if nao_usar:
+            if st.button("Voltar a usar este item", key=f"naousar_{idx}",
+                         type="tertiary", icon=":material/undo:"):
+                nao_usar_set.discard(idx)
+                st.rerun()
+        elif st.button("Não usar este item", key=f"naousar_{idx}", type="tertiary",
+                       icon=":material/block:",
+                       help="Deixa o item sem preço na planilha (em branco, "
+                            "para preencher à mão)."):
+            nao_usar_set.add(idx)
+            st.session_state.selecoes.pop(idx, None)
+            st.rerun()
+    if nao_usar:
+        st.caption("Este item fica **sem preço** na planilha (em branco).")
+    if procurar:
+        with st.container(border=True, key=f"ppcard-procurar-{idx}"):
+            fonte = st.segmented_control(
+                "Onde procurar este item?",
+                ["Meus produtos", "Site do fornecedor"],
+                default="Meus produtos",
+                key=f"fonte_busca_{idx}",
+            )
+            if fonte == "Site do fornecedor":
+                _busca_site_item(idx, item, dentro=True)
+            else:
+                _busca_catalogo_item(idx, item, dentro=True)
 
 
 def _registrar_aprendizado(itens: list, selecoes: dict, resultados: dict) -> None:

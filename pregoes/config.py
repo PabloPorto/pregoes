@@ -5,6 +5,7 @@ Todo parâmetro que pode mudar fica aqui. Nada de constantes espalhadas
 pelo código. Se o cliente quiser alterar markup, overhead, cache, etc.,
 mexe só neste arquivo.
 """
+from datetime import timedelta, timezone
 from pathlib import Path
 import os
 import shutil
@@ -39,12 +40,18 @@ def _raiz_bundle() -> Path:
 # Versão do aplicativo — aparece na sidebar e no log de boot. Sem ela, o
 # suporte remoto fica às cegas sobre o que o cliente está rodando (auditoria
 # 2026-06). Bump a cada .exe entregue ao cliente.
-VERSAO_APP = "1.1.10"
+VERSAO_APP = "1.2.0"
 
 # Rodando no servidor (deploy/pregoes.service define PREGOES_SERVIDOR=1) em vez
 # do .exe na máquina do cliente: muda o que é verdade para o operador (onde os
 # dados ficam, como é o backup — ver backup.backup_externo_agora).
 MODO_SERVIDOR = bool(os.environ.get("PREGOES_SERVIDOR"))
+
+# Fuso das datas/horas mostradas ao operador. O SQLite grava em UTC
+# (CURRENT_TIMESTAMP) e o servidor roda em UTC — sem converter, tudo aparecia
+# 3h adiantado. Offset fixo: o Brasil não tem horário de verão desde 2019, e
+# assim não dependemos da base de fusos (tzdata), ausente no Windows.
+FUSO_HORARIO = timezone(timedelta(hours=-3), "BRT")
 
 # Estrutura de diretórios
 BASE_DIR = _raiz_gravavel()

@@ -2,12 +2,19 @@
 # Refinamentos (componentes, badges, sidebar) ficam em pregoes/ui/style.py.
 
 [theme]
+# Direção visual aprovada em 2026-10 (proposta "Pregões — nova direção visual").
+# Cores: fonte única em style.PALETA — manter as duas em sincronia.
 base = "light"
-primaryColor = "#1E40AF"           # Azul-marinho — botões primários
-backgroundColor = "#F8FAFC"        # Fundo da página
-secondaryBackgroundColor = "#FFFFFF"  # Cards, sidebar, expanders
-textColor = "#0F172A"               # Texto principal
-font = "sans serif"
+primaryColor = "#1D3F8F"              # Azul Pregões — ação principal
+backgroundColor = "#F5F6F8"           # Fundo da tela
+secondaryBackgroundColor = "#FFFFFF"  # Campos, cards, menu lateral
+textColor = "#101828"                 # Tinta — textos
+linkColor = "#1D3F8F"
+borderColor = "#E4E7EC"
+baseRadius = "8px"
+# IBM Plex Sans/Mono (Google Fonts). Sem internet, cai na fonte do sistema.
+font = "'IBM Plex Sans':https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap, sans-serif"
+codeFont = "'IBM Plex Mono':https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap, monospace"
 
 [server]
 # Bind apenas no loopback: a UI NUNCA fica exposta na rede Wi-Fi local.
