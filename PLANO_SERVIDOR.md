@@ -88,15 +88,26 @@ Legenda: 👤 = você · 🤖 = eu
   operador terminar…"). Medir na Fase 5; se incomodar, a evolução é uma fila
   por fornecedor.
 
-### Fase 3 — Acesso para o cliente (👤 ~30 min + 🤖 ~1 h)
+### Fase 3 — Acesso para o cliente — 🟡 túnel pronto (2026-10-15), login adiado
 
-1. 👤 Registrar o domínio no registro.br; criar conta grátis na Cloudflare e
-   apontar o domínio para ela (trocar os DNS no registro.br).
-2. 👤 Me passar os e-mails dos operadores.
-3. 🤖 Criar o túnel (`cloudflared` no servidor → `http://127.0.0.1:8501`) e o
-   Access (só esses e-mails, login por código, sessão de 7 dias).
+Feito:
+- Domínio de teste da Hostinger (1º ano grátis) na conta Cloudflare do
+  responsável; nameservers trocados para a Cloudflare (propagando).
+- `cloudflared` no servidor; túnel nomeado `pregoes` autorizado pelo
+  responsável (`cloudflared tunnel login`); registro DNS criado pelo próprio
+  túnel (`tunnel route dns`); config em `/home/pregoes/.cloudflared/config.yml`
+  (fora do git) → `http://127.0.0.1:8501`.
+- Serviço `deploy/pregoes-tunel.service` (sobe sozinho, reinicia se cair).
+- O endereço fica só no servidor e com o responsável — **não versionar**.
 
-**Critério:** `https://pregoes.<dominio>` pede o código; e-mail fora da lista é recusado.
+**Decisão do responsável: login por e-mail (Cloudflare Access) adiado.**
+Enquanto isso, quem tiver o link abre o app (e a tela de Configurações, com as
+senhas dos fornecedores e a chave do Gemini). Mitigação: subdomínio aleatório,
+não adivinhável — o certificado gratuito da Cloudflare é curinga
+(`*.dominio`), então o nome exato não aparece nos registros públicos de
+certificados. **Ligar o Access antes do uso real com dados do cliente:**
+Zero Trust → Access → Applications → Self-hosted no hostname do app, política
+"Allow" só com os e-mails dos operadores, login por código no e-mail.
 
 ### Fase 4 — Dados do cliente (👤🤖, sem tocar na máquina dele)
 

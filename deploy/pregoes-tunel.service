@@ -1,0 +1,17 @@
+# Túnel da Cloudflare: publica o app (127.0.0.1:8501) no endereço configurado em
+# /home/pregoes/.cloudflared/config.yml, sem abrir porta no servidor.
+# Configuração única (uma vez): ver PLANO_SERVIDOR.md, Fase 3.
+# Log: journalctl -u pregoes-tunel -f
+[Unit]
+Description=Pregoes - tunel Cloudflare
+After=network-online.target pregoes.service
+Wants=network-online.target
+
+[Service]
+User=pregoes
+ExecStart=/usr/bin/cloudflared --no-autoupdate --config /home/pregoes/.cloudflared/config.yml tunnel run
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
