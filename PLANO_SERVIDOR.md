@@ -88,7 +88,7 @@ Legenda: 👤 = você · 🤖 = eu
   operador terminar…"). Medir na Fase 5; se incomodar, a evolução é uma fila
   por fornecedor.
 
-### Fase 3 — Acesso para o cliente — 🟡 túnel pronto (2026-10-15), login adiado
+### Fase 3 — Acesso para o cliente — ✅ no ar com login (2026-10-15)
 
 Feito:
 - Domínio de teste da Hostinger (1º ano grátis) na conta Cloudflare do
@@ -100,14 +100,13 @@ Feito:
 - Serviço `deploy/pregoes-tunel.service` (sobe sozinho, reinicia se cair).
 - O endereço fica só no servidor e com o responsável — **não versionar**.
 
-**Decisão do responsável: endereço simples `pregoes.<dominio>` e login por
-e-mail (Cloudflare Access) adiado.** No ar e validado num navegador em
-2026-10-15. Enquanto o login não for ligado, quem tiver o link abre o app (e a
-tela de Configurações, com as senhas dos fornecedores e a chave do Gemini) —
-não divulgar o link. **Ligar o Access antes do uso real com dados do
-cliente:** Zero Trust → Access → Applications → Self-hosted no hostname do
-app, política "Allow" só com os e-mails dos operadores, login por código no
-e-mail.
+**Login ligado (Cloudflare Access, 2026-10-15)**, no time Zero Trust já
+existente do responsável (um time por conta; cada aplicativo tem a sua lista):
+aplicativo self-hosted `pregoes` no hostname do app, política "Operadores
+Pregoes" (Allow só para os e-mails liberados), login por código no e-mail
+(One-time PIN), sessão de 1 semana. Verificado de fora: sem login, tudo
+redireciona para a tela de login da Cloudflare. Incluir/tirar alguém: editar a
+política "Operadores Pregoes" (Access controls → Policies).
 
 ### Fase 4 — Dados: o servidor começa do zero (decidido em 2026-10-15)
 
