@@ -12,6 +12,9 @@ apt-get update -q
 apt-get install -y -q python3-venv git
 
 id -u "$APP_USER" >/dev/null 2>&1 || useradd -m -s /bin/bash "$APP_USER"
+# O código chega antes do usuário existir (o root cria /home/pregoes no envio):
+# a pasta do usuário também precisa ser dele — o Chromium grava em ~/.cache.
+chown "$APP_USER:$APP_USER" "/home/$APP_USER"
 chown -R "$APP_USER:$APP_USER" "$APP_DIR"
 
 # 4 GB de RAM com dois Chromium abertos (~1,2 GB medidos) cabe, mas um swap
