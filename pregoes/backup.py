@@ -28,10 +28,19 @@ _log = logconf.get_logger("backup")
 NOME_BACKUP_EXTERNO = "Pregoes_backup.zip"
 
 
+# Pastas de data/ que entram no backup, além do banco e das credenciais.
+# rascunhos = pregões guardados/em andamento; exports = planilhas já geradas
+# (a tela Histórico as baixa de novo). Entraram em 2026-10: no servidor, este
+# zip é a ÚNICA cópia fora da máquina — sem elas, perder a VPS levaria junto o
+# trabalho em andamento e as planilhas entregues.
+PASTAS_NO_BACKUP = ("historico", "rascunhos", "exports")
+
+
 def fazer_backup_externo(destino_dir: "str | Path | None" = None) -> Optional[Path]:
-    """Grava um backup COMPLETO (banco + credenciais + histórico) numa pasta
-    EXTERNA — tipicamente uma pasta do Google Drive na máquina do cliente, que
-    sincroniza para a nuvem sozinha. É a proteção contra pane/perda do disco C:.
+    """Grava um backup COMPLETO (banco + credenciais + PASTAS_NO_BACKUP) numa
+    pasta EXTERNA — no Windows, uma pasta do Google Drive que sincroniza sozinha;
+    no servidor, uma pasta local que o deploy/backup_drive.sh envia ao Drive.
+    É a proteção contra pane/perda do disco.
 
     O app NÃO fala com a API do Google — só grava um `.zip` numa pasta LOCAL que
     o Google Drive Desktop sincroniza (a conta é do cliente). Best-effort: NUNCA
@@ -59,7 +68,7 @@ def fazer_backup_externo(destino_dir: "str | Path | None" = None) -> Optional[Pa
                     sqlite3.connect(str(db_snap)) as _dst:
                 _src.backup(_dst)
 
-        # 2) Zip: banco + credenciais + histórico. Escreve num `.part` na PRÓPRIA
+        # 2) Zip: banco + credenciais + pastas. Escreve num `.part` na PRÓPRIA
         #    pasta destino (mesmo sistema de arquivos) e faz replace ATÔMICO —
         #    o Google Drive nunca sincroniza um zip pela metade.
         with zipfile.ZipFile(zip_part, "w", zipfile.ZIP_DEFLATED) as z:
@@ -67,12 +76,13 @@ def fazer_backup_externo(destino_dir: "str | Path | None" = None) -> Optional[Pa
                 z.write(db_snap, "data/pregoes.db")
             if Path(credenciais.CAMINHO).exists():
                 z.write(credenciais.CAMINHO, "data/credenciais.json")
-            hist = Path(config.HISTORICO_DIR)
-            if hist.is_dir():
-                for arq in hist.rglob("*"):
-                    if arq.is_file():
-                        z.write(arq, str(Path("data/historico")
-                                         / arq.relative_to(hist)))
+            for nome in PASTAS_NO_BACKUP:
+                pasta = Path(config.DATA_DIR) / nome
+                if pasta.is_dir():
+                    for arq in pasta.rglob("*"):
+                        if arq.is_file():
+                            z.write(arq, (Path("data") / nome
+                                          / arq.relative_to(pasta)).as_posix())
         destino = destino_dir / NOME_BACKUP_EXTERNO
         os.replace(zip_part, destino)
         _log.info("Backup externo gravado: %s", destino)

@@ -64,6 +64,22 @@ def test_grava_zip_com_banco_credenciais_e_historico(ambiente):
     assert "data/historico/planilha1.xlsx" in nomes
 
 
+def test_zip_leva_pregoes_guardados_e_planilhas_geradas(ambiente):
+    """No servidor o zip é a ÚNICA cópia fora da máquina: tem que levar também
+    os pregões em andamento (rascunhos) e as planilhas já geradas (exports)."""
+    data, drive = ambiente
+    (data / "rascunhos").mkdir()
+    (data / "rascunhos" / "001-2026-prefeitura-ab12cd34.pkl").write_bytes(b"pregao")
+    (data / "exports" / "sub").mkdir(parents=True)
+    (data / "exports" / "sub" / "matriz.xlsx").write_bytes(b"planilha")
+
+    destino = backup.fazer_backup_externo(str(drive))
+    with zipfile.ZipFile(destino) as z:
+        nomes = set(z.namelist())
+    assert "data/rascunhos/001-2026-prefeitura-ab12cd34.pkl" in nomes
+    assert "data/exports/sub/matriz.xlsx" in nomes
+
+
 def test_snapshot_do_banco_e_restauravel(ambiente, tmp_path):
     """O banco dentro do zip é um SQLite íntegro (snapshot consistente)."""
     _data, drive = ambiente

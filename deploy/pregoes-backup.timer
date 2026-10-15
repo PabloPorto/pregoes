@@ -1,0 +1,12 @@
+# Todo dia às 03:00 (horário de São Paulo). Persistent: se o servidor estava
+# desligado nessa hora, roda assim que ligar.
+[Unit]
+Description=Pregoes - backup diario as 03:00
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+Persistent=true
+RandomizedDelaySec=10min
+
+[Install]
+WantedBy=timers.target
