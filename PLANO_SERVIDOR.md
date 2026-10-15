@@ -124,7 +124,12 @@ cliente durante a validação, como plano de volta.
 
 **Validou →** contratar por período maior e atualizar o CLAUDE.md (§7 "Onde roda").
 
-## Backup (servidor)
+## Backup (servidor) — ✅ no ar e restauração testada (2026-10-15)
+
+> 1º envio ao Drive do responsável OK; zip baixado DO DRIVE restaurado numa
+> pasta temporária: banco íntegro e idêntico ao do servidor. Client ID OAuth
+> próprio no Google Cloud (o compartilhado do rclone está sendo desativado em
+> 2026), app publicado "Em produção" — no modo teste a autorização cai em 7 dias.
 
 - **Diário dentro do servidor**: o app já faz (data/backups, com rotação) —
   protege contra erro/corrupção do banco, não contra perder a VPS.
