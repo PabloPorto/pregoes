@@ -4,6 +4,29 @@
 
 ## STATUS 2026-06 — o que mudou desde o briefing
 
+- **RESOLVIDO (2026-11-06) — dois editais reais que o extrator não lia (v1.1.13).**
+  - *Guarnição de João Pessoa 62/2026* (138 págs.): saía com **0 itens**. A
+    quantidade fica na coluna **'Soma'** (total das colunas por quartel) e o
+    preço em **'VALOR ESTIMADO'** — nenhum dos dois estava no vocabulário. Além
+    disso: a lista do órgão participante (itens 261–420) vem sem cabeçalho e com
+    7 colunas em vez de 13; as 60 páginas finais (estimativas mín./máx. por
+    quartel) repetiam os 260 itens com quantidades erradas; e a descrição que
+    atravessa a página virava um item 'duvidoso' a mais. Agora: 420/420 itens,
+    100% de confiança, e Σ quantidade × preço bate com os totais do edital
+    (R$ 6.288.442,08 + R$ 479.627,78).
+  - *Edital PE SRP 020/2026* (Cotolé do Rocha): coluna única 'Item - Código -
+    Descrição' → os 717 itens saíam **sem número**, com '1 - 0056802 - 1 -
+    0045799 -' na frente do nome e 6 duplicados (723). Agora 717/717 numerados,
+    descrição limpa, 0 divergências de quantidade contra o texto do PDF.
+  - Default assumido: 'soma' só vale como quantidade quando nenhuma coluna diz
+    'quantidade'; a emenda de continuação só acontece em tabela com coluna de
+    nº do item. Testes em `tests/test_fix_extrator.py`.
+  - **Em aberto (precisa dos logs do servidor):** no 20/2026 a busca voltou 0
+    resultado nos 654 itens nos DOIS fornecedores, enquanto o 15/2026 (03/11)
+    achou 54/57. Não é a descrição (a query principal sai igual com ou sem o
+    prefixo) — suspeita: janela de instabilidade/sessão dos sites durante o
+    lote longo. Conferir `journalctl -u pregoes` / `data/pregoes.log` do dia.
+
 - **RESOLVIDO (2026-06-25) — gerar a planilha não concluía o pregão (modal nagava).**
   Depois de gerar a matriz, o sistema seguia tratando o pregão como "em
   andamento" e mostrava o modal "Começar um novo pregão? (vai descartar…)".

@@ -70,6 +70,9 @@ PALAVRAS_CHAVE = {
         "preço unitário máximo", "preco unitario maximo",
         "preço máximo", "preco maximo", "valor máximo", "valor maximo",
         "valor unit.", "preço unit.",
+        # Guarnição de João Pessoa 62/2026: 'VALOR ESTIMADO' sobre as
+        # sub-colunas UNITÁRIO | TOTAL — o rótulo fica na 1ª (a unitária).
+        "valor estimado", "vlr. unit", "vlr unit",
     ],
     "codigo_orgao": [
         # 'item' é frágil (várias tabelas têm); priorizamos 'nº item', 'cod'
@@ -82,6 +85,11 @@ PALAVRAS_CHAVE = {
 # houver outro candidato a código (lookahead na função de detecção).
 PALAVRAS_CHAVE_FRACAS = {
     "codigo_orgao": ["item", "nº", "n°", "n."],
+    # Edital com a quantidade repartida por unidade compradora (uma coluna por
+    # quartel/secretaria) e o total na coluna 'Soma' (Guarnição de João Pessoa
+    # 62/2026, campo 2026-11). 'soma' sozinho é ambíguo (soma de valores), por
+    # isso é fraca: só vale quando nenhuma coluna diz 'quantidade'.
+    "quantidade": ["soma"],
 }
 
 
@@ -208,14 +216,14 @@ def _identifica_cabecalho_em_linha(linha: list) -> dict[str, int]:
                     mapa[campo] = idx
                     break
 
-    if "codigo_orgao" not in mapa:
+    for campo, palavras in PALAVRAS_CHAVE_FRACAS.items():
+        if campo in mapa:
+            continue
         for idx, cel in enumerate(linha or []):
             norm = _normaliza(_concatenar_celula(cel))
-            for pal in PALAVRAS_CHAVE_FRACAS["codigo_orgao"]:
-                if norm == pal or norm.startswith(pal + " ") or norm.endswith(" " + pal):
-                    mapa["codigo_orgao"] = idx
-                    break
-            if "codigo_orgao" in mapa:
+            if any(norm == pal or norm.startswith(pal + " ") or norm.endswith(" " + pal)
+                   for pal in palavras):
+                mapa[campo] = idx
                 break
 
     return mapa
@@ -404,6 +412,24 @@ def _coletar_tabelas(caminho_pdf: Path) -> list[_TabelaBruta]:
     return out
 
 
+# '12 - 0056813 - 12 - 0045810 - ABRAÇADEIRA ...': nº do item e códigos colados
+# na descrição, numa coluna só ('Item - Código - Descrição').
+_PREFIXO_NUMERICO_RE = re.compile(r"^\s*(\d+)((?:\s*[-–]\s*\d+)*)\s*[-–]\s+(?=\S)")
+
+
+def _separar_prefixo_numerico(texto: str) -> tuple[Optional[int], Optional[str], str]:
+    """Separa (nº do item, códigos, descrição) da coluna 'Item - Código -
+    Descrição' (Edital PE SRP 020/2026, campo 2026-11): sem isso os 717 itens
+    saíam sem número e com '1 - 0056802 - 1 - 0045799 -' na frente do nome do
+    produto — que ia assim para a busca nos fornecedores. Sem prefixo (linha
+    de continuação da descrição), devolve (None, None, texto)."""
+    m = _PREFIXO_NUMERICO_RE.match(texto or "")
+    if not m:
+        return None, None, texto
+    codigo = (m.group(1) + m.group(2)).strip()
+    return int(m.group(1)), codigo, texto[m.end():].strip()
+
+
 def _extrair_item_da_linha(linha: list, mapa: dict[str, int], pagina: int,
                            reservas: dict[str, tuple[int, ...]] | None = None,
                            ) -> Optional[ItemExtraido]:
@@ -432,15 +458,18 @@ def _extrair_item_da_linha(linha: list, mapa: dict[str, int], pagina: int,
         return principal
 
     descricao = _get("descricao") or ""
+    codigo = _get("codigo_orgao")
+    numero = _para_int(codigo)
+    if mapa.get("codigo_orgao") is not None and mapa.get("codigo_orgao") == mapa.get("descricao"):
+        numero, codigo, descricao = _separar_prefixo_numerico(descricao)
     if not descricao or len(descricao) < 3:
         return None
 
     quantidade = _para_numero(_get("quantidade"))
     valor_ref = _para_numero(_get("valor_referencia"))
-    codigo = _get("codigo_orgao")
 
     return ItemExtraido(
-        item_numero=_para_int(codigo),
+        item_numero=numero,
         codigo_orgao=codigo,
         descricao=descricao,
         unidade=_get("unidade"),
@@ -450,8 +479,95 @@ def _extrair_item_da_linha(linha: list, mapa: dict[str, int], pagina: int,
     )
 
 
+def _score_itens(itens: list[ItemExtraido]) -> ScoreTabela:
+    return score_tabela([
+        score_linha(i.descricao, i.quantidade, i.unidade, i.valor_referencia)
+        for i in itens
+    ])
+
+
+def _n_colunas(linhas: list[list]) -> int:
+    return max((len(l or []) for l in linhas), default=0)
+
+
+def _mapas_realinhados(mapa: dict[str, int], n_origem: int, n_destino: int,
+                       ) -> list[tuple[dict[str, int], int, int]]:
+    """Variações do mapa herdado para uma tabela-continuação com OUTRO nº de
+    colunas: as colunas à esquerda de um ponto de corte ficam onde estão e as
+    da direita andam junto com a borda direita da tabela.
+
+    Guarnição de João Pessoa 62/2026 (campo 2026-11): a lista do órgão
+    participante vem sem cabeçalho e sem as 6 colunas de quantidade por
+    quartel — ITEM|DESCRIÇÃO|UNID ficam no lugar, QTD|UNITÁRIO|TOTAL ficam
+    colados à direita. Herdar o mapa na posição absoluta lia a quantidade fora
+    da tabela (160 itens sem quantidade). Uma coluna a mais no meio (grade
+    picotada na quebra de página) é o mesmo caso com deslocamento positivo.
+
+    Devolve [(mapa, corte, deslocamento)], sem repetições e só com índices
+    dentro da tabela."""
+    delta = n_destino - n_origem
+    vistos: set = set()
+    out = []
+    for corte in range(n_origem + 1):
+        novo = {c: (i + delta if i >= corte else i) for c, i in mapa.items()}
+        if any(i < 0 or i >= n_destino for i in novo.values()):
+            continue
+        if len(set(novo.values())) < len(set(mapa.values())):
+            continue
+        chave = tuple(sorted(novo.items()))
+        if chave in vistos:
+            continue
+        vistos.add(chave)
+        out.append((novo, corte, delta))
+    return out
+
+
+def _escolher_mapa_herdado(bruta: _TabelaBruta, mapa: dict[str, int],
+                           reservas: dict[str, tuple[int, ...]], n_origem: int,
+                           ) -> tuple[dict[str, int], dict[str, tuple[int, ...]]]:
+    """Mesmo nº de colunas → o mapa herdado como está. Nº diferente → a
+    variação realinhada (ver _mapas_realinhados) cujos itens pontuam melhor;
+    no empate fica a herdada (comportamento anterior)."""
+    n_destino = _n_colunas(bruta.linhas)
+    if not n_origem or n_destino == n_origem:
+        return mapa, reservas
+    melhor = (mapa, reservas)
+    melhor_sc = _score_itens(_extrair_itens(bruta, mapa, 0, reservas))
+    for novo, corte, delta in _mapas_realinhados(mapa, n_origem, n_destino):
+        res = {c: tuple(j + delta if j >= corte else j for j in cols)
+               for c, cols in reservas.items()}
+        res = {c: tuple(j for j in cols if 0 <= j < n_destino and j not in novo.values())
+               for c, cols in res.items()}
+        res = {c: cols for c, cols in res.items() if cols}
+        sc = _score_itens(_extrair_itens(bruta, novo, 0, res))
+        if (sc.score, sc.media_scores) > (melhor_sc.score, melhor_sc.media_scores):
+            melhor, melhor_sc = (novo, res), sc
+    return melhor
+
+
+def _parece_outro_cabecalho(linhas: list[list]) -> bool:
+    """A tabela abre com um cabeçalho PRÓPRIO que não é de itens (tem
+    'Descrição' e 'Unidade'/'Item', mas nenhuma quantidade): é outra tabela,
+    não a continuação da anterior. Na Guarnição de João Pessoa 62/2026, as 60
+    páginas finais ('Estimativas de consumo individualizadas', mínimo/máximo
+    por quartel) herdavam o mapa da lista de itens e repetiam os 260 itens com
+    quantidades erradas. Linha com número (quantidade, nº do item) nunca é
+    cabeçalho — evita confundir um item 'PRODUTO ...' com rótulo."""
+    for linha in linhas[:3]:
+        if any(_para_numero(c) is not None for c in linha or []):
+            continue
+        mapa = _identifica_cabecalho_em_linha(linha)
+        if "descricao" not in mapa or len(mapa) < 2:
+            continue
+        rotulo = _normaliza(_concatenar_celula(linha[mapa["descricao"]]))
+        if len(rotulo) <= 40:
+            return True
+    return False
+
+
 def _processar_tabela(bruta: _TabelaBruta, mapa_herdado: dict[str, int],
                       reservas_herdadas: dict[str, tuple[int, ...]] | None = None,
+                      n_cols_herdado: int = 0,
                       ) -> Optional[_TabelaCandidata]:
     """
     Tenta tornar uma tabela bruta em candidata. Devolve:
@@ -470,35 +586,98 @@ def _processar_tabela(bruta: _TabelaBruta, mapa_herdado: dict[str, int],
     mapa, n_consumidas = _identifica_cabecalho_multilinha(bruta.linhas)
     if mapa:
         reservas = _colunas_mescladas(bruta.linhas[:n_consumidas], mapa)
-        itens = _extrair_itens(bruta, mapa, n_consumidas, reservas)
-        sc = score_tabela([
-            score_linha(i.descricao, i.quantidade, i.unidade, i.valor_referencia)
-            for i in itens
-        ])
+        itens = _extrair_itens(bruta, mapa, n_consumidas, reservas,
+                               raiz=(mapa, _n_colunas(bruta.linhas)))
         return _TabelaCandidata(bruta=bruta, mapa=mapa, linha_inicial_dados=n_consumidas,
-                                itens=itens, score=sc, reservas=reservas)
+                                itens=itens, score=_score_itens(itens), reservas=reservas)
 
-    if mapa_herdado:
-        reservas = dict(reservas_herdadas or {})
-        itens = _extrair_itens(bruta, mapa_herdado, 0, reservas)
-        sc = score_tabela([
-            score_linha(i.descricao, i.quantidade, i.unidade, i.valor_referencia)
-            for i in itens
-        ])
-        return _TabelaCandidata(bruta=bruta, mapa=mapa_herdado, linha_inicial_dados=0,
-                                itens=itens, score=sc, reservas=reservas)
+    if mapa_herdado and not _parece_outro_cabecalho(bruta.linhas):
+        mapa, reservas = _escolher_mapa_herdado(
+            bruta, mapa_herdado, dict(reservas_herdadas or {}), n_cols_herdado)
+        itens = _extrair_itens(bruta, mapa, 0, reservas,
+                               raiz=(mapa_herdado, n_cols_herdado or _n_colunas(bruta.linhas)))
+        return _TabelaCandidata(bruta=bruta, mapa=mapa, linha_inicial_dados=0,
+                                itens=itens, score=_score_itens(itens), reservas=reservas)
 
     return None
 
 
 def _extrair_itens(bruta: _TabelaBruta, mapa: dict[str, int], linha_inicial: int,
-                   reservas: dict[str, tuple[int, ...]] | None = None) -> list[ItemExtraido]:
+                   reservas: dict[str, tuple[int, ...]] | None = None,
+                   raiz: tuple[dict[str, int], int] | None = None) -> list[ItemExtraido]:
     out: list[ItemExtraido] = []
     for linha in bruta.linhas[linha_inicial:]:
         it = _extrair_item_da_linha(linha, mapa, bruta.pagina, reservas)
+        if it is not None and it.quantidade is None and raiz:
+            it = _reler_linha_compactada(linha, mapa, bruta.pagina, raiz) or it
         if it is not None:
             out.append(it)
     return out
+
+
+def _reler_linha_compactada(linha: list, mapa: dict[str, int], pagina: int,
+                            raiz: tuple[dict[str, int], int]) -> Optional[ItemExtraido]:
+    """Linha com grade PRÓPRIA dentro da tabela: na emenda entre duas listas
+    (fim da lista geral, começo da lista do órgão participante), a linha do
+    item 261 da Guarnição de João Pessoa 62/2026 vinha com células mescladas
+    (None) justo onde o mapa procura quantidade — o item saía sem quantidade e
+    com o TOTAL no lugar do preço unitário. Descartando os None sobra a
+    sequência real de células da linha, que é relida com o mapa do cabeçalho
+    original realinhado à largura dela (ver _mapas_realinhados).
+
+    Só entra quando a leitura normal ficou sem quantidade E alguma coluna do
+    mapa caiu num None; só vale se a releitura achar a quantidade."""
+    if not any(i < len(linha) and linha[i] is None for i in mapa.values()):
+        return None
+    compacta = [c for c in linha if c is not None]
+    mapa_raiz, n_raiz = raiz
+    variantes = [m for m, _, _ in _mapas_realinhados(mapa_raiz, n_raiz, len(compacta))]
+    melhor, melhor_sc = None, -1.0
+    for m in variantes:
+        it = _extrair_item_da_linha(compacta, m, pagina)
+        if it is None or it.quantidade is None:
+            continue
+        sc = _score_item(it)
+        if sc > melhor_sc:
+            melhor, melhor_sc = it, sc
+    return melhor
+
+
+def _emendar_continuacao(anterior: _TabelaCandidata, atual: _TabelaCandidata) -> bool:
+    """Quando a descrição de um item atravessa a quebra de página, o pedaço
+    final vira a 1ª linha da tabela seguinte — só descrição (às vezes com o
+    resto da unidade), sem nº, sem quantidade, sem preço. Sem emendar, o item saía com a descrição cortada
+    e o pedaço virava um item 'duvidoso' a mais (Guarnição de João Pessoa
+    62/2026: 89 pedaços; Edital PE SRP 020/2026, idem).
+
+    Só emenda na MESMA tabela lógica e quando ela tem coluna de
+    nº do item — sem essa coluna, uma linha sem quantidade pode ser um item
+    real com dado faltando, e fundi-la some com ele. Devolve True se emendou."""
+    if not atual.itens or not anterior.itens:
+        return False
+    # Tabela sem cabeçalho próprio herdou o mapa: é continuação por definição
+    # (mesmo que realinhada a outra largura). Com cabeçalho repetido na
+    # página, exige o mesmo mapa.
+    if atual.linha_inicial_dados and atual.mapa != anterior.mapa:
+        return False
+    if "codigo_orgao" not in atual.mapa:
+        return False
+    primeira = next((l for l in atual.bruta.linhas[atual.linha_inicial_dados:]
+                     if l and any(_normaliza(c) for c in l)), None)
+    it = atual.itens[0]
+    if primeira is None or _extrair_item_da_linha(
+            primeira, atual.mapa, atual.bruta.pagina, atual.reservas) is None:
+        return False   # a 1ª linha não-vazia não é a que virou itens[0]
+    if (it.item_numero is not None or (it.codigo_orgao or "").strip()
+            or it.quantidade is not None or it.valor_referencia is not None):
+        return False
+    alvo = anterior.itens[-1]
+    alvo.descricao = f"{alvo.descricao} {it.descricao}".strip()
+    if (it.unidade or "").strip():
+        # A unidade também pode quebrar ('PACOTE 100' | 'UND', item 314).
+        alvo.unidade = f"{alvo.unidade or ''} {it.unidade.strip()}".strip()
+    atual.itens.pop(0)
+    return True
 
 
 def _agrupar_em_blocos(candidatas: list[_TabelaCandidata]) -> list[list[_TabelaCandidata]]:
@@ -681,12 +860,25 @@ def processar_tabelas_brutas(
     candidatas: list[_TabelaCandidata] = []
     mapa_herdado: dict[str, int] = {}
     reservas_herdadas: dict[str, tuple[int, ...]] = {}
+    n_cols_herdado = 0
     for bruta in tabelas_brutas:
-        cand = _processar_tabela(bruta, mapa_herdado, reservas_herdadas)
+        cand = _processar_tabela(bruta, mapa_herdado, reservas_herdadas, n_cols_herdado)
         if cand is not None:
+            if candidatas and _emendar_continuacao(candidatas[-1], cand):
+                cand.score = _score_itens(cand.itens)
             candidatas.append(cand)
-            mapa_herdado = cand.mapa
-            reservas_herdadas = cand.reservas
+            if cand.linha_inicial_dados or not mapa_herdado:
+                # Herda SEMPRE do cabeçalho original: uma continuação
+                # realinhada (outra largura) não vira referência — realinhar
+                # de novo a partir dela acumulava o erro (a unidade caía na
+                # coluna CATMAT).
+                mapa_herdado = cand.mapa
+                reservas_herdadas = cand.reservas
+                n_cols_herdado = _n_colunas(cand.bruta.linhas)
+        elif _parece_outro_cabecalho(bruta.linhas):
+            # Outra tabela (não de itens) começou: as páginas seguintes sem
+            # cabeçalho são continuação DELA, não da lista de itens.
+            mapa_herdado, reservas_herdadas, n_cols_herdado = {}, {}, 0
 
     if not candidatas:
         resultado.avisos.append(
