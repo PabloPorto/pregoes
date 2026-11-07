@@ -1200,3 +1200,11 @@ def test_avisos_recusa_um_por_fornecedor_com_contagem():
     assert "Almeida" in avisos[0] and "3 itens" in avisos[0]
     assert "Buscar preços dos itens sem resultado" in avisos[0]
     assert app._avisos_recusa([]) == []
+
+
+def test_tempo_restante_so_aparece_com_progresso_suficiente():
+    assert app._tempo_restante(10, 0.5) == ""      # cedo demais
+    assert app._tempo_restante(600, 0.02) == ""    # pouco progresso: palpite ruim
+    assert app._tempo_restante(600, 1.0) == ""     # acabou
+    assert app._tempo_restante(600, 0.25) == "faltam ~30 min"
+    assert app._tempo_restante(40, 0.9) == "faltam ~1 min"   # nunca "~0 min"

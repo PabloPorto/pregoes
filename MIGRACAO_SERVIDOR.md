@@ -83,5 +83,6 @@ O túnel e o login continuam; muda só o endereço:
 ## O que não muda
 
 - Os operadores continuam no **mesmo link** e com o **mesmo login** (código no e-mail).
-- O limite de consultas dos fornecedores (Q20) é **por conta**, não por IP: mudar
-  de VPS não resolve nem piora.
+- O limite de consultas dos fornecedores (Q20) vale para a conta logada e não
+  deu para provar se também depende do IP. O ritmo do lote já fica abaixo dele;
+  não conte com a VPS nova para buscar mais rápido.

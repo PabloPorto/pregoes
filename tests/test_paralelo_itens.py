@@ -204,3 +204,11 @@ def test_recusas_em_serie_param_de_consultar_o_site(monkeypatch):
     limite = (scraper._MAX_FALHAS_HTTP_NO_POOL + 4      # em voo no pool
               + scraper._MAX_RECUSAS_SEGUIDAS)
     assert len(chamadas) <= limite, f"{len(chamadas)} consultas a um site que recusa tudo"
+
+
+def test_ritmo_padrao_fica_abaixo_do_limite_medido_dos_fornecedores():
+    """Q20: os sites bloqueiam (405) acima de ~350 consultas em 10 min por
+    fornecedor; 0,5/s rodou 25 min limpo e 0,65/s bloqueou. Subir o ritmo sem
+    novo teste de carga volta a quebrar o lote."""
+    from pregoes import config
+    assert config.SCRAPER_MAX_REQ_POR_SEGUNDO * 600 <= 320

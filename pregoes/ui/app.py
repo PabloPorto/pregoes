@@ -1652,6 +1652,17 @@ def _avisos_recusa(erros: list) -> list[str]:
     ]
 
 
+def _tempo_restante(decorrido_s: float, frac: float) -> str:
+    """Estimativa "faltam ~N min" para o painel da busca. Com o ritmo abaixo do
+    limite dos fornecedores (Q20) um edital grande leva ~1 h — o operador
+    precisa saber se espera ou vai fazer outra coisa. Vazio no começo (pouco
+    progresso = palpite ruim) e no fim."""
+    if frac < 0.05 or frac >= 1.0 or decorrido_s < 30:
+        return ""
+    restante_s = decorrido_s * (1.0 - frac) / frac
+    return f"faltam ~{max(1, round(restante_s / 60))} min"
+
+
 def _buscar_fornecedores_paralelo(itens_alvo: list, sessoes: dict,
                                   progresso) -> dict:
     """Roda a busca dos fornecedores EM PARALELO (1 thread por fornecedor).
@@ -1805,7 +1816,11 @@ def _executar_busca(itens: list, fornecedores_nomes: list[str],
                     if fornecedor else
                     "Todos os fornecedores"
                 ),
-                tempo=_tempo(),
+                tempo=" · ".join(p for p in (
+                    _tempo(),
+                    "" if encerrado else _tempo_restante(
+                        time.monotonic() - t_inicio, frac),
+                ) if p),
                 item_atual=item_atual,
                 item_total=item_total,
                 item_descricao=item_desc,

@@ -1582,10 +1582,12 @@ def _payload_to_resultados(
 # quantas falhas no pool antes de parar de consultar, quanto esperar antes de
 # repetir na 2ª passada, e quantas recusas seguidas lá antes de desistir do
 # resto (que vira ErroBusca; o operador re-busca depois os "sem resultado").
-# Medido no servidor (2026-11-06): os 2 sites bloqueiam a SESSÃO LOGADA (não o
-# IP — sem cookie segue 200) com 405 depois de ~420 consultas em ~3,5 min, e o
-# bloqueio dura ~7 min. A pausa curta cobre só o soluço passageiro; num bloqueio
-# de verdade o lote desiste rápido em vez de martelar (Q20).
+# Medido no servidor (2026-11-06/07): firewall da AWS ("Human Verification")
+# devolve 405 às consultas logadas quando passam de ~350–400 em 10 min por
+# fornecedor; login novo não escapa; o bloqueio dura ~4–7 min. O ritmo de
+# config.SCRAPER_MAX_REQ_POR_SEGUNDO fica abaixo disso; isto aqui é a rede de
+# segurança. A pausa curta cobre só o soluço passageiro; num bloqueio de
+# verdade o lote desiste rápido em vez de martelar (Q20).
 _MAX_FALHAS_HTTP_NO_POOL = 3
 _PAUSA_APOS_RECUSA_S = 10.0
 _MAX_RECUSAS_SEGUIDAS = 3

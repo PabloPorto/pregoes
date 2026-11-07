@@ -849,28 +849,44 @@ máquina (§9) — atualizar o CLAUDE.md quando o servidor for validado.
 **Condição.** Vale se o teste de IP (Fase 1) passar; se os fornecedores
 bloquearem o IP da VPS, pedir reembolso e repensar.
 
-### Q20. Fornecedores limitam consultas por sessão (405) — 🟡 ABERTA, precisa decisão
+### Q20. Fornecedores limitam consultas (405) — ✅ ritmo calibrado (v1.1.15); 🟡 decisão de velocidade em aberto
 
-**Contexto (medido no servidor, 2026-11-06).** Desde 30/10 toda busca em LOTE
-falhava (12 tentativas no log). Teste controlado no ritmo do lote (4 threads ×
-2 consultas/s por fornecedor): os dois sites aceitaram ~420 consultas cada em
-~3,5 min e passaram a responder **405** à sessão logada por **~7 min**. Sem
-cookie, a mesma busca seguia 200 → o limite é da SESSÃO/CONTA, não do IP (mudar
-de VPS não resolve). Não é o texto da busca. Um edital de ~650 itens faz ~1.500
-consultas por fornecedor — estoura o limite com folga. Os preços do Itatuba
-(03/11) saíram da busca MANUAL, item a item.
+**Contexto.** Desde 30/10 toda busca em LOTE falhava (12 tentativas no log; 0
+de 654 no Pregão 20/2026). Os preços do Itatuba (03/11) saíram da busca MANUAL.
 
-**Já corrigido (v1.1.14):** a recusa não derruba mais o fornecedor inteiro —
-antes a exceção da 2ª passada descartava TUDO o que já tinha sido achado (0 de
-654 no Pregão 20/2026). Agora o que foi achado fica, o lote para de consultar
-depois de poucas recusas (insistir prolonga o bloqueio), os itens restantes
-viram erro do item e a tela avisa quantos ficaram sem preço e o que fazer.
+**Medição (servidor, 2026-11-06/07, os 2 fornecedores juntos, 4 threads cada).**
+A recusa é um firewall da AWS (`awselb`, página "Human Verification") que
+devolve **405** às consultas LOGADAS. Login novo **não** escapa; sem cookie
+segue 200. Por ritmo, por fornecedor:
 
-**Default provisório:** ritmo do lote inalterado; o operador re-busca os "sem
-resultado" depois de ~10 min.
+| Ritmo | Resultado |
+|---|---|
+| 2/s | bloqueou com ~420 consultas (3,5 min) |
+| 1/s | bloqueou com ~374 (6 min) |
+| 0,65/s | bloqueou com ~400 (10,4 min) |
+| **0,5/s** | **25 min, 757 consultas, nenhum bloqueio** (717 itens reais do Edital 020) |
 
-**Alternativa não escolhida (precisa decisão do responsável/cliente):** ficar
-ABAIXO do limite — pausa automática de ~7 min a cada ~400 consultas, ou ritmo
-menor. Um edital de 650 itens passaria a levar ~15–25 min, mas sairia completo
-numa só rodada, sem intervenção. Calibrar o ritmo exige mais 1–2 testes de carga
-(cada um custa ~7 min de bloqueio da conta — fazer fora do horário de uso).
+Tudo bate com **~350–400 consultas por fornecedor numa janela de ~10 min**; o
+bloqueio dura ~4–7 min depois que o ritmo para. Não deu para separar "por IP"
+de "por conta" (só temos um servidor e uma conta por fornecedor) — mudar de VPS
+pode ou não mudar algo; não conte com isso.
+
+**Já corrigido:** v1.1.14 — a recusa não descarta mais o que foi achado, o lote
+desiste rápido e a tela avisa. v1.1.15 — ritmo do lote **0,5 consulta/s por
+fornecedor** (`SCRAPER_MAX_REQ_POR_SEGUNDO`, ~20% abaixo do limite) e o painel
+mostra "faltam ~N min".
+
+**Custo:** com itens reais, um item gasta **~3,1 consultas por fornecedor**
+(quem acha, acha na 1ª consulta; quem não acha tenta as 4 camadas). Dá ~10
+itens/min: edital de 650 itens ≈ **1 h**, mas sai completo numa rodada só.
+Cuidados: dois operadores rodando lote ao mesmo tempo somam consultas e voltam
+a estourar; busca manual durante o lote também conta (pouco).
+
+**Decisão em aberto (responsável/cliente) — velocidade:** no teste, **85–95% dos
+itens achados saíram da 1ª consulta** (Almeida 70 de 83, Dantas 75 de 79); as camadas de reserva (2ª–4ª) acharam os
+outros 5–15% mas gastaram ~2/3 das consultas, quase todas em itens que no fim não
+existiam no fornecedor. Opções: (a) manter como está (~1 h por edital grande,
+máxima cobertura) — **default**; (b) o lote tenta só a 1ª e a 2ª camada e deixa o
+resto para "Buscar preços dos itens sem resultado" — ~2× mais rápido, perde
+parte desses 5–15% na 1ª rodada. Precisa: o cliente dizer se 1 h por edital grande
+é aceitável.
