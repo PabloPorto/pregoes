@@ -156,6 +156,7 @@ cliente durante a validação, como plano de volta.
 
 - **Atualizar:** enviar o código e `systemctl restart pregoes` (vira script
   `deploy/atualizar.sh` quando o fluxo estabilizar).
+- **Mudar de VPS / cópia dos dados:** `deploy/migrar_servidor.sh` — ver `MIGRACAO_SERVIDOR.md`.
 - **Logs:** `journalctl -u pregoes -f` e `data/pregoes.log`, acessíveis por SSH
   de qualquer lugar.
 
