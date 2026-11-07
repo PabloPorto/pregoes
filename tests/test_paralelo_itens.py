@@ -143,3 +143,64 @@ def test_rate_limiter_com_lock_mantem_cadencia_global():
         t.join()
     # 6 acquires concorrentes ≥ 5 intervalos — o pool não fura a cadência.
     assert time.perf_counter() - t0 >= 0.045
+
+
+# ---------------------------------------------------------------------------
+# Busca da UI: cada fornecedor roda numa thread que NÃO é a dona do navegador,
+# com _http_only ligado por quem chama. Campo 2026-11-06 (Pregão 20/2026): o
+# site respondeu 405 a algumas consultas e a exceção da 2ª passada derrubava o
+# fornecedor inteiro — 0 de 654 itens, descartando o que já tinha sido achado.
+# ---------------------------------------------------------------------------
+
+def _sem_pausa(monkeypatch):
+    monkeypatch.setattr(scraper, "_PAUSA_APOS_RECUSA_S", 0.0)
+
+
+def test_recusa_do_site_sem_navegador_nao_descarta_o_que_foi_achado(monkeypatch):
+    _sem_pausa(monkeypatch)
+    forn = _FornParalelo(expira_em={"B", "C"})
+    forn._http_only = True                      # como a UI chama
+    lote = _rodar(forn, ["A", "B", "C", "D"], workers=4)
+    assert [r.codigo_fornecedor for r in lote.resultados[0]] == ["C-A"]
+    assert [r.codigo_fornecedor for r in lote.resultados[3]] == ["C-D"]
+    assert lote.resultados[1] == [] and lote.resultados[2] == []
+    assert sorted(e.indice_item for e in lote.erros) == [1, 2]
+    assert all(e.mensagem.startswith(scraper._MENSAGEM_RECUSA) for e in lote.erros)
+    assert forn._http_only is True, "flag de quem chamou preservada"
+
+
+def test_recusa_passageira_e_recuperada_na_segunda_passada(monkeypatch):
+    """O site volta a responder depois da pausa: o item sai com preço."""
+    _sem_pausa(monkeypatch)
+    forn = _FornParalelo()
+    forn._http_only = True
+    ja_recusou: set = set()
+    buscar_original = forn.buscar
+
+    def buscar_recusa_uma_vez(descricao):
+        if descricao == "B" and descricao not in ja_recusou:
+            ja_recusou.add(descricao)
+            raise scraper.SessaoHTTPExpirou("405", status=405)
+        return buscar_original(descricao)
+
+    forn.buscar = buscar_recusa_uma_vez
+    lote = _rodar(forn, ["A", "B", "C"], workers=2)
+    assert [r.codigo_fornecedor for r in lote.resultados[1]] == ["C-B"]
+    assert lote.erros == []
+
+
+def test_recusas_em_serie_param_de_consultar_o_site(monkeypatch):
+    """Site recusando tudo: depois de poucas falhas o lote para de disparar
+    consultas (insistir prolonga o bloqueio) e o resto vira erro do item."""
+    _sem_pausa(monkeypatch)
+    descrs = [f"I{i}" for i in range(40)]
+    forn = _FornParalelo(expira_em=set(descrs))
+    forn._http_only = True
+    chamadas = []
+    buscar_original = forn.buscar
+    forn.buscar = lambda d: (chamadas.append(d), buscar_original(d))[1]
+    lote = _rodar(forn, descrs, workers=4)
+    assert len(lote.erros) == 40 and all(lote.resultados[i] == [] for i in range(40))
+    limite = (scraper._MAX_FALHAS_HTTP_NO_POOL + 4      # em voo no pool
+              + scraper._MAX_RECUSAS_SEGUIDAS)
+    assert len(chamadas) <= limite, f"{len(chamadas)} consultas a um site que recusa tudo"

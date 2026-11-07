@@ -659,7 +659,19 @@ _RE_HREF = re.compile(r'href="([^"]+)"')
 
 class SessaoHTTPExpirou(RuntimeError):
     """A sessão HTTP deslogou no meio de um lote em modo http-only (paralelo).
-    O item vira ErroBusca e a re-busca incremental (que reloga) recupera."""
+    O item vira ErroBusca e a re-busca incremental (que reloga) recupera.
+
+    ``status``: código HTTP quando o site RECUSOU a consulta (405 desde
+    2026-10-30 — ver _MENSAGEM_RECUSA), None quando a sessão deslogou."""
+
+    def __init__(self, msg: str, status: Optional[int] = None):
+        super().__init__(msg)
+        self.status = status
+
+
+# Texto do ErroBusca de item que ficou sem consulta porque o site recusou.
+# A UI reconhece o prefixo para avisar o operador em português claro.
+_MENSAGEM_RECUSA = "Site do fornecedor recusou a consulta"
 
 
 def _cookie_header_de(context) -> str:
@@ -752,7 +764,8 @@ def _consultar_cards_http(forn, url: str) -> Optional[list[dict]]:
     except Exception as exc:
         if getattr(forn, "_http_only", False):
             raise SessaoHTTPExpirou(
-                f"consulta HTTP falhou em modo paralelo ({type(exc).__name__})")
+                f"consulta HTTP falhou em modo paralelo ({type(exc).__name__})",
+                status=getattr(exc, "code", None))
         return None   # rede/HTTP falhou → o navegador cuida desta consulta
     # Deslogado (página de login) → zera o cookie e sinaliza, ANTES de olhar os
     # cards: o deslogado às vezes devolve 0 cards (não cards zerados), o que a
@@ -1565,6 +1578,28 @@ def _payload_to_resultados(
     return out
 
 
+# Lote em paralelo com o site recusando consultas (ver SessaoHTTPExpirou):
+# quantas falhas no pool antes de parar de consultar, quanto esperar antes de
+# repetir na 2ª passada, e quantas recusas seguidas lá antes de desistir do
+# resto (que vira ErroBusca; o operador re-busca depois os "sem resultado").
+# Medido no servidor (2026-11-06): os 2 sites bloqueiam a SESSÃO LOGADA (não o
+# IP — sem cookie segue 200) com 405 depois de ~420 consultas em ~3,5 min, e o
+# bloqueio dura ~7 min. A pausa curta cobre só o soluço passageiro; num bloqueio
+# de verdade o lote desiste rápido em vez de martelar (Q20).
+_MAX_FALHAS_HTTP_NO_POOL = 3
+_PAUSA_APOS_RECUSA_S = 10.0
+_MAX_RECUSAS_SEGUIDAS = 3
+
+
+def _erro_recusa(idx: int, item, fornecedores) -> "ErroBusca":
+    return ErroBusca(
+        indice_item=idx,
+        fornecedor=",".join(f.nome for f in fornecedores),
+        descricao_resumo=(item.descricao or "")[:60],
+        mensagem=f"{_MENSAGEM_RECUSA} (excesso de consultas ou sessão expirada)",
+    )
+
+
 def buscar_precos_para_itens(
     itens: list[ItemExtraido],
     fornecedores: list[Fornecedor],
@@ -1923,10 +1958,10 @@ def buscar_precos_para_itens(
         nonlocal cache_hits, cache_misses, codigo_hits, llm_judge_hits
         resultados[idx] = bag
         erros.extend(erros_item)
-        cache_hits += stats["cache_hits"]
-        cache_misses += stats["cache_misses"]
-        codigo_hits += stats["codigo_hits"]
-        llm_judge_hits += stats["llm_judge_hits"]
+        cache_hits += stats.get("cache_hits", 0)
+        cache_misses += stats.get("cache_misses", 0)
+        codigo_hits += stats.get("codigo_hits", 0)
+        llm_judge_hits += stats.get("llm_judge_hits", 0)
 
     # Quantos itens processar EM PARALELO. Serial (1) quando: diagnóstico
     # ligado (objeto compartilhado), algum fornecedor sem transporte HTTP
@@ -1978,7 +2013,15 @@ def buscar_precos_para_itens(
                         _conns_extra.append(c)
                 return c
 
+            falhas_http = [0]
+
             def _no_worker(idx: int, item):
+                # Depois de algumas falhas HTTP o site está recusando (405 por
+                # excesso de consultas, campo 2026-10/11) ou a sessão caiu:
+                # seguir disparando só prolonga o bloqueio. O resto do lote
+                # vai direto para a 2ª passada, sem consultar.
+                if falhas_http[0] >= _MAX_FALHAS_HTTP_NO_POOL:
+                    return ("navegador", idx, item, None, None, None)
                 c = _conn_da_thread()
                 try:
                     bag, erros_item, stats = _processar_item(idx, item, c)
@@ -1988,6 +2031,8 @@ def buscar_precos_para_itens(
                 except SessaoHTTPExpirou:
                     # Sessão HTTP caiu p/ este item: volta depois, SERIAL,
                     # pela via do navegador (fallback preservado).
+                    with _lk:
+                        falhas_http[0] += 1
                     return ("navegador", idx, item, None, None, None)
 
             # Workers só usam HTTP — nunca tocam o Playwright de outra thread.
@@ -2025,8 +2070,32 @@ def buscar_precos_para_itens(
 
             # 2ª passada: itens cuja sessão HTTP expirou — SERIAL, na thread
             # dona do Playwright, com o fallback de navegador liberado.
-            for idx, item in pendentes_navegador:
-                bag, erros_item, stats = _processar_item(idx, item, conn)
+            #
+            # Quando QUEM CHAMOU já tinha ligado o http-only (a UI busca os 2
+            # fornecedores em paralelo, cada um numa thread que não é a dona
+            # do navegador), não há navegador para cair: a 2ª passada repete a
+            # consulta HTTP, com pausa. O que ainda falhar vira ErroBusca DO
+            # ITEM — antes a exceção escapava e derrubava o fornecedor INTEIRO,
+            # descartando tudo o que já tinha sido achado (Pregão 20/2026: 0
+            # de 654 itens, campo 2026-11-06).
+            sem_navegador = bool(fornecedores) and all(
+                _http_only_antes.get(f.nome) for f in fornecedores)
+            if sem_navegador:
+                for f in fornecedores:
+                    f._http_only = True
+            recusas_seguidas = 0
+            for n_pend, (idx, item) in enumerate(pendentes_navegador):
+                if sem_navegador and recusas_seguidas >= _MAX_RECUSAS_SEGUIDAS:
+                    bag, erros_item, stats = [], [_erro_recusa(idx, item, fornecedores)], {}
+                else:
+                    if sem_navegador and (n_pend == 0 or recusas_seguidas):
+                        time.sleep(_PAUSA_APOS_RECUSA_S)
+                    try:
+                        bag, erros_item, stats = _processar_item(idx, item, conn)
+                        recusas_seguidas = 0
+                    except SessaoHTTPExpirou:
+                        recusas_seguidas += 1
+                        bag, erros_item, stats = [], [_erro_recusa(idx, item, fornecedores)], {}
                 _absorver(idx, bag, erros_item, stats)
                 if conn is not None:
                     conn.commit()

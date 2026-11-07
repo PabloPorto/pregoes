@@ -848,3 +848,29 @@ máquina (§9) — atualizar o CLAUDE.md quando o servidor for validado.
 
 **Condição.** Vale se o teste de IP (Fase 1) passar; se os fornecedores
 bloquearem o IP da VPS, pedir reembolso e repensar.
+
+### Q20. Fornecedores limitam consultas por sessão (405) — 🟡 ABERTA, precisa decisão
+
+**Contexto (medido no servidor, 2026-11-06).** Desde 30/10 toda busca em LOTE
+falhava (12 tentativas no log). Teste controlado no ritmo do lote (4 threads ×
+2 consultas/s por fornecedor): os dois sites aceitaram ~420 consultas cada em
+~3,5 min e passaram a responder **405** à sessão logada por **~7 min**. Sem
+cookie, a mesma busca seguia 200 → o limite é da SESSÃO/CONTA, não do IP (mudar
+de VPS não resolve). Não é o texto da busca. Um edital de ~650 itens faz ~1.500
+consultas por fornecedor — estoura o limite com folga. Os preços do Itatuba
+(03/11) saíram da busca MANUAL, item a item.
+
+**Já corrigido (v1.1.14):** a recusa não derruba mais o fornecedor inteiro —
+antes a exceção da 2ª passada descartava TUDO o que já tinha sido achado (0 de
+654 no Pregão 20/2026). Agora o que foi achado fica, o lote para de consultar
+depois de poucas recusas (insistir prolonga o bloqueio), os itens restantes
+viram erro do item e a tela avisa quantos ficaram sem preço e o que fazer.
+
+**Default provisório:** ritmo do lote inalterado; o operador re-busca os "sem
+resultado" depois de ~10 min.
+
+**Alternativa não escolhida (precisa decisão do responsável/cliente):** ficar
+ABAIXO do limite — pausa automática de ~7 min a cada ~400 consultas, ou ritmo
+menor. Um edital de 650 itens passaria a levar ~15–25 min, mas sairia completo
+numa só rodada, sem intervenção. Calibrar o ritmo exige mais 1–2 testes de carga
+(cada um custa ~7 min de bloqueio da conta — fazer fora do horário de uso).

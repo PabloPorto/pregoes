@@ -40,7 +40,7 @@ def _raiz_bundle() -> Path:
 # Versão do aplicativo — aparece na sidebar e no log de boot. Sem ela, o
 # suporte remoto fica às cegas sobre o que o cliente está rodando (auditoria
 # 2026-06). Bump a cada .exe entregue ao cliente.
-VERSAO_APP = "1.1.13"
+VERSAO_APP = "1.1.14"
 
 # Rodando no servidor (deploy/pregoes.service define PREGOES_SERVIDOR=1) em vez
 # do .exe na máquina do cliente: muda o que é verdade para o operador (onde os

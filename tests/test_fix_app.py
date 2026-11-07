@@ -1187,3 +1187,16 @@ def test_avisos_lote_vazio_fornecedor_zerado_gera_aviso():
     assert app._avisos_lote_vazio([("almeida", 5, 1, 4)], 10) == []
     # match só por variação ainda é resultado (ok=0, var>0) — sem aviso
     assert app._avisos_lote_vazio([("dantas", 0, 3, 7)], 10) == []
+
+
+def test_avisos_recusa_um_por_fornecedor_com_contagem():
+    """Site recusou consultas (405, campo 2026-11): o operador vê quantos itens
+    ficaram sem preço e o que fazer — não só o painel técnico fechado."""
+    from pregoes.scraper import ErroBusca, _MENSAGEM_RECUSA
+    erros = [ErroBusca(i, "almeida", "x", f"{_MENSAGEM_RECUSA} (excesso)") for i in range(3)]
+    erros += [ErroBusca(9, "dantas", "y", "TimeoutError: layout mudou")]
+    avisos = app._avisos_recusa(erros)
+    assert len(avisos) == 1
+    assert "Almeida" in avisos[0] and "3 itens" in avisos[0]
+    assert "Buscar preços dos itens sem resultado" in avisos[0]
+    assert app._avisos_recusa([]) == []

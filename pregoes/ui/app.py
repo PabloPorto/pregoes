@@ -1632,6 +1632,26 @@ def _avisos_lote_vazio(stats_concluidos: list, total_itens: int) -> list[str]:
     return avisos
 
 
+def _avisos_recusa(erros: list) -> list[str]:
+    """Itens que ficaram sem consulta porque o site do fornecedor RECUSOU
+    (405 por excesso de consultas, campo 2026-10/11). O painel 'erros
+    técnicos' fica fechado e fala em layout/sessão — aqui o operador lê o que
+    fazer. Um aviso por fornecedor."""
+    from pregoes.scraper import _MENSAGEM_RECUSA
+    por_forn: dict = {}
+    for e in erros or []:
+        if (getattr(e, "mensagem", "") or "").startswith(_MENSAGEM_RECUSA):
+            for nome in (e.fornecedor or "").split(","):
+                por_forn.setdefault(nome, set()).add(e.indice_item)
+    return [
+        f"<b>Atenção — {nome.capitalize()}:</b> o site recusou consultas "
+        f"(limite de acessos) e <b>{len(idx)} itens</b> ficaram sem preço deste "
+        "fornecedor. O que já foi encontrado está mantido. Aguarde uns "
+        "10 minutos e use <b>Buscar preços dos itens sem resultado</b>."
+        for nome, idx in por_forn.items() if nome
+    ]
+
+
 def _buscar_fornecedores_paralelo(itens_alvo: list, sessoes: dict,
                                   progresso) -> dict:
     """Roda a busca dos fornecedores EM PARALELO (1 thread por fornecedor).
@@ -1975,8 +1995,9 @@ def _executar_busca(itens: list, fornecedores_nomes: list[str],
     st.session_state.cache_stats = (lote.cache_hits, lote.cache_misses)
     # Honestidade com o operador: fornecedor com ZERO em tudo = site instável
     # (não "nada existe") — persiste o aviso para a tela de resultados.
-    st.session_state["avisos_lote_vazio"] = _avisos_lote_vazio(
-        stats_concluidos, total_itens)
+    st.session_state["avisos_lote_vazio"] = (
+        _avisos_lote_vazio(stats_concluidos, total_itens)
+        + _avisos_recusa(lote.erros))
     with status_final.container():
         hits, misses = lote.cache_hits, lote.cache_misses
         extras = []
