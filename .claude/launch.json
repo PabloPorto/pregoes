@@ -5,12 +5,23 @@
       "name": "pregoes-ui",
       "runtimeExecutable": ".venv/bin/python",
       "runtimeArgs": [
-        "-m", "streamlit", "run", "pregoes/ui/app.py",
+        "-m",
+        "streamlit",
+        "run",
+        "pregoes/ui/app.py",
         "--server.port=8501",
         "--server.headless=true",
         "--browser.gatherUsageStats=false"
       ],
       "port": 8501
+    },
+    {
+      "name": "pregoes-web",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": [
+        "run_web.py"
+      ],
+      "port": 8502
     }
   ]
 }

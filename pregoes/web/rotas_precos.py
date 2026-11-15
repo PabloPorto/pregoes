@@ -6,7 +6,7 @@
     POST /pregao/<slug>/precos/refazer                  descarta a busca ({"destino": "precos"|"revisao"})
     POST /pregao/<slug>/precos/escolher                 {"i", "k"} escolhe uma opção
     POST /pregao/<slug>/precos/nao-usar                 {"i", "usar"} deixa sem preço / volta a usar
-    GET  /pregao/<slug>/precos/item/<i>/procurar        diálogo das buscas manuais (?fonte=catalogo|site)
+    GET  /pregao/<slug>/precos/item/<i>/procurar        diálogo das buscas manuais (uma barra por fornecedor)
     POST /pregao/<slug>/precos/item/<i>/catalogo        {"q"} procura no catálogo do cliente
     POST /pregao/<slug>/precos/item/<i>/catalogo/usar   {"produto_id", "fornecedor"} cota ao vivo e usa
     POST /pregao/<slug>/precos/item/<i>/site            {"termo", "fornecedor"} busca ao vivo no site
@@ -346,14 +346,19 @@ def _item_do_caminho(request: Request) -> tuple[Optional[Pregao], Optional[int]]
     return pregao, _indice(pregao, request.path_params["i"])
 
 
-def _resposta_procura(request: Request, pregao: Pregao, i: int, *, aviso: Optional[dict] = None,
-                      texto: str = "", lista: Optional[dict] = None):
-    """Troca a mensagem do diálogo e, quando `lista` vem, também a lista."""
-    saida = {"#procura-estado": pedaco(request, "precos_procura_resultado.html", parte="estado",
-                                       pregao=pregao, i=i, aviso=aviso, texto=texto)}
+def _resposta_procura(request: Request, pregao: Pregao, i: int, onde: str, *,
+                      aviso: Optional[dict] = None, texto: str = "",
+                      lista: Optional[dict] = None):
+    """Troca a mensagem da barra `onde` (um fornecedor ou "catalogo") e,
+    quando `lista` vem, também a lista dela. Cada barra do diálogo tem o seu
+    espaço: buscar na Dantas não apaga o que a Almeida devolveu."""
+    saida = {f"#procura-estado-{onde}": pedaco(
+        request, "precos_procura_resultado.html", parte="estado", pregao=pregao, i=i,
+        onde=onde, aviso=aviso, texto=texto)}
     if lista is not None:
-        saida["#procura-resultado"] = pedaco(request, "precos_procura_resultado.html",
-                                             parte="lista", pregao=pregao, i=i, **lista)
+        saida[f"#procura-resultado-{onde}"] = pedaco(
+            request, "precos_procura_resultado.html", parte="lista", pregao=pregao, i=i,
+            onde=onde, **lista)
     return ok(html=saida)
 
 
@@ -361,14 +366,11 @@ def procurar(request: Request):
     pregao, i = _item_do_caminho(request)
     if pregao is None or i is None:
         return falha("Este item não existe mais neste pregão — recarregue a página.", 404)
-    fonte = "site" if request.query_params.get("fonte") == "site" else "catalogo"
-    n_catalogo = 0
-    if fonte == "catalogo":
-        with db.get_conn() as conn:
-            n_catalogo = len(matcher.carregar_catalogo(conn))
+    with db.get_conn() as conn:
+        n_catalogo = len(matcher.carregar_catalogo(conn))
     em_lote = any(t.tipo == "busca" for t in tarefas.rodando())
     return HTMLResponse(pedaco(
-        request, "precos_procurar.html", pregao=pregao, it=_visao(pregao, i), fonte=fonte,
+        request, "precos_procurar.html", pregao=pregao, it=_visao(pregao, i),
         n_catalogo=n_catalogo, fornecedores=fornecedores_configurados(),
         fila_ocupada=em_lote))
 
@@ -385,7 +387,7 @@ def _catalogo_buscar(request: Request, dados: dict):
         catalogo = matcher.carregar_catalogo(conn)
         if not consulta:
             return _resposta_procura(
-                request, pregao, i, lista={},
+                request, pregao, i, "catalogo", lista={},
                 texto=f"Digite palavras (ex.: 'tubo pvc 75') ou um código para procurar "
                       f"nos seus {len(catalogo)} produtos.")
         achados = regras.buscar_no_catalogo(catalogo, consulta)
@@ -395,10 +397,10 @@ def _catalogo_buscar(request: Request, dados: dict):
         linha["configurado"] = linha["fornecedor"] in configurados
     if not linhas:
         return _resposta_procura(
-            request, pregao, i, lista={},
+            request, pregao, i, "catalogo", lista={},
             texto="Nenhum produto encontrado no seu catálogo. Tente outras palavras ou o "
                   "código do fornecedor.")
-    return _resposta_procura(request, pregao, i, lista={"linhas": linhas})
+    return _resposta_procura(request, pregao, i, "catalogo", lista={"linhas": linhas})
 
 
 def _catalogo_usar(request: Request, dados: dict):
@@ -423,12 +425,12 @@ def _catalogo_usar(request: Request, dados: dict):
         ao_vivo = scraper.cotar_por_codigo(forn, codigo)
     except Exception as exc:
         _log.exception("falha ao cotar por código no catálogo")
-        return _resposta_procura(request, pregao, i, aviso={"tipo": "alerta", "html": (
+        return _resposta_procura(request, pregao, i, "catalogo", aviso={"tipo": "alerta", "html": (
             "Não consegui consultar o preço atual agora "
             f"({html.escape(erros.mensagem_amigavel(exc))}). O preço do catálogo "
             "<b>não</b> é usado. Tente de novo em instantes.")})
     if ao_vivo is None:
-        return _resposta_procura(request, pregao, i, aviso={"tipo": "alerta", "html": (
+        return _resposta_procura(request, pregao, i, "catalogo", aviso={"tipo": "alerta", "html": (
             f"O código <code>{html.escape(codigo)}</code> não foi encontrado agora no site "
             f"da {forn.capitalize()} — o produto pode ter saído de linha. Confira "
             "diretamente no site antes de usar.")})
@@ -454,11 +456,11 @@ def _site_buscar(request: Request, dados: dict):
         return falha("Este item não existe mais neste pregão — recarregue a página.", 404)
     termo = str(dados.get("termo") or "").strip()
     forn = str(dados.get("fornecedor") or "")
-    if not termo:
-        return _resposta_procura(request, pregao, i, lista={},
-                                 texto="Digite um nome ou código para buscar.")
     if forn not in fornecedores_configurados():
-        return falha("Escolha um fornecedor configurado para buscar.")
+        return falha("Este fornecedor não está configurado — cadastre o acesso em Configurações.")
+    if not termo:
+        return _resposta_procura(request, pregao, i, forn, lista={},
+                                 texto="Digite um nome ou código para buscar.")
     try:
         achados = scraper.buscar_no_site(forn, termo)
     except Exception as exc:
@@ -472,15 +474,15 @@ def _site_buscar(request: Request, dados: dict):
             texto = ("Não consegui buscar no site agora "
                      f"({html.escape(erros.mensagem_amigavel(exc))}). Tente de novo em "
                      "instantes.")
-        return _resposta_procura(request, pregao, i, lista={},
+        return _resposta_procura(request, pregao, i, forn, lista={},
                                  aviso={"tipo": "alerta", "html": texto})
     if not achados:
         return _resposta_procura(
-            request, pregao, i, lista={},
+            request, pregao, i, forn, lista={},
             texto=f"Nada encontrado na {forn.capitalize()} para esse termo. Tente outras "
                   "palavras ou o código. Se o produto deveria existir, o site do fornecedor "
                   "pode estar instável neste momento — tente de novo em alguns minutos.")
-    return _resposta_procura(request, pregao, i, lista={
+    return _resposta_procura(request, pregao, i, forn, lista={
         "fornecedor": forn,
         "achados": [{"r": r, "pacote": _embalar(r)} for r in achados]})
 

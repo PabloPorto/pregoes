@@ -48,9 +48,9 @@
     <button class="btn p" type="button" data-acao="{{ base }}/nao-usar" data-dados='{{ {"i": it.i, "usar": true}|tojson }}'>Voltar a usar este item</button>
   </div>
   {% elif not it.opcoes %}
-  <div class="p-nota alerta">{{ m.icone('alerta') }}<span>Nenhum resultado nos fornecedores nesta busca. Use <b>Procurar de outro jeito</b>, ou deixe em branco (a coluna de preço fica vazia para preencher manualmente).</span></div>
+  <div class="p-nota alerta">{{ m.icone('alerta') }}<span>Nenhum resultado nos fornecedores. Procure de outro jeito ou deixe em branco para preencher na planilha.</span></div>
   {% elif not it.selecao %}
-  <div class="p-nota">{{ m.icone('info') }}<span>Nenhuma opção escolhida para este item — clique na que você quer usar.</span></div>
+  <div class="p-nota">{{ m.icone('info') }}<span>Nenhuma opção escolhida — clique na que você quer usar.</span></div>
   {% endif %}
 
   {% if it.opcoes %}
@@ -60,7 +60,7 @@
   {% endif %}
   {% if it.ocultas %}
   <details class="p-outras">
-    <summary>{{ 'Ver outra opção' if it.ocultas|length == 1 else 'Ver outras ' ~ it.ocultas|length ~ ' opções' }} <span class="fraco">(menos relevantes)</span></summary>
+    <summary title="Opções menos parecidas com o item">{{ 'Ver outra opção' if it.ocultas|length == 1 else 'Ver outras ' ~ it.ocultas|length ~ ' opções' }}</summary>
     <div class="candidatos">
       {% for c in it.ocultas %}{{ opcao(c) }}{% endfor %}
     </div>
@@ -68,9 +68,9 @@
   {% endif %}
 
   <div class="sub-acoes">
-    <button class="btn p fantasma" type="button" data-modal="{{ base }}/item/{{ it.i }}/procurar">{{ m.icone('busca') }} Procurar de outro jeito</button>
+    <button class="btn p" type="button" data-modal="{{ base }}/item/{{ it.i }}/procurar">{{ m.icone('busca') }} Procurar de outro jeito</button>
     {% if not it.nao_usar %}
-    <button class="btn p fantasma" type="button" data-acao="{{ base }}/nao-usar" data-dados='{{ {"i": it.i, "usar": false}|tojson }}'>Não usar este item</button>
+    <button class="btn p" type="button" data-acao="{{ base }}/nao-usar" data-dados='{{ {"i": it.i, "usar": false}|tojson }}'>Não usar este item</button>
     {% endif %}
   </div>
 </article>

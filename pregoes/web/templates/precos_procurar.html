@@ -1,13 +1,16 @@
-{# Diálogo "Procurar de outro jeito" de um item: as duas buscas manuais, uma
-   por vez (Meus produtos = catálogo do cliente · Site do fornecedor = busca
-   ao vivo). Espera `pregao`, `it` (visao_item), `fonte`, `n_catalogo`,
-   `fornecedores`, `fila_ocupada`. #}
+{# Diálogo "Procurar de outro jeito" de um item. Tudo numa tela só: uma barra
+   de busca por fornecedor (ao vivo no site), lado a lado, e a busca em "Meus
+   produtos" (catálogo do cliente). Cada barra tem o seu espaço de resposta
+   (#procura-estado-<onde> / #procura-resultado-<onde>): o resultado de um
+   fornecedor continua na tela enquanto se busca no outro.
+   Espera `pregao`, `it` (visao_item), `n_catalogo`, `fornecedores`,
+   `fila_ocupada`. #}
 {% import "_macros.html" as m with context %}
 {% set base = '/pregao/' ~ pregao.slug ~ '/precos/item/' ~ it.i %}
 <div data-largo="1">
   <div class="cab">
     <h2>Procurar de outro jeito</h2>
-    <button class="btn fantasma p" type="button" data-fechar>Fechar</button>
+    <button class="btn p" type="button" data-fechar>Fechar</button>
   </div>
   <div class="corpo">
     <div class="p-alvo">
@@ -18,53 +21,45 @@
       </div>
     </div>
 
-    <div class="p-fonte">
-      <span class="pequeno mudo">Onde procurar este item?</span>
-      <div class="p-segmento" role="tablist">
-        <button type="button" role="tab" class="{{ 'ativo' if fonte == 'catalogo' }}" aria-selected="{{ 'true' if fonte == 'catalogo' else 'false' }}" data-modal="{{ base }}/procurar?fonte=catalogo">Meus produtos</button>
-        <button type="button" role="tab" class="{{ 'ativo' if fonte == 'site' }}" aria-selected="{{ 'true' if fonte == 'site' else 'false' }}" data-modal="{{ base }}/procurar?fonte=site">Site do fornecedor</button>
-      </div>
-    </div>
-
     {% if fila_ocupada %}
-    <div class="p-nota">{{ m.icone('relogio') }}<span>Há uma busca de preços em lote rodando agora. Consultas ao site do fornecedor esperam a vez dela e podem demorar.</span></div>
+    <div class="p-nota">{{ m.icone('relogio') }}<span>Há uma busca em lote rodando: a consulta ao site espera a vez dela e pode demorar.</span></div>
     {% endif %}
 
-    {% if fonte == 'site' %}
-      {% if not fornecedores %}
-        <p class="mudo">Configure as credenciais dos fornecedores em Configurações para buscar direto no site.</p>
-      {% else %}
-      <form class="p-procura" action="{{ base }}/site" data-async data-espera="Buscando “{termo}” na {fornecedor}…">
-        <label class="campo p-procura-campo">Nome ou código do produto
-          <input type="text" name="termo" placeholder="ex.: alicate de pressão  ·  8811" autocomplete="off" autofocus>
-        </label>
-        <fieldset class="p-radios">
-          <legend>Fornecedor</legend>
-          {% for nome in fornecedores %}
-          <label class="checagem"><input type="radio" name="fornecedor" value="{{ nome }}" {{ 'checked' if loop.first }}> {{ nome|capitalize }}</label>
-          {% endfor %}
-        </fieldset>
-        <button class="btn primario" type="submit">{{ m.icone('busca') }} Buscar no site ao vivo</button>
-      </form>
-      <p class="pequeno mudo">Busca AO VIVO no site, sem filtro — você vê o que o site devolve e escolhe. O preço é o atual do site.</p>
-      {% endif %}
-    {% else %}
-      {% if not n_catalogo %}
-        <p class="mudo">Catálogo interno vazio — importe suas planilhas históricas em Configurações para usar esta busca.</p>
-      {% else %}
-      <form class="p-procura" action="{{ base }}/catalogo" data-async>
-        <label class="campo p-procura-campo">Procurar por palavras ou código
-          <input type="text" name="q" placeholder="ex.: tubo pvc 75  ·  válvula lavatório  ·  8811" autocomplete="off" autofocus>
-        </label>
-        <button class="btn primario" type="submit">{{ m.icone('busca') }} Procurar</button>
-      </form>
-      <p class="pequeno mudo">Busque por palavras (acha quem contém todas) ou pelo código do fornecedor. Nos produtos que você já comprou.</p>
-      {% endif %}
-    {% endif %}
-
-    <div id="procura-estado" class="p-estado">
-      {%- if fonte != 'site' and n_catalogo %}<p class="mudo">Digite palavras (ex.: 'tubo pvc 75') ou um código para procurar nos seus {{ n_catalogo|num }} produtos.</p>{% endif -%}
+    {% if fornecedores %}
+    <div class="p-buscas">
+      {% for nome in fornecedores %}
+      <section class="p-busca">
+        <form class="p-procura" action="{{ base }}/site" data-async data-espera="Buscando “{termo}” na {{ nome|capitalize }}…">
+          <input type="hidden" name="fornecedor" value="{{ nome }}">
+          <label class="p-busca-rotulo" for="procura-termo-{{ nome }}"><span class="p-forn forn-{{ nome }}">{{ nome|capitalize }}</span> <span class="fraco">preço atual do site</span></label>
+          <div class="p-procura-linha">
+            <input id="procura-termo-{{ nome }}" type="text" name="termo" placeholder="Nome ou código do produto" autocomplete="off" {{ 'autofocus' if loop.first }}>
+            <button class="btn" type="submit">{{ m.icone('busca') }} Buscar</button>
+          </div>
+        </form>
+        <div id="procura-estado-{{ nome }}" class="p-estado"></div>
+        <div id="procura-resultado-{{ nome }}"></div>
+      </section>
+      {% endfor %}
     </div>
-    <div id="procura-resultado"></div>
+    {% else %}
+    <p class="mudo">Configure as credenciais dos fornecedores em Configurações para buscar direto no site.</p>
+    {% endif %}
+
+    {% if n_catalogo %}
+    <section class="p-busca p-busca-catalogo">
+      <form class="p-procura" action="{{ base }}/catalogo" data-async>
+        <label class="p-busca-rotulo" for="procura-q"><span class="p-forn">Meus produtos</span> <span class="fraco">{{ n_catalogo|num }} que você já comprou</span></label>
+        <div class="p-procura-linha">
+          <input id="procura-q" type="text" name="q" placeholder="Palavras ou código  ·  ex.: tubo pvc 75" autocomplete="off" {{ 'autofocus' if not fornecedores }}>
+          <button class="btn" type="submit">{{ m.icone('busca') }} Procurar</button>
+        </div>
+      </form>
+      <div id="procura-estado-catalogo" class="p-estado"></div>
+      <div id="procura-resultado-catalogo"></div>
+    </section>
+    {% else %}
+    <p class="pequeno fraco p-catalogo-vazio">Meus produtos: catálogo interno vazio — importe suas planilhas históricas em Configurações para procurar também no que você já comprou.</p>
+    {% endif %}
   </div>
 </div>

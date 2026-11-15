@@ -518,7 +518,7 @@ def test_cartao_do_item_mostra_opcoes_pilulas_e_as_alem_do_corte(busca, web):
     assert "4 opções" in cartao
     item1 = html.split('id="item-1"')[1]
     assert "ver descrição completa" in item1 and "Não encontrado" in item1
-    assert "Nenhum resultado nos fornecedores nesta busca." in item1
+    assert "Nenhum resultado nos fornecedores." in item1
     assert "Procurar de outro jeito" in item1 and "Não usar este item" in item1
     assert "ver descrição completa" not in cartao   # descrição curta: o título basta
 
@@ -553,7 +553,7 @@ def test_nao_usar_voltar_a_usar_e_escolher_desfaz_o_nao_usar(busca, web):
 
     # voltar a usar: só sai do conjunto — a escolha NÃO é recriada
     cartao = web.post(f"{url}/nao-usar", json={"i": 0, "usar": True}).json()["html"]["#item-0"]
-    assert "Nenhuma opção escolhida para este item" in cartao
+    assert "Nenhuma opção escolhida — clique" in cartao
     q = Pregao.abrir(p.slug)
     assert q.itens_nao_usar == set() and 0 not in q.selecoes
 
@@ -571,13 +571,20 @@ def test_dialogo_procurar_de_outro_jeito(busca, web):
     url = f"/pregao/{p.slug}/precos/item/1"
     t = web.get(f"{url}/procurar").text
     assert t.lstrip().startswith("<div data-largo")
-    for trecho in ("Procurar de outro jeito", "Onde procurar este item?", "Meus produtos",
-                   "Site do fornecedor", "Catálogo interno vazio — importe suas planilhas"):
+    # uma barra de busca POR FORNECEDOR, na mesma tela (pedido do cliente:
+    # não ter de escolher o fornecedor antes de buscar)
+    for trecho in ("Procurar de outro jeito", "Nome ou código do produto",
+                   'name="fornecedor" value="almeida"', 'name="fornecedor" value="dantas"',
+                   'id="procura-estado-almeida"', 'id="procura-resultado-almeida"',
+                   'id="procura-estado-dantas"', 'id="procura-resultado-dantas"',
+                   "catálogo interno vazio — importe suas planilhas"):
         assert trecho in t, trecho
-    t = web.get(f"{url}/procurar?fonte=site").text
-    for trecho in ("Nome ou código do produto", "Buscar no site ao vivo", 'value="almeida"',
-                   'value="dantas"', "ex.: alicate de pressão"):
-        assert trecho in t, trecho
+    assert t.count('data-async') == 2 and 'type="radio"' not in t
+    assert t.count("autofocus") == 1
+    # só um fornecedor configurado: só a barra dele
+    credenciais.remover("dantas")
+    t = web.get(f"{url}/procurar").text
+    assert 'value="almeida"' in t and 'value="dantas"' not in t
     assert web.get(f"/pregao/{p.slug}/precos/item/9/procurar").status_code == 404
 
 
@@ -595,13 +602,16 @@ def test_busca_manual_no_site_mensagens_e_usar(busca, web, monkeypatch):
     monkeypatch.setattr(scraper, "buscar_no_site", _site)
 
     r = web.post(f"{url}/site", json={"termo": "  ", "fornecedor": "almeida"}).json()
-    assert "Digite um nome ou código para buscar." in r["html"]["#procura-estado"]
+    assert "Digite um nome ou código para buscar." in r["html"]["#procura-estado-almeida"]
     assert pedidos == []
 
     r = web.post(f"{url}/site", json={"termo": " alicate ", "fornecedor": "almeida"}).json()
-    lista = r["html"]["#procura-resultado"]
+    # a resposta vai para a barra da Almeida — a da Dantas fica como estava
+    assert set(r["html"]) == {"#procura-estado-almeida", "#procura-resultado-almeida"}
+    lista = r["html"]["#procura-resultado-almeida"]
+    assert 'id="procura-resultado-almeida"' in lista
     assert pedidos == [("almeida", "alicate")]
-    assert "2 resultado(s) na Almeida" in lista and "<b>preço atual do site</b>" in lista
+    assert "2 resultados" in lista and "ALICATE DE PRESSAO 10POL" in lista
     assert "TRAMONTINA" in lista and "R$ 45,90" in lista and "Sem marca" in lista
     assert "cód. 8811" in lista and lista.count(">Usar</button>") == 2
 
@@ -628,20 +638,20 @@ def test_busca_manual_no_site_mensagens_e_usar(busca, web, monkeypatch):
     monkeypatch.setattr(scraper, "buscar_no_site", _limitado)
     r = web.post(f"{url}/site", json={"termo": "x", "fornecedor": "dantas"}).json()
     assert ("O site da Dantas limitou as consultas por alguns minutos (muitas buscas em pouco "
-            "tempo). <b>Aguarde uns 5 minutos</b> e busque de novo.") in r["html"]["#procura-estado"]
-    assert ">Usar</button>" not in r["html"]["#procura-resultado"]
+            "tempo). <b>Aguarde uns 5 minutos</b> e busque de novo.") in r["html"]["#procura-estado-dantas"]
+    assert ">Usar</button>" not in r["html"]["#procura-resultado-dantas"]
 
     def _quebrado(forn, termo, limite=10):
         raise TimeoutError("page.goto: Timeout 30000ms exceeded")
     monkeypatch.setattr(scraper, "buscar_no_site", _quebrado)
     estado = web.post(f"{url}/site", json={"termo": "x", "fornecedor": "dantas"}).json()[
-        "html"]["#procura-estado"]
+        "html"]["#procura-estado-dantas"]
     assert "Não consegui buscar no site agora (" in estado and "Tente de novo em instantes." in estado
     assert "Traceback" not in estado and "page.goto" not in estado
 
     monkeypatch.setattr(scraper, "buscar_no_site", lambda forn, termo, limite=10: [])
     estado = web.post(f"{url}/site", json={"termo": "x", "fornecedor": "dantas"}).json()[
-        "html"]["#procura-estado"]
+        "html"]["#procura-estado-dantas"]
     assert "Nada encontrado na Dantas para esse termo." in estado
     assert "pode estar instável neste momento" in estado
 
@@ -667,32 +677,34 @@ def test_busca_no_catalogo_modos_e_referencia(busca, web):
     credenciais.remover("dantas")
     p = _com_busca(web, {0: [], 1: []})
     url = f"/pregao/{p.slug}/precos/item/0"
-    assert "procurar nos seus 4 produtos" in web.get(f"{url}/procurar").text
+    dialogo = web.get(f"{url}/procurar").text
+    assert "Meus produtos" in dialogo and "4 que você já comprou" in dialogo
+    assert 'id="procura-estado-catalogo"' in dialogo and "catálogo interno vazio" not in dialogo
 
     def procurar(q):
         return web.post(f"{url}/catalogo", json={"q": q}).json()["html"]
 
     vazio = procurar("")
-    assert "ou um código para procurar nos seus 4 produtos." in vazio["#procura-estado"]
+    assert "ou um código para procurar nos seus 4 produtos." in vazio["#procura-estado-catalogo"]
 
     # 1) código (igual ou prefixo), uma linha por fornecedor com código
-    lista = procurar("88")["#procura-resultado"]
+    lista = procurar("88")["#procura-resultado-catalogo"]
     assert "TIGRE" in lista and "AMANCO" in lista and "DECA" not in lista
-    assert "referência da última compra" in lista
+    assert "referência da última compra" in lista and "preço atual no site" in lista
     assert "referência: R$ 31,50 (últ. compra 2026-05-02)" in lista
     assert "sem referência de preço" in lista
     assert "cód. 8811" in lista and "cód. D500" in lista
     assert lista.count("Usar (preço atual)</button>") == 2       # as linhas da Almeida
     assert "Dantas não configurada" in lista                     # sem acesso: sem botão
     # 2) palavras: contém TODAS
-    lista = procurar("tubo 75")["#procura-resultado"]
+    lista = procurar("tubo 75")["#procura-resultado-catalogo"]
     assert "TIGRE" in lista and "AMANCO" not in lista
     # 3) nenhuma contém todas → aproximado
-    assert "DECA" in procurar("valvula lavatorio dourada")["#procura-resultado"]
-    assert "Sem marca" in procurar("registro esfera")["#procura-resultado"]
+    assert "DECA" in procurar("valvula lavatorio dourada")["#procura-resultado-catalogo"]
+    assert "Sem marca" in procurar("registro esfera")["#procura-resultado-catalogo"]
     nada = procurar("zzzz qqqq")
-    assert "Nenhum produto encontrado no seu catálogo." in nada["#procura-estado"]
-    assert "Usar" not in nada["#procura-resultado"]
+    assert "Nenhum produto encontrado no seu catálogo." in nada["#procura-estado-catalogo"]
+    assert "Usar" not in nada["#procura-resultado-catalogo"]
 
 
 def test_usar_do_catalogo_cota_ao_vivo_e_nunca_usa_preco_antigo(busca, web, monkeypatch):
@@ -705,12 +717,12 @@ def test_usar_do_catalogo_cota_ao_vivo_e_nunca_usa_preco_antigo(busca, web, monk
     def _fora_do_ar(forn, codigo):
         raise RuntimeError("net::ERR_INTERNET_DISCONNECTED")
     monkeypatch.setattr(scraper, "cotar_por_codigo", _fora_do_ar)
-    estado = web.post(url, json=pedido).json()["html"]["#procura-estado"]
+    estado = web.post(url, json=pedido).json()["html"]["#procura-estado-catalogo"]
     assert "Não consegui consultar o preço atual agora (" in estado
     assert "O preço do catálogo <b>não</b> é usado. Tente de novo em instantes." in estado
 
     monkeypatch.setattr(scraper, "cotar_por_codigo", lambda forn, codigo: None)
-    estado = web.post(url, json=pedido).json()["html"]["#procura-estado"]
+    estado = web.post(url, json=pedido).json()["html"]["#procura-estado-catalogo"]
     assert "O código <code>8811</code> não foi encontrado agora no site da Almeida" in estado
     q = Pregao.abrir(p.slug)
     assert q.resultados_busca[0] == [] and 0 not in q.selecoes       # nada gravado

@@ -8,9 +8,9 @@
 
    2. Diálogo "Procurar de outro jeito": dizer o que está sendo esperado
       (consultar o site leva alguns segundos). Quem tem `data-espera="texto"`
-      escreve o texto em #procura-estado ao ser acionado; a resposta do
-      servidor troca esse elemento pela mensagem final. `{campo}` no texto
-      vira o valor do campo do formulário. */
+      escreve o texto no `.p-estado` da SUA barra (`.p-busca`) ao ser
+      acionado; a resposta do servidor troca esse elemento pela mensagem
+      final. `{campo}` no texto vira o valor do campo do formulário. */
 (function () {
   "use strict";
 
@@ -36,7 +36,8 @@
 
   /* ---------- 2. o que se espera nas buscas manuais ---------- */
   function esperar(origem, campos) {
-    const estado = document.querySelector("#procura-estado");
+    const barra = origem.closest(".p-busca");
+    const estado = barra && barra.querySelector(".p-estado");
     if (!estado || !origem.dataset.espera) return;
     const texto = origem.dataset.espera.replace(/\{(\w+)\}/g, function (_, nome) {
       const v = String((campos && campos.get(nome)) || "").trim();

@@ -15,6 +15,7 @@
   --alerta: #a45a05; --alerta-fundo: #fff4dc; --alerta-borda: #f5d79a;
   --erro: #b42318; --erro-fundo: #fde8e6; --erro-borda: #f6c2bc;
   --info: var(--azul-700); --info-fundo: var(--azul-50); --info-borda: var(--azul-200);
+  --forn-almeida: #b45309; --forn-dantas: #7e22ce;
   --lateral: #0f1b3d; --lateral-texto: #c9d3ea; --lateral-ativo: #1d2f66;
   --sombra-1: 0 1px 2px rgba(16, 24, 40, .06);
   --sombra-2: 0 4px 16px rgba(16, 24, 40, .08);
@@ -36,6 +37,7 @@
     --alerta: #f2b755; --alerta-fundo: #2e2410; --alerta-borda: #5a4517;
     --erro: #ff8a7d; --erro-fundo: #33161a; --erro-borda: #63262b;
     --info: #9ab4ff; --info-fundo: #17224a; --info-borda: #2b3c7a;
+    --forn-almeida: #f59e4b; --forn-dantas: #c4a1ff;
     --lateral: #080c1a; --lateral-texto: #aab4cc; --lateral-ativo: #1a2548;
     --sombra-1: 0 1px 2px rgba(0, 0, 0, .4); --sombra-2: 0 4px 16px rgba(0, 0, 0, .45);
     --sombra-3: 0 16px 40px rgba(0, 0, 0, .6);
@@ -51,6 +53,7 @@
   --alerta: #f2b755; --alerta-fundo: #2e2410; --alerta-borda: #5a4517;
   --erro: #ff8a7d; --erro-fundo: #33161a; --erro-borda: #63262b;
   --info: #9ab4ff; --info-fundo: #17224a; --info-borda: #2b3c7a;
+  --forn-almeida: #f59e4b; --forn-dantas: #c4a1ff;
   --lateral: #080c1a; --lateral-texto: #aab4cc; --lateral-ativo: #1a2548;
   --sombra-1: 0 1px 2px rgba(0, 0, 0, .4); --sombra-2: 0 4px 16px rgba(0, 0, 0, .45);
   --sombra-3: 0 16px 40px rgba(0, 0, 0, .6);
@@ -162,6 +165,7 @@ small, .pequeno { font-size: .85rem; }
   content: ""; width: 13px; height: 13px; border-radius: 50%;
   border: 2px solid currentColor; border-right-color: transparent; animation: gira .7s linear infinite;
 }
+.btn.ocupado > svg { display: none; }   /* o giro toma o lugar do ícone */
 @keyframes gira { to { transform: rotate(360deg); } }
 
 /* ===== Formulários ===== */
@@ -258,7 +262,7 @@ table.tabela { width: 100%; border-collapse: separate; border-spacing: 0; font-s
 .candidato .nome-c { font-size: .88rem; font-weight: 600; line-height: 1.35; }
 .candidato .linha-c { display: flex; align-items: center; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
 .candidato .preco { font-weight: 700; font-size: 1.02rem; font-variant-numeric: tabular-nums; }
-.forn-almeida { color: #b45309; } .forn-dantas { color: #0e7490; }
+.forn-almeida { color: var(--forn-almeida); } .forn-dantas { color: var(--forn-dantas); }
 .sub-acoes { margin: 10px 0 0 50px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 
 /* ===== Abas, filtros, paginação ===== */

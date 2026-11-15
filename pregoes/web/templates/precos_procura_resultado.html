@@ -1,23 +1,25 @@
-{# Resposta das buscas manuais, dentro do diálogo: troca #procura-estado (a
-   mensagem) e #procura-resultado (a lista). Um modelo, dois blocos — a rota
-   renderiza cada um com `parte`. Espera `pregao`, `i` e, conforme o caso:
-   `aviso` ({tipo, html}) · `texto` · `linhas` (catálogo) · `achados` (site). #}
+{# Resposta das buscas manuais, dentro do diálogo: troca a mensagem
+   (#procura-estado-<onde>) e a lista (#procura-resultado-<onde>) da barra
+   que buscou — `onde` é o fornecedor ou "catalogo". Um modelo, dois blocos —
+   a rota renderiza cada um com `parte`. Espera `pregao`, `i`, `onde` e,
+   conforme o caso: `aviso` ({tipo, html}) · `texto` · `linhas` (catálogo) ·
+   `achados` (site). #}
 {% import "_macros.html" as m with context %}
 {% set base = '/pregao/' ~ pregao.slug ~ '/precos/item/' ~ i %}
 {% if parte == 'estado' %}
-<div id="procura-estado" class="p-estado">
+<div id="procura-estado-{{ onde }}" class="p-estado">
   {%- if aviso %}{{ m.aviso(aviso.tipo, aviso.html) }}{% elif texto %}<p class="mudo">{{ texto }}</p>{% endif -%}
 </div>
 {% else %}
-<div id="procura-resultado">
+<div id="procura-resultado-{{ onde }}">
   {% if linhas %}
-  <p class="pequeno mudo">O preço abaixo é só <b>referência da última compra</b>. Ao usar, o sistema busca o <b>preço atual</b> no site do fornecedor pelo código (preço muda todo dia).</p>
+  <p class="pequeno fraco p-achados-nota">Preço de <b>referência da última compra</b> — ao usar, o sistema busca o preço atual no site.</p>
   <div class="p-achados">
     {% for l in linhas %}
     <div class="p-achado">
       <div class="p-achado-texto">
-        <div><b>{{ l.marca }}</b> · {{ l.descricao }}</div>
-        <div class="pequeno mudo"><span class="forn-{{ l.fornecedor }}">{{ l.fornecedor|capitalize }}</span> · <span class="mono">cód. {{ l.codigo }}</span> ·
+        <div class="p-achado-nome">{{ l.descricao }}</div>
+        <div class="pequeno mudo"><b>{{ l.marca }}</b> · <span class="p-forn forn-{{ l.fornecedor }}">{{ l.fornecedor|capitalize }}</span> · <span class="mono">cód. {{ l.codigo }}</span> ·
           {% if l.ref_preco is not none %}referência: {{ l.ref_preco|brl }} (últ. compra {{ l.ref_data }}){% else %}sem referência de preço{% endif %}</div>
       </div>
       {% if l.configurado %}
@@ -30,14 +32,15 @@
     {% endfor %}
   </div>
   {% elif achados %}
-  <p class="pequeno mudo">{{ achados|length }} resultado(s) na {{ fornecedor|capitalize }} — <b>preço atual do site</b>. Clique em <b>Usar</b> no escolhido.</p>
+  <p class="pequeno fraco p-achados-nota">{{ achados|length }} {{ 'resultado' if achados|length == 1 else 'resultados' }}</p>
   <div class="p-achados">
     {% for a in achados %}
     <div class="p-achado">
       <div class="p-achado-texto">
-        <div><b>{{ a.r.marca or 'Sem marca' }}</b> · <span class="num">{{ a.r.preco|brl }}</span></div>
-        <div class="pequeno mudo">{{ (a.r.descricao_encontrada or '')[:64] }} · <span class="mono">cód. {{ a.r.codigo_fornecedor or '' }}</span></div>
+        <div class="p-achado-nome">{{ a.r.descricao_encontrada or '(sem descrição)' }}</div>
+        <div class="pequeno mudo"><b>{{ a.r.marca or 'Sem marca' }}</b> · <span class="mono">cód. {{ a.r.codigo_fornecedor or '' }}</span></div>
       </div>
+      <b class="num p-achado-preco">{{ a.r.preco|brl }}</b>
       <button class="btn p" type="button" data-acao="{{ base }}/site/usar" data-dados='{{ a.pacote|tojson }}'>Usar</button>
     </div>
     {% endfor %}
