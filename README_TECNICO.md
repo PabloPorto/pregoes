@@ -166,6 +166,17 @@ catálogo" (produtos que o cliente já tem, preço cotado ao vivo por código) e
 à escolha, **sem filtro de relevância**: o operador vê os cards crus e julga).
 Toda escolha manual vira aprendizado → da próxima vez é automática.
 
+**Limite de consultas dos sites (2026-11, Q20).** Os dois fornecedores (mesma
+plataforma) aceitam ~100 buscas por janela (~10 min) por IP, somados; acima disso
+`/busca` devolve a página inicial (200, zero produtos) por ~5 min. Três peças
+em `scraper.py`, todas no gargalo único `_consultar_cards_http`:
+`_JanelaDeConsultas` (80 consultas/10 min, global), `_pagina_inicial_no_lugar_da_busca`
+(reconhece o bloqueio — a página de busca de verdade sempre tem `products-view`)
+e `_FreioDeConsultas` (pausa compartilhada; o lote espera e repete, a busca
+manual avisa na hora). Regra de ouro: **resposta sem produtos só vira "não
+achou" se for uma página de busca de verdade.** Não subir o teto sem novo teste
+de carga contando respostas com produtos (não status HTTP).
+
 **Confiabilidade medida (edital real da especialidade do cliente):**
 ~88-90% certa para piloto supervisionado, após o sprint pré-piloto de
 correções. Nos itens sem correspondência diz "não encontrado" (não inventa).

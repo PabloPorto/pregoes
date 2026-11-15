@@ -20,6 +20,10 @@ def _raiz_gravavel() -> Path:
       entre atualizações do .exe. (Dentro do bundle é somente-leitura/temp.)
     - Desenvolvimento: a raiz do repositório — comportamento INALTERADO.
     """
+    # PREGOES_RAIZ: aponta os dados para outra pasta (ensaiar uma versão nova
+    # com uma CÓPIA dos dados reais, sem tocar nos de verdade).
+    if os.environ.get("PREGOES_RAIZ"):
+        return Path(os.environ["PREGOES_RAIZ"]).resolve()
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent.parent
@@ -40,7 +44,7 @@ def _raiz_bundle() -> Path:
 # Versão do aplicativo — aparece na sidebar e no log de boot. Sem ela, o
 # suporte remoto fica às cegas sobre o que o cliente está rodando (auditoria
 # 2026-06). Bump a cada .exe entregue ao cliente.
-VERSAO_APP = "1.1.15"
+VERSAO_APP = "1.1.16"
 
 # Rodando no servidor (deploy/pregoes.service define PREGOES_SERVIDOR=1) em vez
 # do .exe na máquina do cliente: muda o que é verdade para o operador (onde os
@@ -146,14 +150,22 @@ SCRAPER_RETRY = 2
 # pool encurta a espera de rede, não a cadência no site. 4 é equilíbrio;
 # 1 desliga o paralelismo por item.
 SCRAPER_POOL_SIZE = 4
-# Throttling: máximo de buscas iniciadas por segundo POR FORNECEDOR.
-# Respeita os parceiros — não confunda com pool_size (paralelismo).
-# Os 2 sites bloqueiam (405) a conta que passa de ~350–400 consultas em 10 min
-# (Q20, testes de carga 2026-11-06/07): 2/s bloqueou em 3,5 min, 1/s em 6 min,
-# 0,65/s em 10 min; 0,5/s (~300 em 10 min) rodou 25 min sem nenhum bloqueio.
-# Um item gasta ~3 consultas por fornecedor (o que não acha tenta 4 camadas):
-# ~10 itens/min, edital de 650 itens ≈ 1 h — lento, mas sai completo.
+# Throttling: máximo de buscas iniciadas por segundo POR FORNECEDOR — é só o
+# teto da rajada; quem manda no lote grande é a JANELA abaixo.
 SCRAPER_MAX_REQ_POR_SEGUNDO = 0.5
+# Limite REAL dos dois sites (mesma plataforma, medido no servidor em
+# 2026-11-14, Q20): ~100 buscas numa janela de ~10 minutos POR IP, somando
+# Almeida e Dantas, com ou sem login. Passou disso, /busca devolve a página
+# inicial (status 200, zero produtos) por ~5 min — e o lote gravava "não achou"
+# para dezenas de itens seguidos. O ritmo não importa: a 1/s e a 0,5/s somados
+# o bloqueio veio igual, na 101ª consulta; e com 80 a cada 5 min ele voltou
+# perto da 100ª (a janela deles é mais longa que 5 min). A janela deslizante
+# abaixo fica 20% abaixo do teto: até 80 consultas saem na hora; depois disso
+# o lote anda a ~8 consultas/min. (O 405 "Human Verification" medido antes,
+# ~350–400 em 10 min, é uma 2ª barreira, mais alta — ficar abaixo desta já
+# fica abaixo daquela.)
+SCRAPER_MAX_CONSULTAS_POR_JANELA = 80
+SCRAPER_JANELA_SEGUNDOS = 600
 # Consultas de busca via HTTP com os cookies da sessão logada (Fase 2 de perf,
 # 2026-07): os cards são server-rendered — um GET devolve o MESMO conteúdo que o
 # navegador (preço logado validado em campo nos 2 fornecedores), em ~1/3 do

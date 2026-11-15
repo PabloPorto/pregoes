@@ -216,6 +216,14 @@ def _identifica_cabecalho_em_linha(linha: list) -> dict[str, int]:
                     mapa[campo] = idx
                     break
 
+    # Na Proposta do portal de compras, 'Valor Unitário' é o campo em branco
+    # (0,00) que o licitante preenche; o preço de referência está em
+    # 'Ref. unitária'.
+    for idx, cel in enumerate(linha or []):
+        if _normaliza(_concatenar_celula(cel)).startswith(("ref. unit", "ref unit")):
+            mapa["valor_referencia"] = idx
+            break
+
     for campo, palavras in PALAVRAS_CHAVE_FRACAS.items():
         if campo in mapa:
             continue
@@ -370,12 +378,23 @@ def _reparar_linhas_truncadas(linhas: list[list], celulas: list[list],
                       for cs in celulas)
     # O desenho mais comum; no empate (tabela curta), o mais completo.
     padrao = max(padroes.items(), key=lambda kv: (kv[1], len(kv[0])))[0]
-    ref = next(cs for cs in celulas
-               if tuple(i for i, c in enumerate(cs) if c is not None) == padrao)
+    ref = {j: c for j, c in enumerate(next(
+        cs for cs in celulas
+        if tuple(i for i, c in enumerate(cs) if c is not None) == padrao))
+        if c is not None}
+    # Coluna que só o CABEÇALHO desenha (a 'Unidade de Fornecimento' da
+    # Proposta do portal de compras fica fora da grade em todas as linhas de
+    # item — a unidade saía vazia, campo 2026-11): a posição vem da célula
+    # mais estreita que qualquer linha tenha para aquela coluna.
+    for cs in celulas:
+        for j, c in enumerate(cs):
+            if c is not None and j not in padrao and (
+                    j not in ref or c[2] - c[0] < ref[j][2] - ref[j][0]):
+                ref[j] = c
     todas = [c for cs in celulas for c in cs if c is not None]
     for i, (cs, faixa) in enumerate(zip(celulas, faixas)):
         y_meio = (faixa[1] + faixa[3]) / 2
-        for j in padrao:
+        for j in sorted(ref):
             if j >= len(cs) or cs[j] is not None or j >= len(linhas[i]):
                 continue
             x0, x1 = ref[j][0], ref[j][2]
@@ -414,7 +433,9 @@ def _coletar_tabelas(caminho_pdf: Path) -> list[_TabelaBruta]:
 
 # '12 - 0056813 - 12 - 0045810 - ABRAÇADEIRA ...': nº do item e códigos colados
 # na descrição, numa coluna só ('Item - Código - Descrição').
-_PREFIXO_NUMERICO_RE = re.compile(r"^\s*(\d+)((?:\s*[-–]\s*\d+)*)\s*[-–]\s+(?=\S)")
+# O que sobra tem de começar por letra: '20 - 25 MM ELETRODUTO' é medida, não
+# nº de item.
+_PREFIXO_NUMERICO_RE = re.compile(r"^\s*(\d+)((?:\s*[-–]\s*\d+)*)\s*[-–]\s+(?=[^\W\d_])")
 
 
 def _separar_prefixo_numerico(texto: str) -> tuple[Optional[int], Optional[str], str]:
@@ -557,7 +578,12 @@ def _parece_outro_cabecalho(linhas: list[list]) -> bool:
         if any(_para_numero(c) is not None for c in linha or []):
             continue
         mapa = _identifica_cabecalho_em_linha(linha)
-        if "descricao" not in mapa or len(mapa) < 2:
+        # Cabeçalho de verdade tem um rótulo por COLUNA. Um pedaço de descrição
+        # que sobrou da página anterior ("PRODUTO EM ALUMÍNIO FUNDIDO.") casa
+        # 'descrição' e 'unidade' ("und" dentro de "fundido") na MESMA célula —
+        # tratá-lo como cabeçalho alheio descartava a página e todas as
+        # seguintes, sem aviso (revisão 2026-11-14).
+        if "descricao" not in mapa or len(set(mapa.values())) < 2:
             continue
         rotulo = _normaliza(_concatenar_celula(linha[mapa["descricao"]]))
         if len(rotulo) <= 40:
@@ -568,6 +594,7 @@ def _parece_outro_cabecalho(linhas: list[list]) -> bool:
 def _processar_tabela(bruta: _TabelaBruta, mapa_herdado: dict[str, int],
                       reservas_herdadas: dict[str, tuple[int, ...]] | None = None,
                       n_cols_herdado: int = 0,
+                      aceitar_proposta: bool = False,
                       ) -> Optional[_TabelaCandidata]:
     """
     Tenta tornar uma tabela bruta em candidata. Devolve:
@@ -577,11 +604,13 @@ def _processar_tabela(bruta: _TabelaBruta, mapa_herdado: dict[str, int],
       revelar a mesclagem)
     - None se nem isso funciona
 
-    Ignora tabelas que parecem 'modelo de proposta'.
+    Ignora tabelas que parecem 'modelo de proposta' (cópia em branco da lista
+    de itens), a não ser com ``aceitar_proposta`` — ver processar_tabelas_brutas.
     """
-    for i in range(min(3, len(bruta.linhas))):
-        if _eh_modelo_de_proposta(bruta.linhas[i]):
-            return None
+    if not aceitar_proposta:
+        for i in range(min(3, len(bruta.linhas))):
+            if _eh_modelo_de_proposta(bruta.linhas[i]):
+                return None
 
     mapa, n_consumidas = _identifica_cabecalho_multilinha(bruta.linhas)
     if mapa:
@@ -634,6 +663,11 @@ def _reler_linha_compactada(linha: list, mapa: dict[str, int], pagina: int,
     variantes = [m for m, _, _ in _mapas_realinhados(mapa_raiz, n_raiz, len(compacta))]
     melhor, melhor_sc = None, -1.0
     for m in variantes:
+        # Quantidade lida de uma célula de dinheiro é o preço no lugar errado
+        # ('R$ 3,00' virava quantidade 3 e o total virava o preço unitário).
+        iq = m.get("quantidade")
+        if iq is not None and iq < len(compacta) and "r$" in _normaliza(compacta[iq]):
+            continue
         it = _extrair_item_da_linha(compacta, m, pagina)
         if it is None or it.quantidade is None:
             continue
@@ -654,6 +688,12 @@ def _emendar_continuacao(anterior: _TabelaCandidata, atual: _TabelaCandidata) ->
     nº do item — sem essa coluna, uma linha sem quantidade pode ser um item
     real com dado faltando, e fundi-la some com ele. Devolve True se emendou."""
     if not atual.itens or not anterior.itens:
+        return False
+    # O pedaço que atravessou a quebra abre a página SEGUINTE. Tabela solta
+    # páginas adiante (prazo de entrega, bloco de assinatura) herdava o mapa e
+    # era colada na descrição do último item (revisão 2026-11-14).
+    if (atual.bruta.pagina - anterior.bruta.pagina != 1
+            or atual.bruta.indice_pagina != 0):
         return False
     # Tabela sem cabeçalho próprio herdou o mapa: é continuação por definição
     # (mesmo que realinhada a outra largura). Com cabeçalho repetido na
@@ -835,6 +875,36 @@ def _deduplicar_itens(itens: list["ItemExtraido"]) -> list["ItemExtraido"]:
     return [it for _, it in saida]
 
 
+def _montar_candidatas(tabelas_brutas: list[_TabelaBruta],
+                       aceitar_proposta: bool = False) -> list[_TabelaCandidata]:
+    """Tabelas de itens do documento, na ordem, com o mapa de colunas herdado
+    pelas continuações sem cabeçalho e os pedaços de descrição emendados."""
+    candidatas: list[_TabelaCandidata] = []
+    mapa_herdado: dict[str, int] = {}
+    reservas_herdadas: dict[str, tuple[int, ...]] = {}
+    n_cols_herdado = 0
+    for bruta in tabelas_brutas:
+        cand = _processar_tabela(bruta, mapa_herdado, reservas_herdadas,
+                                 n_cols_herdado, aceitar_proposta)
+        if cand is not None:
+            if candidatas and _emendar_continuacao(candidatas[-1], cand):
+                cand.score = _score_itens(cand.itens)
+            candidatas.append(cand)
+            if cand.linha_inicial_dados or not mapa_herdado:
+                # Herda SEMPRE do cabeçalho original: uma continuação
+                # realinhada (outra largura) não vira referência — realinhar
+                # de novo a partir dela acumulava o erro (a unidade caía na
+                # coluna CATMAT).
+                mapa_herdado = cand.mapa
+                reservas_herdadas = cand.reservas
+                n_cols_herdado = _n_colunas(cand.bruta.linhas)
+        elif _parece_outro_cabecalho(bruta.linhas):
+            # Outra tabela (não de itens) começou: as páginas seguintes sem
+            # cabeçalho são continuação DELA, não da lista de itens.
+            mapa_herdado, reservas_herdadas, n_cols_herdado = {}, {}, 0
+    return candidatas
+
+
 def processar_tabelas_brutas(
     tabelas_brutas: list[_TabelaBruta],
     arquivo: str,
@@ -857,28 +927,14 @@ def processar_tabelas_brutas(
         resultado.confianca_global = 0.0
         return resultado
 
-    candidatas: list[_TabelaCandidata] = []
-    mapa_herdado: dict[str, int] = {}
-    reservas_herdadas: dict[str, tuple[int, ...]] = {}
-    n_cols_herdado = 0
-    for bruta in tabelas_brutas:
-        cand = _processar_tabela(bruta, mapa_herdado, reservas_herdadas, n_cols_herdado)
-        if cand is not None:
-            if candidatas and _emendar_continuacao(candidatas[-1], cand):
-                cand.score = _score_itens(cand.itens)
-            candidatas.append(cand)
-            if cand.linha_inicial_dados or not mapa_herdado:
-                # Herda SEMPRE do cabeçalho original: uma continuação
-                # realinhada (outra largura) não vira referência — realinhar
-                # de novo a partir dela acumulava o erro (a unidade caía na
-                # coluna CATMAT).
-                mapa_herdado = cand.mapa
-                reservas_herdadas = cand.reservas
-                n_cols_herdado = _n_colunas(cand.bruta.linhas)
-        elif _parece_outro_cabecalho(bruta.linhas):
-            # Outra tabela (não de itens) começou: as páginas seguintes sem
-            # cabeçalho são continuação DELA, não da lista de itens.
-            mapa_herdado, reservas_herdadas, n_cols_herdado = {}, {}, 0
+    candidatas = _montar_candidatas(tabelas_brutas)
+    if not candidatas:
+        # O documento É a proposta: o cliente sobe a 'Proposta' que o portal de
+        # compras gera (colunas Modelo e Marca/Fabricante em branco) — única
+        # lista de itens do arquivo. Descartá-la como 'modelo de proposta'
+        # dava 0 itens em 5 dos 26 PDFs reais (campo 2026-11) e a leitura caía
+        # na IA. Só vale quando não há outra lista.
+        candidatas = _montar_candidatas(tabelas_brutas, aceitar_proposta=True)
 
     if not candidatas:
         resultado.avisos.append(

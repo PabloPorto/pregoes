@@ -135,3 +135,61 @@ def test_casa_como_borda_prefixo_sim_meio_nao():
     assert _casa_como_borda("cap", "cape")
     assert _casa_como_borda("sold", "soldavel")
     assert not _casa_como_borda("rato", "borracha")
+
+
+# ---------------------------------------------------------------------------
+# Texto contratual do edital fora da consulta (campo 2026-11-14): em 836 de
+# 1.362 itens reais havia "produto de alta qualidade…", "com selo do INMETRO",
+# "de acordo com as normas da ABNT", e palavras dessas frases iam para o site.
+# ---------------------------------------------------------------------------
+
+import pytest as _pytest
+
+from pregoes.normalizador import relevancia as _relevancia
+from pregoes.scraper import _montar_camadas as _camadas
+
+
+def _queries(desc):
+    return [q for _, q in _camadas(desc)]
+
+
+@_pytest.mark.parametrize("desc, primeira", [
+    ("CADEADO LATAO 40 MM, produto de alta qualidade, corpo em latao macico e "
+     "chave em latao.", "cadeado latao 40mm"),                 # era '... 40mm alta'
+    ("Ponteiro 12\", com selo do INMETRO", "ponteiro"),           # era 'ponteiro selo'
+    ("REGISTRO PRESSÃO 1416 1/2 METAL DE ACORDO COM AS NORMAS TÉCNICAS DA ABNT.",
+     "registro pressao metal"),                                  # era '... metal tecnicas'
+    ("PÁ QUADRADA COM NORMA ABNT", "pa quadrada"),               # era 'quadrada'
+    ("TE SOLDAVEL 25MM, de acordo com as normas da ABNT", "te soldavel 25mm"),
+    ("ACABAMENTO C/CAN C40 CR COM NORMA ABNT", "acabamento can c40"),   # era 'c/can c40'
+    ("BROCA EM ESPIRAL P/MADEIRA 5MM B COM SELO DO INMETRO",
+     "broca espiral madeira 5mm"),                               # era '... p/madeira 5mm'
+    ("FURADEIRA DE IMPACTO GSB 550W 220V, produto de altaqualidade, reversao",
+     "furadeira impacto gsb 550w"),
+])
+def test_primeira_consulta_so_tem_palavra_de_produto(desc, primeira):
+    assert _queries(desc)[0] == primeira
+
+
+def test_nenhuma_consulta_carrega_o_texto_contratual():
+    desc = ("CAIXA DAGUA POLIETILENO 1000L, produto de alta qualidade, com a "
+            "presenca do UV na materia prima garante durabilidade.")
+    for q in _queries(desc):
+        assert "qualidade" not in q and "alta" not in q.split(), q
+
+
+def test_descricao_sem_frase_contratual_fica_como_estava():
+    assert _queries("LAMPADA VAPOR DE SODIO 400W OVOIDE LEITOSA E40")[:2] == [
+        "lampada vapor sodio 400w", "lampada vapor"]
+
+
+def test_texto_contratual_nao_pesa_na_relevancia():
+    """'PÁ QUADRADA COM NORMA ABNT' × o produto certo dava 0,33 (abaixo do
+    mínimo): 'norma' e 'abnt' contavam como palavras que o produto não tem."""
+    assert _relevancia("PÁ QUADRADA COM NORMA ABNT",
+                       "PÁ QUADRADA THOR Nº3 COM CABO PLÁSTICO Y") >= 0.35
+    # ...sem afrouxar para produto de outra categoria
+    assert _relevancia("PÁ QUADRADA COM NORMA ABNT",
+                       "MESA QUADRADA TRAMONTINA TAMBAU") < 0.35
+    assert _relevancia("TE SOLDAVEL 25MM", "TE SOLDAVEL PLASTUBOS 25MM") >= 0.7
+    assert _relevancia("TE SOLDAVEL 25MM", "JOELHO SOLDAVEL PLASTUBOS 25MM") < 0.35

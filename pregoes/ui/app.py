@@ -1652,15 +1652,35 @@ def _avisos_recusa(erros: list) -> list[str]:
     ]
 
 
-def _tempo_restante(decorrido_s: float, frac: float) -> str:
-    """Estimativa "faltam ~N min" para o painel da busca. Com o ritmo abaixo do
-    limite dos fornecedores (Q20) um edital grande leva ~1 h — o operador
-    precisa saber se espera ou vai fazer outra coisa. Vazio no começo (pouco
-    progresso = palpite ruim) e no fim."""
-    if frac < 0.05 or frac >= 1.0 or decorrido_s < 30:
+def _tempo_restante(amostras: list, frac: float) -> str:
+    """Estimativa "faltam ~N min" para o painel da busca, pelo ritmo dos
+    ÚLTIMOS 5 minutos. `amostras` = [(instante, fração concluída), ...] em
+    ordem. O lote começa rápido e depois é dosado pelo limite dos sites (80
+    consultas a cada 10 min, Q20); a média desde o início — que ainda somava o
+    login e a fila do outro operador — prometia minutos quando faltava mais de
+    hora. Vazio enquanto não há 2 minutos de ritmo medido, e no fim."""
+    if not amostras or frac >= 1.0:
         return ""
-    restante_s = decorrido_s * (1.0 - frac) / frac
+    agora = amostras[-1][0]
+    t0, f0 = next((a for a in amostras if agora - a[0] <= 300), amostras[-1])
+    if agora - t0 < 120 or frac <= f0:
+        return ""
+    restante_s = (1.0 - frac) * (agora - t0) / (frac - f0)
+    if restante_s >= 5400:
+        return f"faltam ~{restante_s / 3600:.1f} h".replace(".", ",")
     return f"faltam ~{max(1, round(restante_s / 60))} min"
+
+
+_MSG_PAUSA_LIMITE = ("O site dos fornecedores limitou as consultas. A busca "
+                     "pausou e continua sozinha em alguns minutos — não feche "
+                     "esta tela.")
+
+
+# O lote anda em levas: os sites aceitam um tanto de consultas a cada 10 min
+# (Q20). Entre uma leva e outra a tela diz que está tudo certo.
+_MSG_ESPERA_JANELA = ("Respeitando o limite de consultas dos fornecedores — a "
+                      "próxima leva de itens sai em ~{min} min. Está tudo certo: "
+                      "não feche esta tela.")
 
 
 def _buscar_fornecedores_paralelo(itens_alvo: list, sessoes: dict,
@@ -1682,7 +1702,8 @@ def _buscar_fornecedores_paralelo(itens_alvo: list, sessoes: dict,
     import queue
     import threading
 
-    from pregoes.scraper import buscar_precos_para_itens
+    from pregoes.scraper import (buscar_precos_para_itens, espera_da_janela,
+                                 pausa_por_limite)
 
     fila: "queue.Queue" = queue.Queue()
     saida: dict = {}
@@ -1706,11 +1727,23 @@ def _buscar_fornecedores_paralelo(itens_alvo: list, sessoes: dict,
     for t in threads:
         t.start()
     vivos = len(threads)
+    ultimo = (next(iter(sessoes), ""), 0, len(itens_alvo))
     while vivos:
-        nome, atual, total, msg = fila.get()
+        try:
+            nome, atual, total, msg = fila.get(timeout=5)
+        except queue.Empty:
+            # Sem item novo: se o site limitou as consultas, o lote está em
+            # pausa automática — a tela diz isso em vez de parecer travada.
+            if pausa_por_limite() > 0:
+                progresso(*ultimo, _MSG_PAUSA_LIMITE)
+            elif espera_da_janela() > 15:
+                progresso(*ultimo, _MSG_ESPERA_JANELA.format(
+                    min=max(1, round(espera_da_janela() / 60))))
+            continue
         if atual is None:
             vivos -= 1
             continue
+        ultimo = (nome, atual, total)
         progresso(nome, atual, total, msg)
     for t in threads:
         t.join()
@@ -1793,6 +1826,18 @@ def _executar_busca(itens: list, fornecedores_nomes: list[str],
     painel = st.empty()
     status_final = st.empty()
 
+    amostras: list = []
+
+    def _amostrar(frac: float) -> list:
+        """Registra o progresso (só quando a busca de fato começou a andar)
+        e mantém os últimos ~10 min para a estimativa de tempo restante."""
+        agora = time.monotonic()
+        if frac > 0:
+            amostras.append((agora, frac))
+            while amostras and agora - amostras[0][0] > 600:
+                amostras.pop(0)
+        return amostras
+
     def _tempo() -> str:
         secs = int(time.monotonic() - t_inicio)
         m, s = divmod(secs, 60)
@@ -1818,8 +1863,7 @@ def _executar_busca(itens: list, fornecedores_nomes: list[str],
                 ),
                 tempo=" · ".join(p for p in (
                     _tempo(),
-                    "" if encerrado else _tempo_restante(
-                        time.monotonic() - t_inicio, frac),
+                    "" if encerrado else _tempo_restante(_amostrar(frac), frac),
                 ) if p),
                 item_atual=item_atual,
                 item_total=item_total,
@@ -2008,6 +2052,14 @@ def _executar_busca(itens: list, fornecedores_nomes: list[str],
         _mesclar_busca_incremental(itens, indices, lote.resultados)
         st.session_state.erros_busca = lote.erros
     st.session_state.cache_stats = (lote.cache_hits, lote.cache_misses)
+    # Uma linha por lote no log: sem ela, só dava para saber como a busca foi
+    # abrindo o rascunho do pregão (diagnóstico de 2026-11-14).
+    _log.info(
+        "LOTE: %d itens em %s | com candidato %d | erros %d | por fornecedor "
+        "(ok, variação, vazio) %s",
+        total_itens, _tempo(),
+        sum(1 for v in lote.resultados.values() if v), len(lote.erros),
+        {n: (a, b, c) for n, a, b, c in stats_concluidos})
     # Honestidade com o operador: fornecedor com ZERO em tudo = site instável
     # (não "nada existe") — persiste o aviso para a tela de resultados.
     st.session_state["avisos_lote_vazio"] = (
@@ -2940,18 +2992,27 @@ def _busca_site_item(idx: int, item, dentro: bool = False) -> None:
         buscar = st.button("Buscar no site ao vivo", key=f"sitego_{idx}")
         chave_res = f"site_res_{idx}"
         if buscar and termo.strip():
-            from pregoes.scraper import buscar_no_site
+            from pregoes.scraper import _STATUS_LIMITE, buscar_no_site
             with st.spinner(f"Buscando “{termo.strip()}” na "
                             f"{forn_sel.capitalize()}…"):
                 try:
                     achados = buscar_no_site(forn_sel, termo.strip())
                     st.session_state[chave_res] = (forn_sel, achados)
                 except Exception as exc:
-                    _log.exception("falha na busca manual no site")
-                    style.bloco_aviso(
-                        "Não consegui buscar no site agora "
-                        f"({erros.mensagem_amigavel(exc)}). Tente de novo em "
-                        "instantes.", tipo="warning")
+                    if getattr(exc, "status", None) == _STATUS_LIMITE:
+                        # Limite de consultas do site (por alguns minutos):
+                        # não é erro nosso nem "produto não existe".
+                        style.bloco_aviso(
+                            f"O site da {forn_sel.capitalize()} limitou as "
+                            "consultas por alguns minutos (muitas buscas em "
+                            "pouco tempo). <b>Aguarde uns 5 minutos</b> e "
+                            "busque de novo.", tipo="warning")
+                    else:
+                        _log.exception("falha na busca manual no site")
+                        style.bloco_aviso(
+                            "Não consegui buscar no site agora "
+                            f"({erros.mensagem_amigavel(exc)}). Tente de novo em "
+                            "instantes.", tipo="warning")
                     st.session_state.pop(chave_res, None)
         elif buscar:
             st.caption("Digite um nome ou código para buscar.")

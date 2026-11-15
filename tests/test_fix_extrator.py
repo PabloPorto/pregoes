@@ -541,3 +541,137 @@ def test_coluna_item_codigo_descricao_separa_numero_e_emenda_continuacao():
     assert r.itens[0].descricao == 'ABRAÇADEIRA COLAR 50 X 1/2.'
     assert r.itens[2].descricao == 'COLA INSTANTANEA 100G, adesivo requer mistura, ótima qualidade.'
     assert r.confianca_global == 1.0
+
+
+# ---------------------------------------------------------------------------
+# Revisão de 2026-11-14: as heurísticas de 1.1.13 podiam perder ou fundir itens
+# em silêncio. Cada teste abaixo era uma falha reproduzida.
+# ---------------------------------------------------------------------------
+
+_CAB_SIMPLES = ['ITEM', 'DESCRIÇÃO', 'UNID', 'QUANT', 'VALOR UNIT']
+
+
+def _linha_simples(n, desc, u='UND', q=10, v='R$ 5,00'):
+    return [str(n), desc, u, str(q), v]
+
+
+@pytest.mark.parametrize("pedaco", [
+    'PRODUTO EM ALUMÍNIO FUNDIDO.',          # 'und' dentro de 'fundido'
+    'conforme especificações do fundo.',
+])
+def test_pedaco_de_descricao_nao_e_confundido_com_cabecalho_alheio(pedaco):
+    """O pedaço que sobrou da página anterior casava 'descrição' e 'unidade'
+    na MESMA célula, era lido como cabeçalho de outra tabela e a página (e
+    todas as seguintes) sumia sem aviso."""
+    from pregoes.extrator import processar_tabelas_brutas
+    p1 = _tabela(1, [_CAB_SIMPLES, _linha_simples(1, 'TUBO PVC SOLDAVEL 25MM'),
+                     _linha_simples(2, 'JOELHO 90 PVC 25MM'),
+                     _linha_simples(3, 'PERFIL DE ACABAMENTO, ANODIZADO,')])
+    p2 = _tabela(2, [['', pedaco, '', '', ''],
+                     _linha_simples(4, 'REGISTRO DE GAVETA 3/4'),
+                     _linha_simples(5, 'TORNEIRA DE JARDIM 1/2')])
+    p3 = _tabela(3, [_linha_simples(6, 'CAIXA DAGUA 1000 LITROS'),
+                     _linha_simples(7, 'LUVA PVC SOLDAVEL 25MM')])
+    r = processar_tabelas_brutas([p1, p2, p3], arquivo="x.pdf")
+    assert [i.item_numero for i in r.itens] == [1, 2, 3, 4, 5, 6, 7]
+
+
+def test_tabela_solta_paginas_adiante_nao_e_colada_no_ultimo_item():
+    """Só emenda o pedaço que abre a página SEGUINTE."""
+    from pregoes.extrator import processar_tabelas_brutas
+    p1 = _tabela(1, [_CAB_SIMPLES, _linha_simples(1, 'TUBO PVC SOLDAVEL 25MM'),
+                     _linha_simples(2, 'JOELHO 90 PVC 25MM'),
+                     _linha_simples(3, 'REGISTRO DE GAVETA 3/4')])
+    p5 = _tabela(5, [['', 'Prazo de entrega: 10 dias corridos', '', '', '']])
+    r = processar_tabelas_brutas([p1, p5], arquivo="x.pdf")
+    assert r.itens[2].descricao == 'REGISTRO DE GAVETA 3/4'
+
+
+def test_segunda_tabela_da_pagina_seguinte_nao_e_emendada():
+    from pregoes.extrator import _TabelaBruta, processar_tabelas_brutas
+    p1 = _tabela(1, [_CAB_SIMPLES, _linha_simples(1, 'TUBO PVC SOLDAVEL 25MM'),
+                     _linha_simples(2, 'JOELHO 90 PVC 25MM'),
+                     _linha_simples(3, 'REGISTRO DE GAVETA 3/4')])
+    outra = _TabelaBruta(pagina=2, indice_pagina=1,
+                         linhas=[['', 'Local de entrega: almoxarifado', '', '', '']])
+    r = processar_tabelas_brutas([p1, outra], arquivo="x.pdf")
+    assert r.itens[2].descricao == 'REGISTRO DE GAVETA 3/4'
+
+
+def test_releitura_nao_tira_quantidade_de_celula_de_dinheiro():
+    """['7', 'CABO...', 'M', None, 'R$ 3,00', 'R$ 300,00'] saía com quantidade
+    3 e preço unitário 300 — os dois inventados."""
+    from pregoes.extrator import processar_tabelas_brutas
+    cab = ['ITEM', 'DESCRIÇÃO', 'UNID', 'QUANT', 'VALOR UNIT', 'VALOR TOTAL']
+    p1 = _tabela(1, [cab,
+                     ['1', 'TUBO PVC SOLDAVEL 25MM', 'UND', '10', 'R$ 5,00', 'R$ 50,00'],
+                     ['2', 'JOELHO 90 PVC 25MM', 'UND', '4', 'R$ 2,00', 'R$ 8,00'],
+                     ['7', 'CABO FLEXIVEL 2,5MM ROLO', 'M', None, 'R$ 3,00', 'R$ 300,00']])
+    it = processar_tabelas_brutas([p1], arquivo="x.pdf").itens[-1]
+    assert it.quantidade is None and it.valor_referencia == 3.0
+
+
+@pytest.mark.parametrize("texto", [
+    "20 - 25 MM ELETRODUTO CORRUGADO", "1 - 1/2 POL ADAPTADOR", "50 - 60 HZ, bivolt",
+])
+def test_medida_no_comeco_da_descricao_nao_vira_numero_de_item(texto):
+    from pregoes.extrator import _separar_prefixo_numerico
+    assert _separar_prefixo_numerico(texto) == (None, None, texto)
+
+
+# ---------------------------------------------------------------------------
+# 'Proposta' do portal de compras (campo 2026-11): o cliente sobe esse PDF e
+# ele saía com 0 itens — a lista era descartada como "modelo de proposta".
+# ---------------------------------------------------------------------------
+
+_CAB_PROPOSTA = ['Lote', 'Item', 'Descrição detalhada do Item', 'Modelo',
+                 'Marca/Fabricante', 'Quantidade', 'Valor Unitário',
+                 'Ref. unitária', 'Valor Total', 'Unidade de\nFornecimento']
+
+
+def _linha_proposta(n, desc, q, ref, un='UN'):
+    return [None, str(n), desc, '', '', str(q), '0,00', ref, '', un]
+
+
+def test_proposta_do_portal_e_lida_quando_e_a_unica_lista():
+    from pregoes.extrator import processar_tabelas_brutas
+    p1 = _tabela(1, [_CAB_PROPOSTA,
+                     _linha_proposta(1, 'ABRACADEIRA COLAR 50 X 1/2.', 100, '26,30'),
+                     _linha_proposta(2, 'ABRACADEIRA COLAR 50 X 3/4.', 100, '21,56'),
+                     _linha_proposta(3, 'ABRACADEIRA COLAR 60 X 1/2.', 100, '35,17')])
+    r = processar_tabelas_brutas([p1], arquivo="x.pdf")
+    assert [(i.item_numero, i.quantidade, i.unidade) for i in r.itens] == [
+        (1, 100.0, 'UN'), (2, 100.0, 'UN'), (3, 100.0, 'UN')]
+    # o preço de referência é 'Ref. unitária', não o 'Valor Unitário' em branco
+    assert [i.valor_referencia for i in r.itens] == [26.30, 21.56, 35.17]
+    assert r.confianca_global == 1.0
+
+
+def test_modelo_de_proposta_segue_ignorado_quando_ha_lista_de_itens():
+    """Edital com o termo de referência E a cópia em branco: vale só a lista."""
+    from pregoes.extrator import processar_tabelas_brutas
+    lista = _tabela(1, [_CAB_SIMPLES, _linha_simples(1, 'TUBO PVC SOLDAVEL 25MM'),
+                        _linha_simples(2, 'JOELHO 90 PVC 25MM'),
+                        _linha_simples(3, 'REGISTRO DE GAVETA 3/4')])
+    copia = _tabela(9, [_CAB_PROPOSTA,
+                        _linha_proposta(1, 'TUBO PVC SOLDAVEL 25MM', 10, ''),
+                        _linha_proposta(2, 'JOELHO 90 PVC 25MM', 10, ''),
+                        _linha_proposta(4, 'ITEM QUE SO EXISTE NA COPIA', 10, '')])
+    r = processar_tabelas_brutas([lista, copia], arquivo="x.pdf")
+    assert [i.item_numero for i in r.itens] == [1, 2, 3]
+
+
+def test_coluna_que_so_o_cabecalho_desenha_e_lida_pela_posicao():
+    """A 'Unidade de Fornecimento' da Proposta fica fora da grade nas linhas de
+    item: a célula não existe (None) e a unidade saía vazia."""
+    from pregoes.extrator import _reparar_linhas_truncadas
+    celulas = [
+        [(44, 38, 70, 54), (70, 38, 400, 54), (400, 38, 450, 54)],   # cabeçalho
+        [(44, 54, 70, 66), (70, 54, 400, 66), None],
+        [(44, 66, 70, 78), (70, 66, 400, 78), None],
+    ]
+    faixas = [(44, 38, 450, 54), (44, 54, 450, 66), (44, 66, 450, 78)]
+    linhas = [['Item', 'Descrição', 'Unidade'], ['1', 'TUBO', None], ['2', 'JOELHO', None]]
+    chars = _chars("UN", 420, 56) + _chars("PC", 420, 68)
+    out = _reparar_linhas_truncadas(linhas, celulas, faixas, chars)
+    assert out[1] == ['1', 'TUBO', 'UN'] and out[2] == ['2', 'JOELHO', 'PC']

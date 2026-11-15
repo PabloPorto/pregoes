@@ -30,7 +30,7 @@ def test_fragmento_logado_extrai_cards_completos(forn):
     # entram crus aqui e são descartados depois por não terem nome/preço. O
     # contrato dos CARDS de verdade é ter data-nome.
     cards = [c for c in brutos if (c.get("data-nome") or "").strip()]
-    assert len(cards) >= 3, "o fragmento congelado tem >= 3 cards de produto"
+    assert len(cards) >= 1, "o fragmento congelado tem 1 produto (tags repetidas contam 1x)"
     for c in cards:
         assert c["data-codigo-produto"].strip().isdigit()
     # Preço LOGADO presente e > 0 (é o que diferencia sessão logada).

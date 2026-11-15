@@ -60,12 +60,18 @@ histórico estão lá, Configurações mostra Almeida/Dantas/IA configuradas, e 
 busca manual devolve preço. Em Configurações → Backup, use "Fazer backup agora"
 para confirmar que o envio ao Drive funciona da VPS nova.
 
+Se a troca falhar no meio, o script termina dizendo o comando para religar a
+antiga. Rodar o `virar` de novo não apaga o que já estiver na nova: os dados de
+lá são guardados ao lado, em `data.antes_<data>`.
+
 **Plano de volta:** a antiga fica só **desligada** (serviços parados, dados
 intactos). O `virar` imprime os dois comandos para voltar. Só cancele a antiga
 depois de alguns dias de uso normal na nova.
 
-**Antiga inacessível?** `deploy/migrar_servidor.sh virar NOVO_IP` (sem o IP
-antigo) restaura a cópia mais recente deste computador. O que foi feito na
+**Antiga inacessível?** `SEM_ANTIGA=1 deploy/migrar_servidor.sh virar NOVO_IP`
+(sem o IP antigo) restaura a cópia mais recente deste computador. Só use se a
+antiga estiver mesmo fora do ar — com as duas ligadas, o mesmo endereço cai ora
+numa, ora noutra. O que foi feito na
 antiga depois dessa cópia não vem. Cópia avulsa a qualquer hora, sem parar
 nada: `deploy/migrar_servidor.sh salvar IP`.
 
@@ -83,6 +89,7 @@ O túnel e o login continuam; muda só o endereço:
 ## O que não muda
 
 - Os operadores continuam no **mesmo link** e com o **mesmo login** (código no e-mail).
-- O limite de consultas dos fornecedores (Q20) vale para a conta logada e não
-  deu para provar se também depende do IP. O ritmo do lote já fica abaixo dele;
-  não conte com a VPS nova para buscar mais rápido.
+- O limite de consultas dos fornecedores (Q20) é **por IP** (~100 buscas por janela
+  de ~10 min, somando os dois sites). A VPS nova terá outro IP, mas a regra é da
+  plataforma dos sites e deve valer igual: não conte com ela para buscar mais
+  rápido. O sistema já respeita o limite sozinho.

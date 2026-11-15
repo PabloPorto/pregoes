@@ -47,6 +47,7 @@ Uso típico:
 from __future__ import annotations
 
 import functools
+import contextlib
 import json
 import logging
 import math
@@ -79,6 +80,7 @@ from .normalizador import (
     keywords_distintivas,
     normalizar_descricao,
     relevancia,
+    sem_texto_contratual,
 )
 
 
@@ -134,7 +136,11 @@ class Fornecedor(Protocol):
 _logger = logging.getLogger(__name__)
 
 _BASE_URL_ALMEIDA = "https://www.almeidadistribuidor.com.br"
+# Teto de PRODUTOS (únicos) lidos por consulta. O site repete a tag de cada
+# produto várias vezes; no caminho do navegador o corte é feito nas tags
+# (_MAX_TAGS_NAVEGADOR) e o teto por produto vem depois da deduplicação.
 _MAX_RESULTADOS_POR_QUERY = 30
+_MAX_TAGS_NAVEGADOR = 600
 
 # Threshold mínimo de relevância para aceitar um resultado.
 # Recalibrado em 2026-05-27 após diagnóstico em 30 candidatos reais do
@@ -164,7 +170,7 @@ _RELEVANCIA_SALVAGUARDA_CODIGO = 0.30
 # cache (`precos_cache_descricao`) quando o número aqui difere do salvo
 # em `data/.busca_versao`. Evita que resultados de versões antigas do
 # algoritmo "vazem" para o operador via cache TTL 2d.
-BUSCA_VERSAO = "2026-06-23.13-query-marketing-sinonimo-rede-categoria"
+BUSCA_VERSAO = "2026-11-14.14-sem-texto-contratual-24-produtos"
 
 
 def _montar_camadas(descricao: str) -> list[tuple[str, str]]:
@@ -212,8 +218,10 @@ def _montar_camadas(descricao: str) -> list[tuple[str, str]]:
     # 2. Núcleo curto (categoria — 2 primeiras distintivas)
     if len(distintivas) >= 2:
         _add("variacao", " ".join(distintivas[:2]))
-    # 3. Último recurso textual: descrição normalizada completa
-    _add("variacao", normalizar_descricao(descricao))
+    # 3. Último recurso textual: a descrição normalizada, só a parte que fala
+    # do produto (sem o texto contratual — "produto de alta qualidade...",
+    # "de acordo com as normas da ABNT" só trazem ruído do site).
+    _add("variacao", sem_texto_contratual(normalizar_descricao(descricao)))
     # 4. Rede final de CATEGORIA: UMA keyword distintiva. Só é efetivamente
     # tentada quando TODAS as anteriores zeraram no site (buscar() para na 1ª
     # camada com resultado relevante). Garante que a categoria devolva
@@ -708,8 +716,20 @@ def _cards_do_html(html: str, max_cards: int) -> list[dict]:
             hrefs_por_id[i.group(1)] = h.group(1)
 
     out: list[dict] = []
+    vistos: set[str] = set()
     for m in _RE_CARD_TAG.finditer(html):
         attrs = dict(_RE_DATA_ATTR.findall(m.group(0)))
+        # O site repete a tag do MESMO produto várias vezes (17x na página
+        # logada, campo 2026-11-14): contando tags, o teto de 30 lia só os ~5
+        # primeiros produtos dos 24 que a busca devolve. O teto é por produto.
+        # Só o card de verdade (com data-nome) conta: o <a> do produto também
+        # carrega data-codigo-produto, sem nome nem preço.
+        if not (attrs.get("data-nome") or "").strip():
+            continue
+        cod = (attrs.get("data-codigo-produto") or "").strip()
+        if cod and cod in vistos:
+            continue
+        vistos.add(cod)
         url = hrefs_por_id.get((attrs.get("data-id-produto") or "").strip())
         if not url:
             ini = html.rfind("<a ", max(0, m.start() - 3000), m.start())
@@ -721,6 +741,113 @@ def _cards_do_html(html: str, max_cards: int) -> list[dict]:
         if len(out) >= max_cards:
             break
     return out
+
+
+def _pagina_inicial_no_lugar_da_busca(html: str) -> bool:
+    """True se o site respondeu a /busca com a PÁGINA INICIAL (status 200, sem
+    nenhum produto). É o limite de consultas "silencioso" dos dois fornecedores
+    (mesma plataforma), medido no servidor em 2026-11-14: ~100 consultas numa
+    janela de ~10 min vindas do mesmo IP (os dois sites SOMADOS) e a busca
+    passa a devolver a home por 5 min — para a sessão logada e também sem
+    login (ver config.SCRAPER_MAX_CONSULTAS_POR_JANELA).
+
+    A página de busca de verdade sempre traz o contêiner ``products-view``,
+    inclusive quando não acha nada ("Não foram encontrados produtos com os
+    termos da busca"); a home não traz. Sem esta guarda o lote gravava "não
+    achou" para dezenas de itens seguidos (36% dos itens dos pregões de
+    10–13/11 ficaram sem candidato por isso)."""
+    return "data-codigo-produto" not in html and "products-view" not in html
+
+
+class _FreioDeConsultas:
+    """Pausa COMPARTILHADA entre todas as threads e os dois fornecedores (o
+    limite é por IP — ver `_pagina_inicial_no_lugar_da_busca`). Quem vê o
+    bloqueio fecha o freio; todo mundo espera antes da próxima consulta."""
+
+    def __init__(self):
+        import threading as _th
+        self._lock = _th.Lock()
+        self._ate = 0.0
+        self.vez = _th.Lock()   # quem sonda o site depois de um bloqueio
+
+    def fechar(self, segundos: float) -> None:
+        with self._lock:
+            self._ate = max(self._ate, time.monotonic() + segundos)
+
+    def segundos_restantes(self) -> float:
+        with self._lock:
+            return max(0.0, self._ate - time.monotonic())
+
+    def esperar(self) -> None:
+        while True:
+            falta = self.segundos_restantes()
+            if falta <= 0:
+                return
+            time.sleep(min(falta, 5.0))
+
+
+class _JanelaDeConsultas:
+    """No máximo `maximo` consultas em qualquer intervalo de `janela_s`
+    segundos — o formato do limite real dos sites (ver config). Trabalho
+    pequeno (busca manual, re-busca de poucos itens) passa direto; lote grande
+    é dosado sozinho quando encosta no teto. Compartilhada por todas as threads
+    e pelos dois fornecedores (o limite é por IP, somando os dois sites)."""
+
+    def __init__(self, maximo: int, janela_s: float,
+                 relogio=time.monotonic, dormir=time.sleep):
+        import threading as _th
+        from collections import deque
+        self._maximo, self._janela_s = max(1, int(maximo)), float(janela_s)
+        self._relogio, self._dormir = relogio, dormir
+        self._instantes: "deque[float]" = deque()
+        self._lock = _th.Lock()
+        self._livre_em = 0.0
+
+    def acquire(self) -> None:
+        # Dormir segurando o lock é proposital (como no _RateLimiter): enfileira
+        # as demais threads na ordem, sem estourar o teto.
+        with self._lock:
+            agora = self._relogio()
+            while self._instantes and agora - self._instantes[0] >= self._janela_s:
+                self._instantes.popleft()
+            if len(self._instantes) >= self._maximo:
+                self._livre_em = self._instantes[0] + self._janela_s
+                self._dormir(self._livre_em - agora)
+                self._livre_em = 0.0
+                agora = self._relogio()
+                self._instantes.popleft()
+            self._instantes.append(agora)
+
+    def espera_restante(self) -> float:
+        """Segundos até a próxima consulta poder sair (0 = não há fila). Lido
+        sem o lock de propósito: quem espera está dormindo com ele na mão."""
+        return max(0.0, self._livre_em - self._relogio())
+
+
+_janela = _JanelaDeConsultas(config.SCRAPER_MAX_CONSULTAS_POR_JANELA,
+                             config.SCRAPER_JANELA_SEGUNDOS)
+_freio = _FreioDeConsultas()
+# Bloqueio medido: ~6 min. Sonda a cada 90 s (a 1ª thread que acorda consulta;
+# se ainda vier a home, fecha de novo antes das outras dispararem). Depois de
+# 10 esperas (~15 min) desiste e o item vira erro visível, nunca "não achou".
+_PAUSA_LIMITE_S = 90.0
+_MAX_ESPERAS_LIMITE = 10
+# Status sintético de SessaoHTTPExpirou para o limite silencioso (o site
+# responde 200): o mesmo sentido do 429 "Too Many Requests".
+_STATUS_LIMITE = 429
+
+
+def espera_da_janela() -> float:
+    """Segundos até a próxima consulta sair, quando o lote já usou as consultas
+    que cabem na janela dos sites (0 = andando). Não é bloqueio: é o sistema
+    respeitando o limite. A tela usa para não parecer travada."""
+    return _janela.espera_restante()
+
+
+def pausa_por_limite() -> float:
+    """Segundos que faltam para a busca retomar depois de o site limitar as
+    consultas (0 = sem pausa). A tela usa para explicar a espera."""
+    return _freio.segundos_restantes()
 
 
 def _html_deslogado(html: str) -> bool:
@@ -759,14 +886,39 @@ def _consultar_cards_http(forn, url: str) -> Optional[list[dict]]:
     cookie = getattr(forn, "_http_cookie", None)
     if not cookie:
         return None
-    try:
-        html = _http_get(url, cookie)
-    except Exception as exc:
-        if getattr(forn, "_http_only", False):
-            raise SessaoHTTPExpirou(
-                f"consulta HTTP falhou em modo paralelo ({type(exc).__name__})",
-                status=getattr(exc, "code", None))
-        return None   # rede/HTTP falhou → o navegador cuida desta consulta
+    esperas = 0
+    while True:
+        _freio.esperar()
+        # Depois de um bloqueio, UMA thread por vez sonda o site e as outras
+        # esperam o resultado: as 8 do lote repetindo juntas gastavam 8
+        # consultas do limite a cada sonda (medido em 2026-11-14).
+        with (_freio.vez if esperas else contextlib.nullcontext()):
+            _freio.esperar()
+            _janela.acquire()
+            try:
+                html = _http_get(url, cookie)
+            except Exception as exc:
+                if getattr(forn, "_http_only", False):
+                    raise SessaoHTTPExpirou(
+                        f"consulta HTTP falhou em modo paralelo ({type(exc).__name__})",
+                        status=getattr(exc, "code", None))
+                return None   # rede/HTTP falhou → o navegador cuida desta consulta
+            if not _pagina_inicial_no_lugar_da_busca(html):
+                break
+            # Limite silencioso: NUNCA devolver "0 produtos" (viraria "não
+            # achou"). O navegador não ajuda (o limite é do IP). O lote espera
+            # e repete; a busca manual (`_sem_espera`) avisa na hora, sem
+            # prender a tela.
+            esperas += 1
+            if esperas == 1:
+                _logger.warning(
+                    "%s devolveu a página inicial no lugar da busca (limite de "
+                    "consultas) — pausando.", getattr(forn, "nome", "?"))
+            if getattr(forn, "_sem_espera", False) or esperas > _MAX_ESPERAS_LIMITE:
+                raise SessaoHTTPExpirou(
+                    "site devolveu a página inicial no lugar da busca "
+                    "(limite de consultas)", status=_STATUS_LIMITE)
+            _freio.fechar(_PAUSA_LIMITE_S)
     # Deslogado (página de login) → zera o cookie e sinaliza, ANTES de olhar os
     # cards: o deslogado às vezes devolve 0 cards (não cards zerados), o que a
     # guarda de preços-zerados abaixo não pegava (bug do "2º leilão").
@@ -1233,14 +1385,14 @@ class AlmeidaDistribuidor:
                         };
                     });
                 }
-            """ % _MAX_RESULTADOS_POR_QUERY)
+            """ % _MAX_TAGS_NAVEGADOR)
 
         out = []
         for attrs in cards_attrs:
             r = _parse_card_attributes(attrs, confianca)
             if r is not None:
                 out.append(r)
-        return _sem_duplicatas(out)
+        return _sem_duplicatas(out)[:_MAX_RESULTADOS_POR_QUERY]
 
 
 # === Dantas ===
@@ -1500,14 +1652,14 @@ class DantasDistribuidora:
                     };
                 });
             }
-        """ % _MAX_RESULTADOS_POR_QUERY)
+        """ % _MAX_TAGS_NAVEGADOR)
 
         out = []
         for attrs in cards_attrs:
             r = _parse_card_dantas(attrs, confianca)
             if r is not None:
                 out.append(r)
-        return _sem_duplicatas(out)
+        return _sem_duplicatas(out)[:_MAX_RESULTADOS_POR_QUERY]
 
 
 # === Orquestrador em lote ===
@@ -1979,7 +2131,12 @@ def buscar_precos_para_itens(
     try:
         if workers <= 1:
             for idx, item in enumerate(itens):
-                bag, erros_item, stats = _processar_item(idx, item, conn)
+                try:
+                    bag, erros_item, stats = _processar_item(idx, item, conn)
+                except SessaoHTTPExpirou as exc:
+                    if exc.status != _STATUS_LIMITE:
+                        raise
+                    bag, erros_item, stats = [], [_erro_recusa(idx, item, fornecedores)], {}
                 _absorver(idx, bag, erros_item, stats)
                 # Commit incremental: uma interrupção no meio do lote não
                 # descarta o cache dos itens já buscados (WAL = commit barato).
@@ -2410,8 +2567,14 @@ def _buscar_no_site(fornecedor: str, termo: str, limite: int) -> list[ResultadoB
 
     def _consultar(forn):
         forn._rate_limiter.acquire()
-        # confiança 'variacao' — match manual, não verificado por texto.
-        return forn._buscar_query(forn._page, termo, "variacao")
+        # Site limitando consultas: a busca manual não espera (prenderia a
+        # tela) — a exceção sobe e a tela explica.
+        forn._sem_espera = True
+        try:
+            # confiança 'variacao' — match manual, não verificado por texto.
+            return forn._buscar_query(forn._page, termo, "variacao")
+        finally:
+            forn._sem_espera = False
 
     # 1) REUSA a sessão logada, se houver — é o ganho de velocidade.
     forn = _sessoes_vivas.get(fornecedor)
@@ -2462,6 +2625,11 @@ def _buscar_no_site(fornecedor: str, termo: str, limite: int) -> list[ResultadoB
                         "neste ciclo — não insisto p/ não bloquear a conta)",
                         fornecedor, termo)
                     return achados
+            except SessaoHTTPExpirou as exc:
+                if exc.status == _STATUS_LIMITE:
+                    raise   # limite do site: relogar não resolve (é por IP)
+                _logger.info("sessão manual de %s caiu — relogando", fornecedor)
+                _fechar_sessao_viva(fornecedor)
             except Exception:
                 _logger.info("sessão manual de %s caiu — relogando", fornecedor)
                 _fechar_sessao_viva(fornecedor)

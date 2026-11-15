@@ -132,6 +132,10 @@ _STOPWORDS_DOMINIO = frozenset({
     "possam", "possamos", "forma", "meses", "anos", "validade",
     "procedencia", "nacional", "importado", "primeira", "conter",
     "impresso", "impressa", "corpo", "nome",
+    # Enchimento de edital sem frase-gatilho ("feito com material resistente",
+    # "fabricado em aço") — nunca é nome de produto (campo 2026-11).
+    "feito", "feita", "fabricado", "fabricada", "produzido", "produzida",
+    "resistente", "resistentes", "atenda", "utilizado", "utilizada", "possui",
     # Termos de MEDIDA — descrevem a peça mas não distinguem subproduto;
     # nunca devem virar "discriminador". (2026-06)
     "espessura", "espessuras", "largura", "larguras", "comprimento",
@@ -141,6 +145,47 @@ _STOPWORDS_DOMINIO = frozenset({
     "centimetros", "milimetro", "milimetros", "litro", "litros",
     "espessura", "dimensao", "dimensoes",
 })
+
+# Texto CONTRATUAL de edital: do começo de uma destas frases em diante não há
+# nome de produto ("CADEADO LATAO 40 MM, produto de alta qualidade, corpo em
+# latao macico..."; "PÁ QUADRADA COM NORMA ABNT"). Em 836 de 1.362 itens dos
+# pregões de 10–13/11/2026 a frase estava lá, e palavras dela iam parar na
+# consulta ("cadeado latao 40mm alta", "ponteiro selo") e pesavam na
+# relevância. Aplicado sobre o texto JÁ normalizado (minúsculo, sem acento).
+_TEXTO_CONTRATUAL = re.compile(
+    r"\b(?:produtos? (?:fabricado |feito )?(?:de|em|com) (?:alta ?|boa |otima |primeira )qualidade"
+    r"|(?:de|com) (?:alta ?|boa |otima |primeira )qualidade"
+    r"|(?:de acordo|em conformidade) com (?:as? |os? )?normas?"
+    r"|conforme (?:as? )?normas?"
+    r"|com (?:o )?selo (?:do |de )?inmetro"
+    r"|com (?:as? )?normas? (?:tecnicas? )?(?:da |do )?(?:abnt|inmetro)"
+    r"|normas? (?:tecnicas? )?(?:da )?abnt)\b")
+
+# Substantivos de 2 letras que SÃO o produto quando abrem a descrição ("PÁ
+# QUADRADA", "TÊ SOLDÁVEL 25MM"). O corte de tokens curtos os jogava fora e a
+# consulta saía sem o nome do produto ("quadrada").
+_SUBSTANTIVOS_CURTOS = frozenset({"pa", "te"})
+
+
+def sem_texto_contratual(normalizada: str) -> str:
+    """Parte da descrição (já normalizada) que fala do PRODUTO — corta no
+    começo do texto contratual. Se o corte esvaziar, devolve o texto inteiro.
+
+    >>> sem_texto_contratual("cadeado latao 40mm produto de alta qualidade corpo em latao")
+    'cadeado latao 40mm'
+    >>> sem_texto_contratual("pa quadrada com norma abnt")
+    'pa quadrada'
+    >>> sem_texto_contratual("bota de borracha preta n 37 com selo do inmetro.")
+    'bota de borracha preta n 37'
+    >>> sem_texto_contratual("de acordo com as normas da abnt")
+    'de acordo com as normas da abnt'
+    """
+    m = _TEXTO_CONTRATUAL.search(normalizada or "")
+    if not m:
+        return normalizada
+    cabeca = normalizada[:m.start()].strip(" .,-")
+    return cabeca or normalizada
+
 
 # Numerais por extenso — descartados na QUERY (não ajudam a busca textual no
 # site). O número em si vira "dimensão" via `extrair_dimensoes` para o filtro
@@ -249,14 +294,17 @@ def keywords(descricao: str | None) -> list[str]:
     >>> keywords("CAIXA D AGUA 500 L")  # '500l' sobrevive; sem o fix viria só caixa/agua
     ['caixa', 'agua', '500l']
     """
-    normalizada = normalizar_descricao(descricao)
+    normalizada = sem_texto_contratual(normalizar_descricao(descricao))
     if not normalizada:
         return []
 
     UNIDADES_SOZINHAS = {"mm", "cm", "m", "kg", "g", "l", "ml", "und", "pct"}
 
     out = []
-    for t in normalizada.split(" "):
+    for pos, t in enumerate(normalizada.split(" ")):
+        if pos == 0 and t in _SUBSTANTIVOS_CURTOS:
+            out.append(t)
+            continue
         if len(t) < 3:
             continue
         if t in _STOPWORDS:
@@ -297,11 +345,20 @@ def keywords_distintivas(descricao: str | None, n: int = 4) -> list[str]:
     """
     out: list[str] = []
     vistos: set[str] = set()
-    for k in keywords(descricao):
+    for pos, k in enumerate(keywords(descricao)):
         k_limpo = k.strip('()[]{}.,"\'')
-        if len(k_limpo) < 3:
+        # "c/pincel" → "pincel", "p/madeira" → "madeira": o site não casa a
+        # abreviação colada. "s/ima" (SEM ímã) sai: é o que o produto NÃO tem.
+        if k_limpo.startswith("s/"):
             continue
-        if k_limpo in _STOPWORDS_DOMINIO:
+        if k_limpo[:2] in ("c/", "p/"):
+            k_limpo = k_limpo[2:]
+        if len(k_limpo) < 3 and not (pos == 0 and k_limpo in _SUBSTANTIVOS_CURTOS):
+            continue
+        # A 1ª palavra da descrição é o nome do produto mesmo quando coincide
+        # com um termo contratual ("ACABAMENTO C/CAN C40" saía como "can c40").
+        if k_limpo in _STOPWORDS_DOMINIO and not (
+                pos == 0 and k_limpo not in ("produto", "produtos")):
             continue
         if k_limpo in _NUMERAIS_EXTENSO:
             continue
@@ -834,6 +891,13 @@ def relevancia(original: str | None, candidato: str | None) -> float:
             base *= 0.3
         elif cat_casadas == len(cats):
             base = min(1.0, base * 1.2)
+
+    # Descrição que ABRE com substantivo de 2 letras ("PÁ QUADRADA", "TÊ
+    # SOLDÁVEL"): ele é a categoria, mas fica fora do veto acima (que só vê
+    # palavras de 4+ letras). Sem ele no candidato, é outro produto — "MESA
+    # QUADRADA" não serve para "PÁ QUADRADA".
+    if ko[0] in _SUBSTANTIVOS_CURTOS and ko[0] not in normalizar_descricao(candidato).split():
+        base *= 0.3
 
     # Boost de typo / ordem trocada — só dispara se já há alguma
     # afinidade textual (`casadas > 0`) pra evitar que descrições

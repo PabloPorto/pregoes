@@ -114,10 +114,18 @@ virar() {
     if [ -n "$antigo" ]; then
         checar_acesso "$antigo"
         passo "Parando a VPS antiga ($antigo) — o site sai do ar a partir daqui"
+        # Qualquer falha daqui em diante deixaria as DUAS fora do ar sem dizer
+        # como voltar: o aviso sai sempre.
+        _ANTIGA_PARADA=$antigo
+        trap 'if [ -n "${_ANTIGA_PARADA:-}" ]; then echo; echo "A TROCA NÃO TERMINOU e a antiga está parada. Para religar a antiga:"; echo "    ssh -i $CHAVE root@$_ANTIGA_PARADA systemctl start pregoes pregoes-tunel pregoes-backup.timer"; fi' EXIT
         ssh_em "$antigo" 'systemctl stop pregoes-backup.timer pregoes-tunel pregoes'
         passo "Tirando o pacote FRESCO dos dados da antiga"
         pacote_na_antiga "$antigo" "$pacote"
     else
+        # Sem parar a antiga, se ela ainda estiver no ar o mesmo túnel fica com
+        # duas réplicas e os operadores caem ora numa, ora noutra.
+        [ "${SEM_ANTIGA:-}" = 1 ] || falha "sem ANTIGO_IP a VPS antiga NÃO é parada. Se ela ainda responde, passe o IP dela;
+se está mesmo inacessível ou desligada, repita com SEM_ANTIGA=1 na frente do comando."
         local ultimo
         ultimo=$(ls -t "$BACKUPS"/*/pregoes_servidor.tgz 2>/dev/null | head -1 || true)
         [ -n "$ultimo" ] || falha "sem ANTIGO_IP e sem pacote salvo em $BACKUPS."
@@ -139,7 +147,10 @@ virar() {
         tar -xzf /root/pregoes_servidor.tgz -C /root/restaurar
         P=/root/restaurar/pacote
         (cd \$P && sha256sum -c MANIFESTO.sha256 --quiet)
-        rm -rf $APP/data && cp -a \$P/data $APP/data
+        # Nunca apaga dados que já estejam na nova (rodar o virar 2x depois de a
+        # nova entrar em uso restaurava dados velhos por cima): guarda ao lado.
+        [ -e $APP/data ] && mv $APP/data $APP/data.antes_\$(date +%Y%m%d_%H%M%S)
+        cp -a \$P/data $APP/data
         rm -rf /home/pregoes/.cloudflared && cp -a \$P/cloudflared /home/pregoes/.cloudflared
         mkdir -p /home/pregoes/.config/rclone && cp -a \$P/rclone/rclone.conf /home/pregoes/.config/rclone/
         [ -d \$P/backup-drive ] && rm -rf /home/pregoes/backup-drive && cp -a \$P/backup-drive /home/pregoes/backup-drive
@@ -150,6 +161,7 @@ virar() {
         systemctl daemon-reload
         systemctl enable --now pregoes pregoes-tunel pregoes-backup.timer
         systemctl restart pregoes"
+    _ANTIGA_PARADA=   # a nova subiu: daqui em diante vale o plano de volta do fim
 
     if [ -n "$antigo" ]; then
         passo "Desligando os serviços da antiga (sem apagar dados: ela é o plano de volta)"

@@ -1202,9 +1202,14 @@ def test_avisos_recusa_um_por_fornecedor_com_contagem():
     assert app._avisos_recusa([]) == []
 
 
-def test_tempo_restante_so_aparece_com_progresso_suficiente():
-    assert app._tempo_restante(10, 0.5) == ""      # cedo demais
-    assert app._tempo_restante(600, 0.02) == ""    # pouco progresso: palpite ruim
-    assert app._tempo_restante(600, 1.0) == ""     # acabou
-    assert app._tempo_restante(600, 0.25) == "faltam ~30 min"
-    assert app._tempo_restante(40, 0.9) == "faltam ~1 min"   # nunca "~0 min"
+def test_tempo_restante_usa_o_ritmo_dos_ultimos_minutos():
+    assert app._tempo_restante([], 0.5) == ""
+    assert app._tempo_restante([(0, 0.10), (60, 0.12)], 0.12) == ""    # < 2 min medidos
+    assert app._tempo_restante([(0, 0.5), (300, 1.0)], 1.0) == ""      # acabou
+    assert app._tempo_restante([(0, 0.2), (200, 0.2)], 0.2) == ""      # parado (pausa)
+    # 10% em 5 min → faltam 80% = 40 min
+    assert app._tempo_restante([(0, 0.10), (300, 0.20)], 0.20) == "faltam ~40 min"
+    # O arranque rápido (primeiros minutos) sai da conta: vale o ritmo recente.
+    amostras = [(0, 0.01), (60, 0.15), (400, 0.20), (700, 0.25)]
+    assert app._tempo_restante(amostras, 0.25) == "faltam ~75 min"
+    assert app._tempo_restante([(0, 0.10), (300, 0.12)], 0.12) == "faltam ~3,7 h"

@@ -849,44 +849,107 @@ máquina (§9) — atualizar o CLAUDE.md quando o servidor for validado.
 **Condição.** Vale se o teste de IP (Fase 1) passar; se os fornecedores
 bloquearem o IP da VPS, pedir reembolso e repensar.
 
-### Q20. Fornecedores limitam consultas (405) — ✅ ritmo calibrado (v1.1.15); 🟡 decisão de velocidade em aberto
+### Extrator — o que os PDFs reais do cliente mostraram (2026-11-14)
 
-**Contexto.** Desde 30/10 toda busca em LOTE falhava (12 tentativas no log; 0
-de 654 no Pregão 20/2026). Os preços do Itatuba (03/11) saíram da busca MANUAL.
+Dos 26 PDFs distintos enviados entre 15/10 e 13/11, **9 saíam com 0 itens** no
+extrator rápido e a leitura caía na IA. O cliente passou a **recortar o PDF em
+partes** ("parte 01…04") — não sabemos se por causa da leitura, da demora da
+busca ou por organização dele. **Perguntar ao cliente por que recorta.**
 
-**Medição (servidor, 2026-11-06/07, os 2 fornecedores juntos, 4 threads cada).**
-A recusa é um firewall da AWS (`awselb`, página "Human Verification") que
-devolve **405** às consultas LOGADAS. Login novo **não** escapa; sem cookie
-segue 200. Por ritmo, por fornecedor:
+- ✅ 4 dos 9 eram a **"Proposta" do portal de compras** (colunas Modelo e
+  Marca/Fabricante em branco): descartada como "modelo de proposta". Agora só
+  é descartada quando o documento tem outra lista de itens. Saem 112/166/86/106
+  itens, com unidade (coluna que só o cabeçalho desenha) e preço de referência
+  ('Ref. unitária', não o 'Valor Unitário' 0,00). Os outros 22 PDFs: idênticos.
+- 🟡 Continuam com 0 no extrator rápido (seguem para a IA): 3 recortes SEM a
+  página do cabeçalho (não há rótulo de coluna para ler), 1 em texto corrido
+  sem grade e 1 do Exército com texto embaralhado. Default: IA. Alternativa não
+  escolhida: inferir colunas sem cabeçalho (arriscado). Para o cliente: subir o
+  PDF inteiro, ou o recorte incluindo a página que tem o cabeçalho da tabela.
+- ✅ Revisão independente das heurísticas da v1.1.13 achou 4 casos de perda ou
+  fusão silenciosa de itens (pedaço de descrição lido como cabeçalho alheio;
+  tabela solta colada no último item; quantidade tirada de célula de dinheiro;
+  medida "20 - 25 MM" lida como nº de item). Corrigidos, com teste.
 
-| Ritmo | Resultado |
-|---|---|
-| 2/s | bloqueou com ~420 consultas (3,5 min) |
-| 1/s | bloqueou com ~374 (6 min) |
-| 0,65/s | bloqueou com ~400 (10,4 min) |
-| **0,5/s** | **25 min, 757 consultas, nenhum bloqueio** (717 itens reais do Edital 020) |
+### Q20. Limite de consultas dos fornecedores — ✅ respeitado pelo sistema (v1.1.16); 🟡 velocidade depende de decisão
 
-Tudo bate com **~350–400 consultas por fornecedor numa janela de ~10 min**; o
-bloqueio dura ~4–7 min depois que o ritmo para. Não deu para separar "por IP"
-de "por conta" (só temos um servidor e uma conta por fornecedor) — mudar de VPS
-pode ou não mudar algo; não conte com isso.
+**O que acontecia.** Desde 30/10 a busca em lote falhava ou vinha pela metade.
+Diagnóstico em 3 etapas, todas medidas no servidor:
 
-**Já corrigido:** v1.1.14 — a recusa não descarta mais o que foi achado, o lote
-desiste rápido e a tela avisa. v1.1.15 — ritmo do lote **0,5 consulta/s por
-fornecedor** (`SCRAPER_MAX_REQ_POR_SEGUNDO`, ~20% abaixo do limite) e o painel
-mostra "faltam ~N min".
+1. **405 "Human Verification"** (06–07/11): firewall recusa a conta logada
+   acima de ~350–400 consultas em 10 min. A v1.1.14 parou de descartar o que
+   já tinha sido achado; a v1.1.15 baixou o ritmo para 0,5 consulta/s.
+2. **O bloqueio que a v1.1.15 NÃO viu** (achado em 14/11, olhando os pregões
+   reais de 10–13/11): os dois sites (mesma plataforma) têm um limite bem mais
+   baixo e SILENCIOSO — **~100 buscas por janela, POR IP, somando Almeida e
+   Dantas, com ou sem login**. Na 101ª, `/busca` passa a devolver a PÁGINA
+   INICIAL com status 200 e zero produtos, por 5 min cravados (302 s nas duas
+   medições). O lote lia isso como "não achou": **494 de 1.362 itens (36%)**
+   dos 9 pregões da semana ficaram sem candidato, em sequências de 30–40 itens
+   seguidos, e o operador resolveu parte deles um a um (291 buscas manuais por
+   código no log). O teste de 07/11 que "validou" o 0,5/s só contava erro HTTP
+   — o achado de 34% naquele teste era esse bloqueio e passou batido.
+   Medições de 14/11: a 1/s e a 0,5/s somados o bloqueio veio igual, na 101ª
+   consulta (o ritmo não importa); com 80 consultas a cada 5 min ele voltou
+   perto da 100ª (a janela deles é mais longa que 5 min); com **80 a cada 10
+   min, 32 min de lote sem nenhum bloqueio**.
+3. **Leitura curta do resultado:** o site devolve 24 produtos por busca, com
+   a tag de cada um repetida 17x; o teto de 30 *tags* lia só os ~5 primeiros.
 
-**Custo:** com itens reais, um item gasta **~3,1 consultas por fornecedor**
-(quem acha, acha na 1ª consulta; quem não acha tenta as 4 camadas). Dá ~10
-itens/min: edital de 650 itens ≈ **1 h**, mas sai completo numa rodada só.
-Cuidados: dois operadores rodando lote ao mesmo tempo somam consultas e voltam
-a estourar; busca manual durante o lote também conta (pouco).
+**O que a v1.1.16 faz.**
+- Janela deslizante: no máximo **80 consultas a cada 10 min** (config
+  `SCRAPER_MAX_CONSULTAS_POR_JANELA` / `SCRAPER_JANELA_SEGUNDOS`), somando os
+  dois fornecedores, todas as threads e a busca manual. Trabalho pequeno sai
+  na hora; lote grande anda em levas de 80 (a tela avisa "próxima leva em ~N
+  min").
+- Página inicial no lugar da busca **nunca vira "não achou"**: o lote pausa
+  (uma sonda a cada 90 s, até ~15 min), a tela avisa "o site limitou as
+  consultas, a busca continua sozinha", e retoma. Só depois disso o item vira
+  erro visível. Na busca manual o aviso sai na hora ("aguarde uns 5 minutos").
+- Lê os 24 produtos de cada busca (teto por produto, não por tag).
+- Consulta sem o texto contratual do edital ("produto de alta qualidade…",
+  "com selo do INMETRO", "de acordo com as normas da ABNT" — presente em 836
+  dos 1.362 itens): antes saía "cadeado latao 40mm alta", "ponteiro selo";
+  "PÁ QUADRADA" virava "quadrada".
 
-**Decisão em aberto (responsável/cliente) — velocidade:** no teste, **85–95% dos
-itens achados saíram da 1ª consulta** (Almeida 70 de 83, Dantas 75 de 79); as camadas de reserva (2ª–4ª) acharam os
-outros 5–15% mas gastaram ~2/3 das consultas, quase todas em itens que no fim não
-existiam no fornecedor. Opções: (a) manter como está (~1 h por edital grande,
-máxima cobertura) — **default**; (b) o lote tenta só a 1ª e a 2ª camada e deixa o
-resto para "Buscar preços dos itens sem resultado" — ~2× mais rápido, perde
-parte desses 5–15% na 1ª rodada. Precisa: o cliente dizer se 1 h por edital grande
-é aceitável.
+**Validação (14–15/11, código novo no servidor, os 86 itens reais do pregão
+20/2026 parte 03, sem cache nem catálogo):** itens com candidato **53 → 76 de
+86** (Almeida 41 → 72, Dantas 40 → 66); nenhum item que tinha candidato ficou
+sem; 281 consultas (**1,63 por item por fornecedor**), 0 bloqueios, 0 erros,
+32 min. Os 10 sem candidato são produtos que os dois sites parecem não vender
+(mangote de irrigação, metalon, luva de alta tensão).
+
+**Custo — a decisão que continua em aberto (responsável/cliente).** Dentro do
+limite dos sites o lote grande é LENTO: 8 consultas/min para os dois
+fornecedores juntos → ~2,7 itens/min → **650 itens ≈ 4 horas** (antes: 1 h,
+mas com um terço dos itens perdido e horas de busca manual). Sai completo,
+numa rodada, sem ninguém olhando. O que pode encurtar, em ordem de retorno:
+1. **Pedir aos dois distribuidores (o cliente é parceiro) que liberem o IP do
+   servidor no firewall, ou forneçam tabela de preços/API.** É o único caminho
+   que elimina o limite. Precisa: o cliente falar com Almeida e Dantas.
+2. **Importar as planilhas históricas (Q2).** Item que casa com o catálogo é
+   buscado por código: 1 consulta certeira, sem camadas de reserva.
+3. Cache de 2 dias e escolhas aprendidas já evitam consultas repetidas — o 2º
+   pregão parecido da semana é bem mais rápido que o 1º.
+4. **"Andar no limite"** (não é o default — precisa de aval): tirar a janela
+   (`SCRAPER_MAX_CONSULTAS_POR_JANELA` bem alto) e deixar só a pausa
+   automática: 100 consultas, 5 min parado, 100 consultas… ≈ 15/min, quase o
+   dobro (650 itens ≈ 2 h). Não perde item, mas dispara a proteção do
+   parceiro a cada ~7 min, o dia todo. É o que o sistema já fazia sem saber
+   (e pior: seguia martelando durante o bloqueio).
+5. Não recomendado: trocar de IP/rodar de vários IPs para contornar o limite —
+   é burlar a proteção de um parceiro.
+
+**Pendências menores registradas:**
+- "Buscar preços dos itens sem resultado" só re-tenta item sem resultado de
+  NENHUM fornecedor; item que um fornecedor recusou e o outro respondeu não é
+  re-tentado (com a pausa automática, recusa virou caso raro).
+- Não medimos se as páginas de produto (consulta de NCM) contam no limite. Se
+  contarem, um "Identificar NCM" grande pode provocar a pausa — o sistema
+  aguenta (pausa e retoma), só fica mais lento.
+- O limite é por IP: mudar de VPS **muda** de IP, mas a regra é da plataforma
+  dos sites e deve valer igual no IP novo.
+- No Streamlit o lote depende da aba aberta; num lote de horas, recarregar a
+  aba aborta a busca (o que já foi achado fica no cache de 2 dias e a re-busca
+  é rápida). A interface web nova roda o lote no servidor (ver
+  `docs/ARQUITETURA_WEB.md`).
