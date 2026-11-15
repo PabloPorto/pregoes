@@ -64,8 +64,20 @@ def _situacao_sistema() -> dict:
     }
 
 
-def inicio(request: Request):
+def _pendentes() -> list[dict]:
+    """Pregões em andamento, marcando os que têm busca de preços rodando no
+    servidor (`buscando` = % feito) — quem volta à lista vê que a busca que
+    deixou andando continua."""
+    buscas = {t.pregao: t for t in tarefas.rodando() if t.tipo == "busca"}
     pendentes = em_andamento()
+    for r in pendentes:
+        t = buscas.get(r.get("slug"))
+        r["buscando"] = None if t is None else int(round(t.fracao * 100))
+    return pendentes
+
+
+def inicio(request: Request):
+    pendentes = _pendentes()
     return pagina(request, "inicio.html", secao="inicio",
                   pendentes=pendentes[:6], total_pendentes=len(pendentes),
                   contagens=_contagens(), situacao=_situacao_sistema(),
@@ -73,7 +85,7 @@ def inicio(request: Request):
 
 
 def pregoes_em_andamento(request: Request):
-    return pagina(request, "pregoes.html", secao="pregoes", pendentes=em_andamento())
+    return pagina(request, "pregoes.html", secao="pregoes", pendentes=_pendentes())
 
 
 # --------------------------------------------------------------------------
@@ -126,7 +138,11 @@ def pregao_raiz(request: Request):
     pregao = _abrir_ou_404(request)
     if pregao is None:
         return _nao_encontrado(request)
-    return RedirectResponse(f"{RAIZ}/pregao/{pregao.slug}/{pregao.caminho_de_trabalho()}", 303)
+    # Busca de preços rodando: quem volta ao pregão cai na tela da busca (pela
+    # etapa gravada cairia na Revisão — a busca só grava o resultado no fim).
+    destino = ("precos" if tarefas.ativa("busca", pregao.slug) is not None
+               else pregao.caminho_de_trabalho())
+    return RedirectResponse(f"{RAIZ}/pregao/{pregao.slug}/{destino}", 303)
 
 
 def leitura(request: Request):
@@ -178,7 +194,9 @@ def tarefa_estado(request: Request):
                              "decorrido_s": 0, "restante_s": None})
     if t.tipo == "busca" and t.estado == "rodando":
         from pregoes.scraper import espera_da_janela, pausa_por_limite
-        t.extra["pausa_s"] = int(pausa_por_limite())
+        pausa_s = pausa_por_limite()
+        t.extra["pausa_s"] = int(pausa_s)
+        t.extra["pausa_min"] = max(1, round(pausa_s / 60))
         t.extra["espera_s"] = int(espera_da_janela())
     return JSONResponse(t.retrato())
 
@@ -225,6 +243,12 @@ def _ao_subir() -> None:
         from pregoes import backup
         threading.Thread(target=backup.fazer_backup_externo, daemon=True).start()
     _log.info("Pregões web v%s iniciado (raiz=%r)", config.VERSAO_APP, RAIZ)
+    # Busca de preços que o reinício do serviço interrompeu: continua sozinha.
+    from pregoes.web import servico_busca
+    try:
+        servico_busca.retomar_buscas_interrompidas()
+    except Exception:
+        _log.exception("não consegui retomar as buscas interrompidas")
 
 
 def _rotas_das_telas() -> list:

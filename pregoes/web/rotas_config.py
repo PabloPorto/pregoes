@@ -26,8 +26,9 @@ from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.routing import Route
 
-from pregoes import backup, config, credenciais, rascunho
+from pregoes import backup, config, credenciais, rascunho, scraper
 from pregoes.web import regras_historico as regras
+from pregoes.web import regras_selecao as selecao
 from pregoes.web import tarefas
 from pregoes.web.nucleo import corpo_json, falha, ok, pagina, pedaco
 
@@ -107,6 +108,11 @@ def _mtime(caminho: Path) -> Optional[float]:
         return None
 
 
+# Tamanho de edital usado para explicar o ritmo da busca (o volume alvo do
+# cliente é ~500 itens por edital).
+_ITENS_EXEMPLO = 500
+
+
 def _contexto_sistema() -> dict:
     """Fatos para o suporte — só leitura, sem nenhum segredo."""
     banco = Path(config.DB_PATH)
@@ -126,6 +132,11 @@ def _contexto_sistema() -> dict:
         tamanho = None
     registro = Path(config.DATA_DIR) / "pregoes.log"
     return {
+        "ritmo": scraper.ritmo_da_busca(),
+        "tempo_seguro": selecao.estimativa_busca(_ITENS_EXEMPLO, 2, "seguro")["texto"],
+        "tempo_rapido": selecao.estimativa_busca(_ITENS_EXEMPLO, 2, "rapido")["texto"],
+        "itens_exemplo": _ITENS_EXEMPLO,
+        "limite_consultas": config.SCRAPER_CONSULTAS_ATE_BLOQUEIO,
         "pasta_dados": str(config.DATA_DIR),
         "tamanho_banco": regras.tamanho_legivel(tamanho),
         "n_rascunhos": len(list(Path(rascunho.DIR).glob("*.pkl"))),
@@ -312,6 +323,21 @@ async def salvar_backup(request: Request):
     return _painel(request, "backup", mensagem)
 
 
+async def salvar_ritmo(request: Request):
+    """Ritmo da busca em lote (Q20): 'seguro' fica abaixo do limite dos
+    fornecedores; 'rapido' vai até ele e espera o bloqueio passar. Vale na
+    hora, inclusive para um lote em andamento."""
+    ritmo = (await corpo_json(request)).get("ritmo")
+    if ritmo not in credenciais.RITMOS_BUSCA:
+        return falha("Escolha um dos dois ritmos de busca.")
+    credenciais.salvar_ritmo_busca(ritmo)
+    _log.info("ritmo da busca em lote alterado para %r", ritmo)
+    return _painel(request, "sistema", ("ok", (
+        "Busca <b>rápida</b> ligada: vai até o limite dos fornecedores e continua "
+        "sozinha depois de cada pausa." if ritmo == "rapido" else
+        "Busca <b>segura</b> ligada: fica abaixo do limite dos fornecedores, sem pausas.")))
+
+
 rotas = [
     Route("/configuracoes", configuracoes),
     Route("/configuracoes/credenciais", salvar_credenciais, methods=["POST"]),
@@ -319,4 +345,5 @@ rotas = [
     Route("/configuracoes/pagamento", salvar_pagamento, methods=["POST"]),
     Route("/configuracoes/gemini", salvar_gemini, methods=["POST"]),
     Route("/configuracoes/backup", salvar_backup, methods=["POST"]),
+    Route("/configuracoes/ritmo", salvar_ritmo, methods=["POST"]),
 ]

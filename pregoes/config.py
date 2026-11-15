@@ -44,7 +44,7 @@ def _raiz_bundle() -> Path:
 # Versão do aplicativo — aparece na sidebar e no log de boot. Sem ela, o
 # suporte remoto fica às cegas sobre o que o cliente está rodando (auditoria
 # 2026-06). Bump a cada .exe entregue ao cliente.
-VERSAO_APP = "1.1.17"
+VERSAO_APP = "1.1.18"
 
 # Rodando no servidor (deploy/pregoes.service define PREGOES_SERVIDOR=1) em vez
 # do .exe na máquina do cliente: muda o que é verdade para o operador (onde os
@@ -166,6 +166,21 @@ SCRAPER_MAX_REQ_POR_SEGUNDO = 0.5
 # fica abaixo daquela.)
 SCRAPER_MAX_CONSULTAS_POR_JANELA = 80
 SCRAPER_JANELA_SEGUNDOS = 600
+# RITMO do lote (Q20, 2026-11-15) — as duas formas de conviver com o limite:
+#   "seguro": fica ABAIXO dele (a janela acima). Nunca é bloqueado; ~8
+#             consultas/min → 650 itens ≈ 4 h.
+#   "rapido": vai ATÉ o limite. Consulta sem dosar; quando o site bloqueia
+#             (~100ª consulta), espera o bloqueio passar e continua. ~15
+#             consultas/min → 650 itens ≈ 2 h. Não perde item (a página
+#             inicial no lugar da busca nunca vira "não achou"), mas aciona a
+#             proteção dos fornecedores a cada ciclo.
+# Este é o padrão de fábrica; o responsável troca em Configurações → Sistema
+# (fica em data/credenciais.json, sem precisar de versão nova).
+SCRAPER_RITMO_PADRAO = "seguro"
+# Consultas que os sites aceitam antes de bloquear, e quanto o bloqueio dura
+# (302 s cravados nas medições; a folga evita sondar 2 s cedo demais).
+SCRAPER_CONSULTAS_ATE_BLOQUEIO = 100
+SCRAPER_BLOQUEIO_SEGUNDOS = 310
 # Consultas de busca via HTTP com os cookies da sessão logada (Fase 2 de perf,
 # 2026-07): os cards são server-rendered — um GET devolve o MESMO conteúdo que o
 # navegador (preço logado validado em campo nos 2 fornecedores), em ~1/3 do

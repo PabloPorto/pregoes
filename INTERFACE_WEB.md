@@ -55,6 +55,11 @@ ssh -i ~/.ssh/pregoes_vps root@IP '
 pregoes-web && systemctl enable --now pregoes`. Os dados não mudam de lugar
 nem de formato em nenhum dos sentidos.
 
+A velocidade da busca em lote (rápida × segura) se escolhe em Configurações →
+Sistema, só na interface nova — mas vale para as duas, porque é do motor de
+busca. Só a interface nova continua a busca com a página fechada e a retoma
+sozinha se o serviço reiniciar; na antiga a aba precisa ficar aberta.
+
 Cuidado enquanto as duas estão no ar: cada uma conta sozinha o limite de
 consultas dos fornecedores (Q20). Dois lotes grandes ao mesmo tempo, um em cada
 interface, podem encostar no limite — nada se perde (o lote pausa e retoma),

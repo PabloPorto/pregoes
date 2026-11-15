@@ -31,20 +31,35 @@ valer de verdade sem editar o scraper:
   busca nova não pode começar com esse modo sendo desligado por baixo dela.
 Cancelada, a tarefa não grava NADA no rascunho; o que já foi consultado fica
 no cache de preços do backend (2 dias), então refazer é rápido.
+
+REINÍCIO DO SERVIÇO (2026-11-15). As tarefas vivem na memória e um lote leva
+horas: uma atualização do sistema no meio matava a busca e o operador, ao
+voltar, achava o pregão parado. Enquanto a busca roda fica uma MARCA em disco
+(`data/rascunhos/<slug>.busca`, ao lado do rascunho — o rascunho em si não
+muda); ao subir, o serviço retoma as buscas marcadas
+(`retomar_buscas_interrompidas`). O que já tinha sido consultado responde do
+cache, então a retomada só gasta consulta com o que faltava. A marca sai
+quando a tarefa termina de qualquer jeito (pronta, cancelada ou com erro) e
+uma busca é retomada no máximo `_MAX_RETOMADAS` vezes — se é ela que derruba
+o serviço, não fica em laço.
 """
 from __future__ import annotations
 
 import dataclasses
+import json
 import logging
 import queue
 import threading
 import time
 from typing import Optional
 
-from pregoes import credenciais, erros, scraper
+from pathlib import Path
+
+from pregoes import credenciais, erros, rascunho, scraper
 from pregoes.extrator import ItemExtraido
 from pregoes.web import regras_selecao as regras
 from pregoes.web.pregao import Pregao, fornecedores_configurados, trava
+from pregoes.web import tarefas
 from pregoes.web.tarefas import Tarefa
 
 _log = logging.getLogger("pregoes.web")
@@ -302,6 +317,72 @@ class _Lote:
                 self._absorver(nome, r)
 
 
+# --------------------------------------------------------------------------
+# Início da tarefa e retomada depois de um reinício do serviço
+# --------------------------------------------------------------------------
+
+_MAX_RETOMADAS = 2
+
+
+def _marca(slug: str) -> Path:
+    return Path(rascunho.DIR) / f"{slug}.busca"
+
+
+def _ler_marca(caminho: Path) -> Optional[dict]:
+    try:
+        dados = json.loads(caminho.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return dados if isinstance(dados, dict) else None
+
+
+def iniciar_busca(pregao: Pregao, indices: Optional[list[int]],
+                  retomadas: int = 0) -> Tarefa:
+    """Dispara a busca de preços do pregão como tarefa do servidor, deixando
+    a marca que permite retomá-la se o serviço reiniciar no meio."""
+    slug = pregao.slug
+
+    def _corpo(tarefa: Tarefa):
+        marca = _marca(slug)
+        try:
+            marca.write_text(json.dumps({"indices": indices, "retomadas": retomadas}),
+                             encoding="utf-8")
+        except OSError:
+            _log.warning("não consegui gravar a marca de busca de %s", slug)
+        try:
+            return executar_busca(slug, indices, tarefa)
+        finally:
+            marca.unlink(missing_ok=True)
+
+    return tarefas.iniciar("busca", slug, f"Buscando preços — {pregao.titulo}", _corpo)
+
+
+def retomar_buscas_interrompidas() -> int:
+    """Ao subir: recomeça as buscas que o reinício do serviço interrompeu
+    (ver o docstring do módulo). Devolve quantas retomou."""
+    retomadas = 0
+    for caminho in sorted(Path(rascunho.DIR).glob("*.busca")):
+        dados = _ler_marca(caminho)
+        slug = caminho.stem
+        pregao = Pregao.abrir(slug)
+        vezes = int((dados or {}).get("retomadas") or 0)
+        if dados is None or pregao is None or vezes >= _MAX_RETOMADAS:
+            if pregao is not None and dados is not None:
+                _log.warning("busca do pregão %s não foi retomada de novo (já foi %d "
+                             "vezes) — inicie pela tela", slug, vezes)
+            caminho.unlink(missing_ok=True)
+            continue
+        indices = dados.get("indices")
+        if not (indices is None or isinstance(indices, list)):
+            caminho.unlink(missing_ok=True)
+            continue
+        _log.info("retomando a busca de preços do pregão %s, interrompida pelo "
+                  "reinício do serviço", slug)
+        iniciar_busca(pregao, indices, retomadas=vezes + 1)
+        retomadas += 1
+    return retomadas
+
+
 def executar_busca(slug: str, indices: Optional[list[int]], tarefa: Tarefa) -> Optional[dict]:
     """Tarefa "busca": busca os preços dos itens do pregão `slug` e grava no
     rascunho. `indices=None` = busca completa (substitui os resultados);
@@ -322,6 +403,7 @@ def executar_busca(slug: str, indices: Optional[list[int]], tarefa: Tarefa) -> O
         return None
 
     inicio = time.monotonic()
+    bloqueios_antes = scraper.bloqueios_por_limite()
     lote = _Lote(itens, alvo_indices, fornecedores, tarefa)
     tarefa.atualizar(0.0, "Preparando ambiente…", feitos=0, total=lote.total,
                      rotulo="Aguardando início")
@@ -366,10 +448,11 @@ def executar_busca(slug: str, indices: Optional[list[int]], tarefa: Tarefa) -> O
     # como a busca foi abrindo o rascunho do pregão.
     _log.info(
         "LOTE: %d itens em %s | com candidato %d | erros %d | por fornecedor "
-        "(ok, variação, vazio) %s",
+        "(ok, variação, vazio) %s | ritmo %s, %d pausa(s) por limite",
         lote.total, _tempo(time.monotonic() - inicio),
         sum(1 for v in lote.resultados.values() if v), len(lote.erros),
-        {n: (a, b, c) for n, a, b, c in lote.stats})
+        {n: (a, b, c) for n, a, b, c in lote.stats},
+        scraper.ritmo_da_busca(), scraper.bloqueios_por_limite() - bloqueios_antes)
     return {"tipo": "ok",
             "texto": regras.resumo_do_lote(len(lote.resultados), lote.cache_hits,
                                            lote.cache_misses, len(lote.erros))}

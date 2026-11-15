@@ -185,6 +185,43 @@ def salvar_pasta_backup(caminho: str) -> None:
     CAMINHO.write_text(json.dumps(dados, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+RITMOS_BUSCA = ("seguro", "rapido")
+
+
+def carregar_ritmo_busca() -> Optional[str]:
+    """Ritmo da busca em lote escolhido em Configurações → Sistema ('seguro'
+    ou 'rapido' — ver config.SCRAPER_RITMO_PADRAO). None se nunca foi
+    escolhido: vale o padrão de fábrica."""
+    if not CAMINHO.exists():
+        return None
+    try:
+        dados = json.loads(CAMINHO.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+        return None
+    if not isinstance(dados, dict):
+        return None
+    ritmo = dados.get("ritmo_busca")
+    return ritmo if ritmo in RITMOS_BUSCA else None
+
+
+def salvar_ritmo_busca(ritmo: str) -> None:
+    """Persiste o ritmo da busca em lote (preserva as outras entradas)."""
+    if ritmo not in RITMOS_BUSCA:
+        raise ValueError(f"ritmo de busca inválido: {ritmo!r}")
+    if CAMINHO.exists():
+        try:
+            dados = json.loads(CAMINHO.read_text(encoding="utf-8"))
+            if not isinstance(dados, dict):
+                dados = {}
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+            dados = {}
+    else:
+        dados = {}
+    dados["ritmo_busca"] = ritmo
+    CAMINHO.parent.mkdir(parents=True, exist_ok=True)
+    CAMINHO.write_text(json.dumps(dados, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
 def carregar_margem_venda() -> Optional[str]:
     """Coluna do cenário de margem escolhido para pré-preencher o PREÇO VENDA
     ('Z'=15%, 'AA'=12%, 'AB'=7%). None se não configurada — o app usa o padrão

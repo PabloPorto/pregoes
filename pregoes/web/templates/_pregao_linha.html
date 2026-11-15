@@ -4,7 +4,7 @@
     <a href="{{ raiz }}/pregao/{{ r.slug }}"><b>{{ r.titulo }}</b></a>
     <div class="pequeno mudo">{{ r.n_itens }} {{ 'item' if r.n_itens == 1 else 'itens' }}{% if r.tem_busca %} · busca de preços feita{% endif %}</div>
   </td>
-  <td>{% if r.tem_busca %}<span class="selo info"><span class="ponto"></span>Escolhendo preços</span>{% elif r.n_itens %}<span class="selo alerta"><span class="ponto"></span>Revisando itens</span>{% else %}<span class="selo"><span class="ponto"></span>Lendo o edital</span>{% endif %}</td>
+  <td>{% if r.buscando is defined and r.buscando is not none %}<span class="selo ok"><span class="ponto"></span>Buscando preços · {{ r.buscando }}%</span>{% elif r.tem_busca %}<span class="selo info"><span class="ponto"></span>Escolhendo preços</span>{% elif r.n_itens %}<span class="selo alerta"><span class="ponto"></span>Revisando itens</span>{% else %}<span class="selo"><span class="ponto"></span>Lendo o edital</span>{% endif %}</td>
   <td class="mudo num pequeno">{{ r.mtime|quando }}</td>
   <td class="acoes-cel">
     <a class="btn primario p" href="{{ raiz }}/pregao/{{ r.slug }}">Continuar {{ m.icone('seta') }}</a>

@@ -178,6 +178,9 @@ def precos(request: Request):
     ativa = tarefas.ativa("busca", pregao.slug)
     if ativa is not None:
         ctx["tarefa"] = ativa.retrato()
+        pausa_s = scraper.pausa_por_limite()
+        ctx["tarefa"]["extra"] = {**ctx["tarefa"]["extra"], "pausa_s": int(pausa_s),
+                                  "pausa_min": regras.espera_em_minutos(pausa_s)}
         # Leva em espera (limite de consultas dos sites): a página já nasce com
         # o aviso; depois o precos.js o mantém em dia pela consulta de progresso.
         espera_s = int(scraper.espera_da_janela())
@@ -187,7 +190,8 @@ def precos(request: Request):
         if pregao.tem_busca:
             ctx.update(_contexto_da_lista(request, pregao))
         else:
-            ctx["estimativa"] = regras.estimativa_busca(len(itens), len(fornecedores))
+            ctx["estimativa"] = regras.estimativa_busca(
+                len(itens), len(fornecedores), scraper.ritmo_da_busca())
     return pagina(request, "precos.html", **ctx)
 
 
@@ -255,8 +259,7 @@ def _buscar(request: Request, dados: dict):
         return ok(recarregar=True)
     else:
         indices = None
-    tarefa = tarefas.iniciar("busca", slug, f"Buscando preços — {pregao.titulo}",
-                             lambda t: servico_busca.executar_busca(slug, indices, t))
+    tarefa = servico_busca.iniciar_busca(pregao, indices)
     return ok(tarefa=tarefa.id, recarregar=True)
 
 
@@ -466,8 +469,11 @@ def _site_buscar(request: Request, dados: dict):
     except Exception as exc:
         if getattr(exc, "status", None) == scraper._STATUS_LIMITE:
             # Limite de consultas do site: não é erro nosso nem "não existe".
+            falta_s = scraper.pausa_por_limite()
+            quanto = (f"cerca de {regras.espera_em_minutos(falta_s)} min" if falta_s > 0
+                      else "uns 5 minutos")
             texto = (f"O site da {forn.capitalize()} limitou as consultas por alguns "
-                     "minutos (muitas buscas em pouco tempo). <b>Aguarde uns 5 minutos</b> "
+                     f"minutos (muitas buscas em pouco tempo). <b>Aguarde {quanto}</b> "
                      "e busque de novo.")
         else:
             _log.exception("falha na busca manual no site")

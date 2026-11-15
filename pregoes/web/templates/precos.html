@@ -149,7 +149,11 @@
         <div class="p-estimativa-icone">{{ m.icone('relogio') }}</div>
         <div>
           <h2>Tempo estimado: {{ estimativa.texto }}</h2>
-          <p class="mudo">Os sites dos fornecedores aceitam cerca de <b>{{ estimativa.limite }} consultas a cada {{ estimativa.janela_min }} minutos</b>, somando os dois, e cada item gasta uma ou duas consultas em cada fornecedor. Por isso a busca anda em levas: a primeira sai na hora{% if estimativa.segundos %} e as seguintes de {{ estimativa.janela_min }} em {{ estimativa.janela_min }} minutos — {{ n_itens|num }} {{ 'item leva' if n_itens == 1 else 'itens levam' }} {{ estimativa.texto }}{% else %} e este pregão cabe nela{% endif %}. Item consultado nos últimos {{ cache_dias }} dias responde da memória, então costuma ser mais rápido do que isso.</p>
+          {% if estimativa.ritmo == 'rapido' %}
+          <p class="mudo">Os sites dos fornecedores param de responder por 5 minutos a cada <b>{{ estimativa.limite }} consultas</b>, somando os dois. A busca vai até esse limite, espera e continua sozinha{% if estimativa.levas == 1 %} — este pregão deve caber antes da primeira pausa{% endif %}. Item consultado nos últimos {{ cache_dias }} dias responde da memória.</p>
+          {% else %}
+          <p class="mudo">Os sites dos fornecedores aceitam cerca de <b>{{ estimativa.limite }} consultas a cada {{ estimativa.janela_min }} minutos</b>, somando os dois. A busca anda em levas para ficar abaixo disso{% if estimativa.segundos %}: a primeira sai na hora e as seguintes de {{ estimativa.janela_min }} em {{ estimativa.janela_min }} minutos{% else %} — este pregão cabe na primeira{% endif %}. Item consultado nos últimos {{ cache_dias }} dias responde da memória.</p>
+          {% endif %}
           <p class="mudo" style="margin:0">A busca roda no servidor: depois de iniciar, <b>pode fechar esta página</b> e voltar quando quiser — o pregão continua em <a href="{{ raiz }}/pregoes">Pregões em andamento</a>.</p>
         </div>
       </div>

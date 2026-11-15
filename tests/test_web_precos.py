@@ -987,3 +987,145 @@ def test_paridade_busca_no_catalogo(app_antigo):
     assert [p.produto_id for p in regras.buscar_no_catalogo(catalogo, "88")][:3] == [1, 2, 4]
     assert len(regras.buscar_no_catalogo(catalogo, "tubo")) == 6          # limite
     assert [p.produto_id for p in regras.buscar_no_catalogo(catalogo, "tubo pvc 75")] == [4, 1]
+
+
+# ============ ritmo da busca, aba fechada e reinício do serviço (Q20) =========
+
+def test_estimativa_no_ritmo_rapido_e_o_texto_da_tela(busca, web):
+    # 86 itens: 276 consultas a 1/s (2 fornecedores × 0,5/s) + 2 pausas de bloqueio
+    e = regras.estimativa_busca(86, 2, "rapido")
+    assert (config.SCRAPER_CONSULTAS_ATE_BLOQUEIO, config.SCRAPER_BLOQUEIO_SEGUNDOS) == (100, 310)
+    assert e["consultas"] == 276 and e["levas"] == 3 and e["segundos"] == 276 + 2 * 310
+    assert e["texto"] == "cerca de 15 minutos" and e["ritmo"] == "rapido"
+    assert regras.estimativa_busca(500, 2, "rapido")["texto"] == "cerca de 1,5 horas"
+    assert regras.estimativa_busca(500, 2, "seguro")["texto"] == "cerca de 3 horas"
+    assert regras.estimativa_busca(500, 2)["ritmo"] == "seguro"
+
+    p = _pregao(web, 3)
+    t = web.get(f"/pregao/{p.slug}/precos").text
+    assert "A busca anda em levas para ficar abaixo disso" in t          # seguro (padrão)
+    credenciais.salvar_ritmo_busca("rapido")
+    t = web.get(f"/pregao/{p.slug}/precos").text
+    assert "param de responder por 5 minutos a cada <b>100 consultas</b>" in t
+    assert "espera e continua sozinha" in t and "anda em levas" not in t
+    assert "pode fechar esta página" in t
+
+
+def test_escolher_o_ritmo_em_configuracoes(web):
+    t = web.get("/configuracoes?aba=sistema").text
+    for trecho in ("Velocidade da busca de preços", 'value="rapido"', 'value="seguro" checked',
+                   "Um edital de 500 itens leva cerca de 1,5 horas",
+                   "O mesmo edital leva cerca de 3 horas"):
+        assert trecho in t, trecho
+    r = web.post("/configuracoes/ritmo", json={"ritmo": "rapido"}).json()
+    assert r["ok"] and "Busca <b>rápida</b> ligada" in r["html"]["#painel"]
+    assert 'value="rapido" checked' in r["html"]["#painel"]
+    assert credenciais.carregar_ritmo_busca() == "rapido" and scraper.ritmo_da_busca() == "rapido"
+    r = web.post("/configuracoes/ritmo", json={"ritmo": "seguro"}).json()
+    assert "Busca <b>segura</b> ligada" in r["html"]["#painel"]
+    assert scraper.ritmo_da_busca() == "seguro"
+    assert web.post("/configuracoes/ritmo", json={"ritmo": "turbo"}).status_code == 400
+
+
+def test_busca_segue_com_a_aba_fechada_e_a_volta_encontra_a_busca(busca, web, monkeypatch):
+    """O operador inicia, fecha a página e volta depois: a busca roda no
+    servidor sem ninguém consultando o progresso, a volta mostra o andamento
+    (inclusive em pausa por limite) e, no fim, os resultados."""
+    solta, entrou = threading.Event(), threading.Event()
+
+    def segurar(nome, pos):
+        entrou.set()
+        assert solta.wait(5)
+    busca.a_cada_item = segurar
+    p = _pregao(web, 2)
+    r = web.post(f"/pregao/{p.slug}/precos/buscar", json={}).json()
+    assert r["ok"] and r["tarefa"]
+    try:
+        assert entrou.wait(5)                     # rodando — e ninguém perguntou nada
+        t = tarefas.ativa("busca", p.slug)
+        assert t is not None and t.id == r["tarefa"]
+        marca = servico_busca._marca(p.slug)
+        assert marca.exists()                     # dá para retomar se o serviço cair
+        # "voltar": a lista de pregões leva à tela, que mostra a busca andando
+        assert "Buscando preços · " in web.get("/pregoes").text
+        assert web.get(f"/pregao/{p.slug}", follow_redirects=False).headers["location"].endswith(
+            f"/pregao/{p.slug}/precos")
+        html = web.get(f"/pregao/{p.slug}/precos").text
+        assert f'data-tarefa="{t.id}"' in html and "Iniciar busca" not in html
+        assert 'class="aviso pausa-t oculto"' in html
+        assert t.id in web.get("/").text          # e o Início mostra o que está rodando
+        # voltou bem na pausa do limite: a tela já nasce explicando, com os minutos
+        monkeypatch.setattr(scraper, "pausa_por_limite", lambda: 185.0)
+        html = web.get(f"/pregao/{p.slug}/precos").text
+        assert 'class="aviso pausa-t"' in html
+        assert 'continua sozinha em ~<span data-extra="pausa_min">3</span> min' in html
+        estado = web.get(f"/api/tarefas/{t.id}").json()
+        assert estado["extra"]["pausa_s"] == 185 and estado["extra"]["pausa_min"] == 3
+    finally:
+        solta.set()
+    assert _esperar(p.slug).estado == "concluida"
+    assert not servico_busca._marca(p.slug).exists()
+    html = web.get(f"/pregao/{p.slug}/precos").text
+    assert 'id="item-0"' in html and 'id="item-1"' in html
+    assert set(Pregao.abrir(p.slug).resultados_busca) == {0, 1}
+
+
+def test_busca_interrompida_pelo_reinicio_do_servico_e_retomada(busca, web, caplog):
+    import json
+    p = _pregao(web, 3)
+    outro = web.pregao(n_itens=2, numero="11/2026")
+    marca = servico_busca._marca(p.slug)
+    # o serviço caiu com a busca dos itens 1 e 2 em andamento
+    marca.write_text(json.dumps({"indices": [1, 2], "retomadas": 0}), encoding="utf-8")
+    # marcas que NÃO podem virar busca: pregão que não existe mais, arquivo
+    # estragado e busca que já foi retomada o máximo de vezes
+    servico_busca._marca("sumiu-12345678").write_text('{"indices": null, "retomadas": 0}')
+    servico_busca._marca("estragada").write_text("{{{")
+    servico_busca._marca(outro.slug).write_text(
+        json.dumps({"indices": None, "retomadas": servico_busca._MAX_RETOMADAS}))
+
+    with caplog.at_level("INFO", logger="pregoes.web"):
+        assert servico_busca.retomar_buscas_interrompidas() == 1
+    assert _esperar(p.slug).estado == "concluida"
+    assert "retomando a busca de preços do pregão " + p.slug in caplog.text
+    assert f"busca do pregão {outro.slug} não foi retomada de novo" in caplog.text
+    assert [c[1] for c in busca.chamadas] == [["PRODUTO DE TESTE 2", "PRODUTO DE TESTE 3"]] * 2
+    assert set(Pregao.abrir(p.slug).resultados_busca) == {1, 2}
+    assert list(web.dados.glob("rascunhos/*.busca")) == []       # nenhuma marca sobrou
+    assert tarefas.ativa("busca", outro.slug) is None
+    assert servico_busca.retomar_buscas_interrompidas() == 0
+
+
+def test_marca_de_retomada_conta_as_vezes_e_sai_no_erro_e_no_cancelamento(busca, web):
+    import json
+    p = _pregao(web, 2)
+    vista = {}
+
+    def espiar(nome, pos):
+        vista.update(json.loads(servico_busca._marca(p.slug).read_text()))
+    busca.a_cada_item = espiar
+    t = servico_busca.iniciar_busca(Pregao.abrir(p.slug), None, retomadas=1)
+    assert _esperar(p.slug).id == t.id
+    assert vista == {"indices": None, "retomadas": 1}
+    assert not servico_busca._marca(p.slug).exists()
+
+    def quebrar(nome, pos):
+        raise scraper.OperacaoInterrompida()
+    busca.a_cada_item = quebrar
+    q = _pregao(web, 2)
+    web.post(f"/pregao/{q.slug}/precos/buscar", json={})
+    _esperar(q.slug)
+    assert not servico_busca._marca(q.slug).exists()
+
+
+def test_busca_manual_com_o_lote_em_pausa_diz_em_quanto_tempo_tentar(busca, web, monkeypatch):
+    p = _com_busca(web, {0: [], 1: []})
+
+    def _limitado(forn, termo, limite=10):
+        raise scraper.SessaoHTTPExpirou("limite", status=scraper._STATUS_LIMITE)
+    monkeypatch.setattr(scraper, "buscar_no_site", _limitado)
+    monkeypatch.setattr(scraper, "pausa_por_limite", lambda: 200.0)
+    estado = web.post(f"/pregao/{p.slug}/precos/item/0/site",
+                      json={"termo": "x", "fornecedor": "almeida"}).json()["html"][
+        "#procura-estado-almeida"]
+    assert "<b>Aguarde cerca de 3 min</b> e busque de novo." in estado

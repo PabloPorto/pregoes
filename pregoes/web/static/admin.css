@@ -45,6 +45,11 @@ svg.mini.desce { color: var(--ok); }
 .painel-config[data-aba="sistema"] { max-width: none; }
 .painel-config code, .cartao code { font-family: var(--mono); font-size: .88em; padding: 1px 5px; border-radius: 5px; background: color-mix(in srgb, var(--texto) 7%, transparent); }
 ol.passos { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 6px; }
+.ritmos { display: grid; gap: 8px; }
+.ritmo { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--borda); border-radius: 9px; cursor: pointer; }
+.ritmo:hover { border-color: var(--borda-forte); }
+.ritmo:has(input:checked) { border-color: var(--primaria); background: var(--primaria-suave); }
+.ritmo input { margin-top: 3px; flex: none; }
 dl.fatos { display: grid; grid-template-columns: minmax(180px, 280px) minmax(0, 1fr); gap: 10px 20px; margin: 0; }
 dl.fatos dt { color: var(--texto-2); font-size: .9rem; }
 dl.fatos dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }

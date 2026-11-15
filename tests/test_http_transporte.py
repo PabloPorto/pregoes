@@ -333,3 +333,122 @@ def test_depois_do_bloqueio_so_uma_thread_sonda_por_vez(monkeypatch):
     [t.join(timeout=20) for t in ths]
     assert len(saida) == 4 and all(len(cards) == 1 for cards in saida)
     assert estado["chamadas"] == 6 + 4   # nenhuma consulta desperdiçada além das 6 "home"
+
+
+# ===================== ritmo "rapido": andar no limite (Q20) ================
+
+def _ritmo(monkeypatch, ritmo):
+    from pregoes import credenciais
+    monkeypatch.setattr(credenciais, "carregar_ritmo_busca", lambda: ritmo)
+
+
+class _JanelaContada:
+    def __init__(self):
+        self.pedidos = 0
+
+    def acquire(self):
+        self.pedidos += 1
+
+    def espera_restante(self):
+        return 0.0
+
+
+def test_ritmo_rapido_nao_dosa_as_consultas_e_o_seguro_dosa(monkeypatch):
+    ok = "<body>" + _html_card("9", "CADEADO 40MM", "31.90", "PADO", "u") + "</body>"
+    monkeypatch.setattr(scraper, "_http_get", lambda u, c: ok)
+    janela = _JanelaContada()
+    monkeypatch.setattr(scraper, "_janela", janela)
+
+    _ritmo(monkeypatch, None)                       # sem escolha: padrão de fábrica
+    assert scraper.ritmo_da_busca() == config.SCRAPER_RITMO_PADRAO
+    _ritmo(monkeypatch, "seguro")
+    scraper._consultar_cards_http(_FornHTTP(), "http://u")
+    assert janela.pedidos == 1
+    _ritmo(monkeypatch, "rapido")
+    assert scraper.ritmo_da_busca() == "rapido"
+    for _ in range(3):
+        assert scraper._consultar_cards_http(_FornHTTP(), "http://u")
+    assert janela.pedidos == 1                      # a janela não foi consultada
+
+
+def test_ritmo_rapido_bloqueado_pausa_e_repete_sem_perder_o_item(monkeypatch):
+    """No limite, o bloqueio é o ciclo normal: a consulta bloqueada espera e
+    é REPETIDA — o item nunca sai como 'não achou'."""
+    _ritmo(monkeypatch, "rapido")
+    respostas = [_PAGINA_INICIAL, _PAGINA_INICIAL,
+                 "<body>" + _html_card("9", "CADEADO 40MM", "31.90", "PADO", "u") + "</body>"]
+    monkeypatch.setattr(scraper, "_http_get", lambda u, c: respostas.pop(0))
+    antes = scraper.bloqueios_por_limite()
+    cards = scraper._consultar_cards_http(_FornHTTP(), "http://u")
+    assert [c["data-codigo-produto"] for c in cards] == ["9"] and respostas == []
+    assert scraper.bloqueios_por_limite() == antes + 1     # UM bloqueio, duas sondas
+
+
+def test_freio_pausa_longa_no_bloqueio_novo_e_sonda_curta_se_ele_continua(monkeypatch):
+    relogio = [1000.0]
+    monkeypatch.setattr(scraper.time, "monotonic", lambda: relogio[0])
+    f = scraper._FreioDeConsultas()
+
+    assert f.bloqueou(310, 30) == (True, 0.0)              # bloqueio novo: 5 min
+    assert f.segundos_restantes() == 310 and f.bloqueios == 1
+    relogio[0] += 1                                        # outra thread viu o mesmo bloqueio
+    assert f.bloqueou(310, 30) == (False, 1.0)
+    assert f.segundos_restantes() == 309                   # não estica a pausa
+    relogio[0] += 309                                      # a pausa acabou…
+    assert f.segundos_restantes() == 0
+    relogio[0] += 2                                        # …e a sonda ainda veio bloqueada
+    novo, dura = f.bloqueou(310, 30)
+    assert (novo, dura) == (False, 312.0)
+    assert f.segundos_restantes() == 30 and f.bloqueios == 1    # só uma sonda, não 5 min
+    relogio[0] += 30 + 100                                 # liberou; 100 s consultando
+    assert f.bloqueou(310, 30) == (True, 0.0)              # o bloqueio seguinte é NOVO
+    assert f.segundos_restantes() == 310 and f.bloqueios == 2
+
+
+def test_bloqueio_que_dura_demais_desiste_pelo_relogio(monkeypatch):
+    """Várias threads se revezam na sonda: quem decide a desistência é a
+    duração do bloqueio, não a contagem de cada thread."""
+    relogio = [1000.0]
+    monkeypatch.setattr(scraper.time, "monotonic", lambda: relogio[0])
+    monkeypatch.setattr(scraper, "_freio", scraper._FreioDeConsultas())
+    monkeypatch.setattr(scraper.time, "sleep", lambda s: relogio.__setitem__(0, relogio[0] + s))
+    monkeypatch.setattr(scraper, "_PAUSA_LIMITE_S", 310.0)
+    monkeypatch.setattr(scraper, "_SONDA_LIMITE_S", 30.0)
+    chamadas = []
+    monkeypatch.setattr(scraper, "_http_get",
+                        lambda u, c: chamadas.append(relogio[0]) or _PAGINA_INICIAL)
+    with pytest.raises(scraper.SessaoHTTPExpirou) as e:
+        scraper._consultar_cards_http(_FornHTTP(), "http://u")
+    assert e.value.status == scraper._STATUS_LIMITE
+    # 1ª consulta, uma sonda depois dos 5 min e depois de 30 em 30 s até ~15 min
+    assert chamadas[1] - chamadas[0] == 310
+    assert all(b - a == 30 for a, b in zip(chamadas[1:], chamadas[2:]))
+    assert scraper._DESISTE_LIMITE_S < chamadas[-1] - chamadas[0] <= scraper._DESISTE_LIMITE_S + 30
+    assert len(chamadas) < scraper._MAX_ESPERAS_LIMITE + 1
+
+
+def test_busca_manual_com_o_lote_em_pausa_avisa_sem_consultar(monkeypatch):
+    chamadas = []
+    monkeypatch.setattr(scraper, "_http_get", lambda u, c: chamadas.append(u) or "x")
+    scraper._freio.fechar(200)
+    forn = _FornHTTP()
+    forn._sem_espera = True
+    with pytest.raises(scraper.SessaoHTTPExpirou) as e:
+        scraper._consultar_cards_http(forn, "http://u")
+    assert e.value.status == scraper._STATUS_LIMITE and chamadas == []
+    assert 190 < scraper.pausa_por_limite() <= 200
+
+
+def test_ritmo_da_busca_fica_salvo_nas_preferencias(tmp_path, monkeypatch):
+    from pregoes import credenciais
+    monkeypatch.setattr(credenciais, "CAMINHO", tmp_path / "credenciais.json")
+    assert credenciais.carregar_ritmo_busca() is None
+    credenciais.salvar("almeida", "a@x", "s")
+    credenciais.salvar_ritmo_busca("rapido")
+    assert credenciais.carregar_ritmo_busca() == "rapido"
+    assert credenciais.carregar("almeida")["email"] == "a@x"      # preserva o resto
+    assert scraper.ritmo_da_busca() == "rapido"
+    credenciais.salvar_ritmo_busca("seguro")
+    assert scraper.ritmo_da_busca() == "seguro"
+    with pytest.raises(ValueError):
+        credenciais.salvar_ritmo_busca("turbo")

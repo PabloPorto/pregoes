@@ -907,7 +907,7 @@ busca ou por organização dele. **Perguntar ao cliente por que recorta.**
   tabela solta colada no último item; quantidade tirada de célula de dinheiro;
   medida "20 - 25 MM" lida como nº de item). Corrigidos, com teste.
 
-### Q20. Limite de consultas dos fornecedores — ✅ respeitado pelo sistema (v1.1.16); 🟡 velocidade depende de decisão
+### Q20. Limite de consultas dos fornecedores — ✅ respeitado pelo sistema (v1.1.16); ✅ ritmo rápido "no limite" escolhido pelo responsável (v1.1.18)
 
 **O que acontecia.** Desde 30/10 a busca em lote falhava ou vinha pela metade.
 Diagnóstico em 3 etapas, todas medidas no servidor:
@@ -955,7 +955,7 @@ sem; 281 consultas (**1,63 por item por fornecedor**), 0 bloqueios, 0 erros,
 32 min. Os 10 sem candidato são produtos que os dois sites parecem não vender
 (mangote de irrigação, metalon, luva de alta tensão).
 
-**Custo — a decisão que continua em aberto (responsável/cliente).** Dentro do
+**Custo — decisão tomada em 2026-11-15: ritmo rápido (item 4).** Dentro do
 limite dos sites o lote grande é LENTO: 8 consultas/min para os dois
 fornecedores juntos → ~2,7 itens/min → **650 itens ≈ 4 horas** (antes: 1 h,
 mas com um terço dos itens perdido e horas de busca manual). Sai completo,
@@ -967,14 +967,54 @@ numa rodada, sem ninguém olhando. O que pode encurtar, em ordem de retorno:
    buscado por código: 1 consulta certeira, sem camadas de reserva.
 3. Cache de 2 dias e escolhas aprendidas já evitam consultas repetidas — o 2º
    pregão parecido da semana é bem mais rápido que o 1º.
-4. **"Andar no limite"** (não é o default — precisa de aval): tirar a janela
-   (`SCRAPER_MAX_CONSULTAS_POR_JANELA` bem alto) e deixar só a pausa
-   automática: 100 consultas, 5 min parado, 100 consultas… ≈ 15/min, quase o
-   dobro (650 itens ≈ 2 h). Não perde item, mas dispara a proteção do
-   parceiro a cada ~7 min, o dia todo. É o que o sistema já fazia sem saber
-   (e pior: seguia martelando durante o bloqueio).
+4. **"Andar no limite"** — ✅ **implementado e ligado em produção em
+   2026-11-15 (v1.1.18), a pedido do responsável** ("horas fazendo essa busca
+   é inaceitável"). Ver "Ritmo rápido" abaixo.
 5. Não recomendado: trocar de IP/rodar de vários IPs para contornar o limite —
    é burlar a proteção de um parceiro.
+
+**Ritmo rápido — "no limite" (v1.1.18, 2026-11-15).** Dois ritmos, escolhidos
+em Configurações → Sistema da interface nova (vale para as duas interfaces e
+na hora; fica em `data/credenciais.json`, chave `ritmo_busca`):
+- **Segura** (padrão de fábrica, `config.SCRAPER_RITMO_PADRAO`): a janela de
+  80 consultas / 10 min. Nunca é bloqueada.
+- **Rápida** (ligada no servidor do cliente): consulta sem dosar até o site
+  bloquear, pausa 310 s (o bloqueio dura 302 s) e continua; a consulta
+  bloqueada é repetida, nunca vira "não achou".
+
+*Teste real (15/11, servidor, cópia dos dados, os mesmos 86 itens da
+validação da v1.1.16, sem cache nem escolhas aprendidas):* **15 min 53 s
+contra 32 min** no ritmo seguro; **76 de 86 itens com candidato — o mesmo
+resultado** (Almeida 72, Dantas 66); 0 erros; 281 consultas respondidas e 3
+bloqueadas (repetidas depois); 2 pausas. O ciclo medido foi ~100 consultas em
+~95 s + 310 s de pausa ≈ **15 consultas/min** (o seguro faz 8). A 1ª consulta
+depois de cada pausa já passou (nenhuma sonda desperdiçada) e o contador do
+site zera depois do bloqueio (vieram mais ~100 antes do bloqueio seguinte).
+Conta para o edital grande: 650 itens ≈ 2.100 consultas ≈ **2 h 20** (seguro:
+4 h 20).
+
+*O que NÃO foi medido:* só 2 ciclos de bloqueio. Não sabemos se os sites
+endurecem (bloqueio mais longo, ou o 405 "Human Verification") depois de
+horas de ciclos seguidos — a 1ª busca grande em produção é esse teste. A
+linha `LOTE:` do log passou a registrar o ritmo e o número de pausas; se o
+bloqueio passar a durar mais, o sistema sonda a cada 30 s por até 15 min e só
+então marca o item com erro visível. Voltar atrás é um clique (Segura).
+
+*Custo conhecido:* aciona a proteção dos dois parceiros a cada ~7 min
+enquanto houver lote rodando, e durante cada pausa a busca manual
+("Procurar de outro jeito") responde "aguarde ~N min". Continua valendo a
+recomendação nº 1: o cliente pedir a liberação do IP aos distribuidores.
+
+**Busca com a página fechada / reinício do serviço (v1.1.18, interface
+nova).** A busca roda no servidor. Corrigido: quem voltava ao pregão pela
+lista com a busca rodando caía na Revisão (a etapa gravada), não na tela da
+busca — agora cai na busca, e a lista mostra "Buscando preços · N%". Novo:
+se o serviço reinicia no meio, a busca é retomada sozinha ao subir (marca
+`data/rascunhos/<slug>.busca`, no máximo 2 retomadas). Testado de verdade no
+ensaio: serviço morto com `kill -9` aos 50 s de busca, subiu, retomou, e os
+itens já consultados responderam do cache (10% do lote com 6 consultas
+novas). Na interface antiga (Streamlit) nada disso vale: a aba tem de ficar
+aberta — mais um motivo para a troca definitiva (Q21).
 
 **Pendências menores registradas:**
 - "Buscar preços dos itens sem resultado" só re-tenta item sem resultado de

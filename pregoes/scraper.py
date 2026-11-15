@@ -764,15 +764,41 @@ class _FreioDeConsultas:
     limite é por IP — ver `_pagina_inicial_no_lugar_da_busca`). Quem vê o
     bloqueio fecha o freio; todo mundo espera antes da próxima consulta."""
 
+    # Consulta bloqueada até este tanto depois do fim de uma pausa ainda é o
+    # MESMO bloqueio (a pausa acabou cedo demais), não um novo.
+    _FOLGA_S = 60.0
+
     def __init__(self):
         import threading as _th
         self._lock = _th.Lock()
         self._ate = 0.0
+        self._desde: Optional[float] = None   # início do bloqueio em curso
+        self.bloqueios = 0                    # quantos bloqueios já houve
         self.vez = _th.Lock()   # quem sonda o site depois de um bloqueio
 
     def fechar(self, segundos: float) -> None:
         with self._lock:
             self._ate = max(self._ate, time.monotonic() + segundos)
+
+    def bloqueou(self, pausa_s: float, sonda_s: float) -> tuple[bool, float]:
+        """O site acabou de bloquear uma consulta. Devolve (é um bloqueio
+        NOVO?, há quantos segundos este bloqueio dura).
+
+        Bloqueio novo: pausa do tamanho do bloqueio (`pausa_s`). Se a pausa já
+        passou e o site segue bloqueando, só o intervalo de uma sonda
+        (`sonda_s`) — decidido AQUI, no estado compartilhado, e não por
+        thread: uma thread que ainda não tinha visto o bloqueio pediria a
+        pausa inteira de novo por causa de 2 segundos de diferença."""
+        with self._lock:
+            agora = time.monotonic()
+            novo = self._desde is None or agora - self._ate > self._FOLGA_S
+            if novo:
+                self._desde = agora
+                self.bloqueios += 1
+                self._ate = agora + pausa_s
+            elif agora >= self._ate:
+                self._ate = agora + sonda_s
+            return novo, agora - self._desde
 
     def segundos_restantes(self) -> float:
         with self._lock:
@@ -827,14 +853,35 @@ class _JanelaDeConsultas:
 _janela = _JanelaDeConsultas(config.SCRAPER_MAX_CONSULTAS_POR_JANELA,
                              config.SCRAPER_JANELA_SEGUNDOS)
 _freio = _FreioDeConsultas()
-# Bloqueio medido: ~6 min. Sonda a cada 90 s (a 1ª thread que acorda consulta;
-# se ainda vier a home, fecha de novo antes das outras dispararem). Depois de
-# 10 esperas (~15 min) desiste e o item vira erro visível, nunca "não achou".
-_PAUSA_LIMITE_S = 90.0
-_MAX_ESPERAS_LIMITE = 10
+# O bloqueio dura 5 min cravados (302 s medidos): a 1ª pausa é desse tamanho —
+# sondar antes só gasta consulta — e, se o site ainda bloquear, uma sonda a
+# cada 30 s (a 1ª thread que acorda consulta; se ainda vier a home, fecha de
+# novo antes das outras dispararem). Passados ~15 min de bloqueio seguido
+# desiste e o item vira erro visível, nunca "não achou". Quem decide é o
+# relógio (as threads se revezam na sonda); o teto de tentativas por consulta
+# é só a garantia de que o laço termina.
+_PAUSA_LIMITE_S = float(config.SCRAPER_BLOQUEIO_SEGUNDOS)
+_SONDA_LIMITE_S = 30.0
+_DESISTE_LIMITE_S = 900.0
+_MAX_ESPERAS_LIMITE = 30
 # Status sintético de SessaoHTTPExpirou para o limite silencioso (o site
 # responde 200): o mesmo sentido do 429 "Too Many Requests".
 _STATUS_LIMITE = 429
+
+
+def ritmo_da_busca() -> str:
+    """'seguro' (fica abaixo do limite dos sites) ou 'rapido' (vai até ele e
+    espera o bloqueio passar) — a escolha feita em Configurações → Sistema ou,
+    sem ela, `config.SCRAPER_RITMO_PADRAO`. Lido a cada consulta: trocar vale
+    na hora, inclusive para um lote em andamento."""
+    from pregoes import credenciais
+    return credenciais.carregar_ritmo_busca() or config.SCRAPER_RITMO_PADRAO
+
+
+def bloqueios_por_limite() -> int:
+    """Quantas vezes o site bloqueou as consultas desde que o programa subiu
+    (o lote subtrai o valor do início para dizer quantas pausas teve)."""
+    return _freio.bloqueios
 
 
 def espera_da_janela() -> float:
@@ -887,14 +934,23 @@ def _consultar_cards_http(forn, url: str) -> Optional[list[dict]]:
     if not cookie:
         return None
     esperas = 0
+    sem_espera = getattr(forn, "_sem_espera", False)
     while True:
+        if sem_espera and _freio.segundos_restantes() > 0:
+            # Busca manual com o lote em pausa: avisa na hora (a tela diz em
+            # quanto tempo tentar de novo) em vez de segurar o operador pelos
+            # minutos que faltam.
+            raise SessaoHTTPExpirou(
+                "consultas em pausa (limite de consultas do site)",
+                status=_STATUS_LIMITE)
         _freio.esperar()
         # Depois de um bloqueio, UMA thread por vez sonda o site e as outras
         # esperam o resultado: as 8 do lote repetindo juntas gastavam 8
         # consultas do limite a cada sonda (medido em 2026-11-14).
         with (_freio.vez if esperas else contextlib.nullcontext()):
             _freio.esperar()
-            _janela.acquire()
+            if ritmo_da_busca() != "rapido":
+                _janela.acquire()     # "seguro": fica abaixo do limite
             try:
                 html = _http_get(url, cookie)
             except Exception as exc:
@@ -910,15 +966,22 @@ def _consultar_cards_http(forn, url: str) -> Optional[list[dict]]:
             # e repete; a busca manual (`_sem_espera`) avisa na hora, sem
             # prender a tela.
             esperas += 1
-            if esperas == 1:
-                _logger.warning(
-                    "%s devolveu a página inicial no lugar da busca (limite de "
-                    "consultas) — pausando.", getattr(forn, "nome", "?"))
-            if getattr(forn, "_sem_espera", False) or esperas > _MAX_ESPERAS_LIMITE:
+            if sem_espera:
                 raise SessaoHTTPExpirou(
                     "site devolveu a página inicial no lugar da busca "
                     "(limite de consultas)", status=_STATUS_LIMITE)
-            _freio.fechar(_PAUSA_LIMITE_S)
+            novo, dura_s = _freio.bloqueou(_PAUSA_LIMITE_S, _SONDA_LIMITE_S)
+            if novo:
+                # No ritmo "rapido" isto é o ciclo normal, não um problema.
+                _logger.log(
+                    logging.INFO if ritmo_da_busca() == "rapido" else logging.WARNING,
+                    "%s devolveu a página inicial no lugar da busca (limite de "
+                    "consultas, bloqueio nº %d) — pausa de %d s.",
+                    getattr(forn, "nome", "?"), _freio.bloqueios, _PAUSA_LIMITE_S)
+            if esperas > _MAX_ESPERAS_LIMITE or dura_s > _DESISTE_LIMITE_S:
+                raise SessaoHTTPExpirou(
+                    "site devolveu a página inicial no lugar da busca "
+                    "(limite de consultas)", status=_STATUS_LIMITE)
     # Deslogado (página de login) → zera o cookie e sinaliza, ANTES de olhar os
     # cards: o deslogado às vezes devolve 0 cards (não cards zerados), o que a
     # guarda de preços-zerados abaixo não pegava (bug do "2º leilão").

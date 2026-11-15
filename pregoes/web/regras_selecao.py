@@ -431,21 +431,36 @@ def resumo_do_lote(n_itens: int, cache_hits: int, cache_misses: int, n_erros: in
 CONSULTAS_POR_ITEM = 1.6
 
 
-def estimativa_busca(n_itens: int, n_fornecedores: int) -> dict:
-    """Quanto um lote deve levar, pelo limite dos sites (`config.SCRAPER_
-    MAX_CONSULTAS_POR_JANELA` consultas a cada `SCRAPER_JANELA_SEGUNDOS`,
-    somando os dois fornecedores — Q20). O lote anda em LEVAS: a 1ª sai na
-    hora e cada leva seguinte espera a janela da anterior fechar. É o pior
-    caso — item consultado nos últimos dias responde da memória, sem gastar
-    consulta."""
-    maximo = config.SCRAPER_MAX_CONSULTAS_POR_JANELA
-    janela_s = config.SCRAPER_JANELA_SEGUNDOS
+def estimativa_busca(n_itens: int, n_fornecedores: int, ritmo: str = "seguro") -> dict:
+    """Quanto um lote deve levar, pelo limite dos sites (Q20) e pelo ritmo
+    escolhido (`scraper.ritmo_da_busca`):
+
+    - "seguro": `config.SCRAPER_MAX_CONSULTAS_POR_JANELA` consultas a cada
+      `SCRAPER_JANELA_SEGUNDOS`, somando os dois fornecedores. O lote anda em
+      LEVAS: a 1ª sai na hora e cada leva seguinte espera a janela da anterior.
+    - "rapido": consulta sem dosar até o site bloquear (a cada
+      `SCRAPER_CONSULTAS_ATE_BLOQUEIO`) e espera o bloqueio passar
+      (`SCRAPER_BLOQUEIO_SEGUNDOS`). Entre as pausas, quem manda é o teto da
+      rajada (`SCRAPER_MAX_REQ_POR_SEGUNDO` por fornecedor).
+
+    É o pior caso — item consultado nos últimos dias responde da memória, sem
+    gastar consulta."""
     consultas = math.ceil(n_itens * max(n_fornecedores, 1) * CONSULTAS_POR_ITEM)
-    levas = max(1, math.ceil(consultas / maximo))
-    segundos = (levas - 1) * janela_s
+    if ritmo == "rapido":
+        maximo = config.SCRAPER_CONSULTAS_ATE_BLOQUEIO
+        pausa_s = config.SCRAPER_BLOQUEIO_SEGUNDOS
+        levas = max(1, math.ceil(consultas / maximo))
+        por_segundo = config.SCRAPER_MAX_REQ_POR_SEGUNDO * max(n_fornecedores, 1)
+        segundos = consultas / por_segundo + (levas - 1) * pausa_s
+    else:
+        ritmo = "seguro"
+        maximo = config.SCRAPER_MAX_CONSULTAS_POR_JANELA
+        pausa_s = config.SCRAPER_JANELA_SEGUNDOS
+        levas = max(1, math.ceil(consultas / maximo))
+        segundos = (levas - 1) * pausa_s
     return {"consultas": consultas, "levas": levas, "segundos": int(segundos),
-            "texto": _duracao(segundos), "limite": maximo,
-            "janela_min": int(round(janela_s / 60))}
+            "texto": _duracao(segundos), "limite": maximo, "ritmo": ritmo,
+            "janela_min": int(round(pausa_s / 60))}
 
 
 def espera_em_minutos(segundos: float) -> int:

@@ -213,6 +213,7 @@ PDF do edital
 | Output | Excel idêntico ao template MATRIZ, com fórmulas preservadas | Análise da planilha |
 | Tributação fase 3 | Baseada em XML de NF-e do cliente | Resp 14 |
 | Sites alvo do scraper | almeidadistribuidor.com.br + dantasdistribuidora.com.br | Resp 1 |
+| Ritmo da busca em lote | **2026-11-15**: "rápido" (vai até o limite dos sites, pausa 5 min e continua) ligado no servidor do cliente; "seguro" continua disponível em Configurações → Sistema (Q20) | Pedido do responsável |
 | Anti-bot | **Revisado 2026-08-31**: scraping segue autorizado, mas os dois sites agora barram por User-Agent — 403 para `HeadlessChrome`. O scraper manda UA de Chrome comum (`_user_agent_real`). Não presuma "sem proteção" | Resp 5 + 6, campo 2026-08-31 |
 
 ---

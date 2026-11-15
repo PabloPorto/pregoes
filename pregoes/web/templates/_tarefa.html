@@ -9,7 +9,7 @@
     </div>
     <div class="barra"><i style="width: {{ (t.fracao * 100)|round|int }}%"></i></div>
     <div class="item-atual">{{ t.detalhe }}</div>
-    <div class="aviso alerta pausa-t oculto" style="margin-top:12px">{{ m.icone('relogio') }}<div>O site dos fornecedores limitou as consultas. A busca <b>pausou e continua sozinha</b> em alguns minutos. Pode fechar esta página — o trabalho segue no servidor.</div></div>
+    <div class="aviso pausa-t{{ '' if t.extra.get('pausa_s', 0) > 0 else ' oculto' }}" style="margin-top:12px" role="status">{{ m.icone('relogio') }}<div>Os fornecedores limitaram as consultas: a busca está em pausa e <b>continua sozinha em ~<span data-extra="pausa_min">{{ t.extra.get('pausa_min', 5) }}</span> min</b>. Pode fechar esta página — o trabalho segue no servidor.</div></div>
     {% if caller %}{{ caller() }}{% endif %}
   </div>
 </div>

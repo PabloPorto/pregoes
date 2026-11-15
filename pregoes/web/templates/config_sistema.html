@@ -1,4 +1,19 @@
 {# Aba Sistema: fatos para o suporte. Só leitura — nenhuma senha ou chave. #}
+<form class="cartao" action="/configuracoes/ritmo" method="post" data-async>
+  <div class="cab"><h2>Velocidade da busca de preços</h2></div>
+  <div class="corpo">
+    <p class="mudo">Os sites dos fornecedores param de responder por 5 minutos depois de cerca de {{ limite_consultas }} consultas seguidas. Há dois jeitos de conviver com isso:</p>
+    <div class="ritmos">
+      <label class="ritmo"><input type="radio" name="ritmo" value="rapido" {{ 'checked' if ritmo == 'rapido' }}>
+        <span><b>Rápida</b> <span class="mudo">— vai até o limite, espera os 5 minutos e continua sozinha. Um edital de {{ itens_exemplo }} itens leva {{ tempo_rapido }}.</span></span></label>
+      <label class="ritmo"><input type="radio" name="ritmo" value="seguro" {{ 'checked' if ritmo == 'seguro' }}>
+        <span><b>Segura</b> <span class="mudo">— fica abaixo do limite, sem nunca ser pausada pelos sites. O mesmo edital leva {{ tempo_seguro }}.</span></span></label>
+    </div>
+  </div>
+  <div class="pe"><button class="btn primario" type="submit">Salvar</button>
+    <span class="mudo pequeno">Nenhuma das duas perde item. Vale na hora, inclusive para uma busca em andamento.</span></div>
+</form>
+
 <div class="cartao">
   <div class="cab"><h2>Sobre esta instalação</h2></div>
   <div class="corpo">

@@ -66,13 +66,15 @@ class Tarefa:
         return self._cancelar.is_set()
 
     def restante_s(self) -> Optional[float]:
-        """Estimativa pelo ritmo dos últimos 5 min (o lote começa rápido e
-        depois é dosado pelo limite dos sites — a média desde o início
-        prometeria minutos quando falta mais de hora). None = sem base."""
+        """Estimativa pelo ritmo dos últimos 10 min — um ciclo inteiro do
+        limite dos sites nos dois ritmos (leva + espera, ou rajada + pausa de 5
+        min). Menos que isso oscila entre "minutos" e "horas" conforme pega
+        só a rajada ou só a pausa; a média desde o início prometeria minutos
+        quando falta mais de hora. None = sem base."""
         if self.estado != "rodando" or not self._amostras or self.fracao >= 1:
             return None
         agora = self._amostras[-1][0]
-        t0, f0 = next((a for a in self._amostras if agora - a[0] <= 300), self._amostras[-1])
+        t0, f0 = self._amostras[0]      # `atualizar` guarda só os últimos 600 s
         if agora - t0 < 120 or self.fracao <= f0:
             return None
         return (1.0 - self.fracao) * (agora - t0) / (self.fracao - f0)

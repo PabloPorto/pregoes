@@ -190,6 +190,25 @@ manual avisa na hora). Regra de ouro: **resposta sem produtos só vira "não
 achou" se for uma página de busca de verdade.** Não subir o teto sem novo teste
 de carga contando respostas com produtos (não status HTTP).
 
+**Ritmo do lote (2026-11-15, Q20).** Há dois, e a escolha é do responsável em
+Configurações → Sistema (`credenciais.carregar_ritmo_busca`; sem escolha vale
+`config.SCRAPER_RITMO_PADRAO`); `scraper.ritmo_da_busca()` é lido a cada
+consulta, então trocar vale na hora:
+- `seguro` — a janela acima: nunca é bloqueado, ~8 consultas/min.
+- `rapido` — não passa pela janela: consulta até o site bloquear (~100ª),
+  pausa o tamanho do bloqueio (`SCRAPER_BLOQUEIO_SEGUNDOS`, 310 s) e continua;
+  se o site ainda bloquear, uma sonda a cada 30 s. ~15 consultas/min.
+Nos dois a consulta bloqueada é REPETIDA (nunca vira "não achou"). Quem decide
+"bloqueio novo → pausa inteira" ou "ainda o mesmo → só a sonda" é o estado
+compartilhado `_FreioDeConsultas.bloqueou`, não cada thread. A busca manual
+com o lote em pausa não consulta o site: avisa em quantos minutos tentar.
+
+**Busca que sobrevive ao reinício do serviço (interface web).** As tarefas
+vivem na memória e o lote leva horas. Enquanto a busca roda fica a marca
+`data/rascunhos/<slug>.busca`; ao subir, `servico_busca.
+retomar_buscas_interrompidas` recomeça as marcadas (o que já foi consultado
+responde do cache de 2 dias). No máximo 2 retomadas por busca.
+
 **Confiabilidade medida (edital real da especialidade do cliente):**
 ~88-90% certa para piloto supervisionado, após o sprint pré-piloto de
 correções. Nos itens sem correspondência diz "não encontrado" (não inventa).

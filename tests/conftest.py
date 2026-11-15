@@ -52,6 +52,10 @@ def _sem_espera_de_consultas(monkeypatch):
     monkeypatch.setattr(scraper, "_janela",
                         scraper._JanelaDeConsultas(10**9, 300))
     monkeypatch.setattr(scraper, "_freio", scraper._FreioDeConsultas())
+    # As pausas do bloqueio (5 min) e das sondas (30 s) são reais em produção;
+    # teste nenhum pode dormir nelas. Quem testa a pausa mede o que foi pedido.
+    monkeypatch.setattr(scraper, "_PAUSA_LIMITE_S", 0.0)
+    monkeypatch.setattr(scraper, "_SONDA_LIMITE_S", 0.0)
 
 
 # 4) Interface web (pregoes/web): cada teste ganha uma pasta de dados VAZIA e
