@@ -26,6 +26,10 @@ data/pregoes_seed.db-wal
 data/backups/
 data/pregoes.log
 data/pregoes.log.*
+data/console.log
+# Rascunhos (autosave) dos pregões em andamento — dados do cliente
+data/rascunhos/
+data/rascunho.pkl
 
 # Relatórios de diagnóstico da busca (gerados em runtime, podem conter
 # descrições de editais reais do cliente — não versionar)

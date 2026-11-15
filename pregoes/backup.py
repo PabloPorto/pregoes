@@ -13,9 +13,11 @@ from __future__ import annotations
 import os
 import shutil
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import zipfile
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -28,10 +30,19 @@ _log = logconf.get_logger("backup")
 NOME_BACKUP_EXTERNO = "Pregoes_backup.zip"
 
 
+# Pastas de data/ que entram no backup, além do banco e das credenciais.
+# rascunhos = pregões guardados/em andamento; exports = planilhas já geradas
+# (a tela Histórico as baixa de novo). Entraram em 2026-10: no servidor, este
+# zip é a ÚNICA cópia fora da máquina — sem elas, perder a VPS levaria junto o
+# trabalho em andamento e as planilhas entregues.
+PASTAS_NO_BACKUP = ("historico", "rascunhos", "exports")
+
+
 def fazer_backup_externo(destino_dir: "str | Path | None" = None) -> Optional[Path]:
-    """Grava um backup COMPLETO (banco + credenciais + histórico) numa pasta
-    EXTERNA — tipicamente uma pasta do Google Drive na máquina do cliente, que
-    sincroniza para a nuvem sozinha. É a proteção contra pane/perda do disco C:.
+    """Grava um backup COMPLETO (banco + credenciais + PASTAS_NO_BACKUP) numa
+    pasta EXTERNA — no Windows, uma pasta do Google Drive que sincroniza sozinha;
+    no servidor, uma pasta local que o deploy/backup_drive.sh envia ao Drive.
+    É a proteção contra pane/perda do disco.
 
     O app NÃO fala com a API do Google — só grava um `.zip` numa pasta LOCAL que
     o Google Drive Desktop sincroniza (a conta é do cliente). Best-effort: NUNCA
@@ -59,7 +70,7 @@ def fazer_backup_externo(destino_dir: "str | Path | None" = None) -> Optional[Pa
                     sqlite3.connect(str(db_snap)) as _dst:
                 _src.backup(_dst)
 
-        # 2) Zip: banco + credenciais + histórico. Escreve num `.part` na PRÓPRIA
+        # 2) Zip: banco + credenciais + pastas. Escreve num `.part` na PRÓPRIA
         #    pasta destino (mesmo sistema de arquivos) e faz replace ATÔMICO —
         #    o Google Drive nunca sincroniza um zip pela metade.
         with zipfile.ZipFile(zip_part, "w", zipfile.ZIP_DEFLATED) as z:
@@ -67,12 +78,13 @@ def fazer_backup_externo(destino_dir: "str | Path | None" = None) -> Optional[Pa
                 z.write(db_snap, "data/pregoes.db")
             if Path(credenciais.CAMINHO).exists():
                 z.write(credenciais.CAMINHO, "data/credenciais.json")
-            hist = Path(config.HISTORICO_DIR)
-            if hist.is_dir():
-                for arq in hist.rglob("*"):
-                    if arq.is_file():
-                        z.write(arq, str(Path("data/historico")
-                                         / arq.relative_to(hist)))
+            for nome in PASTAS_NO_BACKUP:
+                pasta = Path(config.DATA_DIR) / nome
+                if pasta.is_dir():
+                    for arq in pasta.rglob("*"):
+                        if arq.is_file():
+                            z.write(arq, (Path("data") / nome
+                                          / arq.relative_to(pasta)).as_posix())
         destino = destino_dir / NOME_BACKUP_EXTERNO
         os.replace(zip_part, destino)
         _log.info("Backup externo gravado: %s", destino)
@@ -87,6 +99,51 @@ def fazer_backup_externo(destino_dir: "str | Path | None" = None) -> Optional[Pa
     finally:
         if tmp_dir is not None:
             shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+# === Servidor: backup no Google Drive do responsável (deploy/backup_drive.sh) ===
+# No servidor não há Google Drive Desktop: o script gera o mesmo zip numa pasta
+# local e o rclone envia ao Drive (todo dia às 03:00 pelo pregoes-backup.timer).
+PASTA_BACKUP_SERVIDOR = Path.home() / "backup-drive"
+_ULTIMO_ENVIO = "ultimo_envio.txt"      # gravado pelo script após enviar
+
+
+def _script_backup_servidor() -> Path:
+    return config.BASE_DIR / "deploy" / "backup_drive.sh"
+
+
+def ultimo_envio_servidor() -> Optional[datetime]:
+    """Quando o último backup chegou ao Drive (None se nunca, ou ilegível)."""
+    try:
+        texto = (PASTA_BACKUP_SERVIDOR / _ULTIMO_ENVIO).read_text(encoding="utf-8")
+        return datetime.fromisoformat(texto.strip())
+    except (OSError, ValueError):
+        return None
+
+
+def enviar_backup_servidor() -> bool:
+    """Roda o envio ao Drive na hora. Nunca levanta: falha vira log + False."""
+    try:
+        r = subprocess.run(["bash", str(_script_backup_servidor())],
+                           capture_output=True, text=True, timeout=600)
+    except Exception:
+        _log.warning("Backup no Google Drive não rodou", exc_info=True)
+        return False
+    if r.returncode != 0:
+        _log.warning("Backup no Google Drive falhou (código %s): %s",
+                     r.returncode, (r.stderr or r.stdout).strip()[-800:])
+        return False
+    _log.info("Backup no Google Drive: %s", r.stdout.strip()[-200:])
+    return True
+
+
+def backup_externo_agora() -> bool:
+    """Cópia FORA da máquina, no meio do uso (ex.: logo após gerar uma
+    planilha). No servidor, envia ao Drive do responsável; no .exe, grava na pasta
+    do Google Drive configurada. Best-effort, nunca levanta."""
+    if config.MODO_SERVIDOR:
+        return enviar_backup_servidor()
+    return fazer_backup_externo() is not None
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -301,6 +301,16 @@ def test_idempotencia_path_name_estavel(tmp_path):
     assert f"import:{p1.name}" == f"import:{p2.name}"
 
 
+# === Datas no horário de Brasília (o SQLite grava em UTC) ===
+
+def test_data_amigavel_converte_utc_para_brasilia():
+    # 18:57 UTC = 15:57 em Brasília; virada de dia também converte.
+    assert app._data_amigavel("2026-10-15 18:57:03") == "15/10 15:57"
+    assert app._data_amigavel("2026-10-16 01:30:00") == "15/10 22:30"
+    assert app._data_amigavel(None) == "data desconhecida"
+    assert app._data_amigavel("ontem") == "ontem"   # formato estranho: texto cru
+
+
 # === Dedup de candidatos duplicados na seleção ===
 
 def test_dedup_opcoes_remove_duplicados_preserva_ordem():
@@ -693,6 +703,152 @@ def test_rascunho_salva_apagao_e_restaura_identico(monkeypatch, tmp_path):
     ss.clear()
 
 
+def _aba_backup_com(monkeypatch, ultimo):
+    from pregoes import backup
+    monkeypatch.setattr(backup, "ultimo_envio_servidor", lambda: ultimo)
+    avisos = []
+    monkeypatch.setattr(app.style, "bloco_aviso",
+                        lambda msg, tipo="info": avisos.append((tipo, msg)))
+    app._aba_backup_servidor()
+    return [t for t, _ in avisos]
+
+
+def test_aba_backup_servidor_sem_envio_ainda_avisa(monkeypatch):
+    assert _aba_backup_com(monkeypatch, None) == ["info", "warning"]
+
+
+def test_aba_backup_servidor_envio_recente_ok(monkeypatch):
+    from datetime import datetime, timedelta
+    assert _aba_backup_com(monkeypatch, datetime.now() - timedelta(hours=5))         == ["info", "success"]
+
+
+def test_aba_backup_servidor_envio_velho_alerta(monkeypatch):
+    from datetime import datetime, timedelta
+    assert _aba_backup_com(monkeypatch, datetime.now() - timedelta(days=3))         == ["info", "danger"]
+
+
+def test_erro_inesperado_na_tela_vira_aviso_em_portugues(monkeypatch):
+    """Erro não tratado numa tela: aviso PT-BR com saída, e o script segue
+    (o autosave do rascunho roda depois) — não a tela de erro do Streamlit."""
+    def _quebra():
+        raise ValueError("boom")
+    avisos = []
+    monkeypatch.setitem(app.TELAS, "revisao", _quebra)
+    monkeypatch.setattr(app.style, "bloco_aviso",
+                        lambda msg, tipo="info": avisos.append((tipo, msg)))
+    ss = app.st.session_state
+    ss.clear(); ss["tela"] = "revisao"
+    app._renderizar_tela()                            # não levanta
+    assert avisos and avisos[0][0] == "danger"
+    assert "Seu trabalho está salvo" in avisos[0][1]
+    ss.clear()
+
+
+def test_rede_de_seguranca_nao_engole_rerun_nem_stop(monkeypatch):
+    # st.rerun()/st.stop() são BaseException no Streamlit: têm que passar.
+    class _Rerun(BaseException):
+        pass
+
+    def _tela_que_navega():
+        raise _Rerun()
+    monkeypatch.setitem(app.TELAS, "revisao", _tela_que_navega)
+    ss = app.st.session_state
+    ss.clear(); ss["tela"] = "revisao"
+    with pytest.raises(_Rerun):
+        app._renderizar_tela()
+    ss.clear()
+
+
+def test_tela_desconhecida_cai_no_inicio(monkeypatch):
+    # Rascunho antigo com nome de tela que não existe mais não pode quebrar.
+    chamadas = []
+    monkeypatch.setattr(app, "tela_home", lambda: chamadas.append("home"))
+    ss = app.st.session_state
+    ss.clear(); ss["tela"] = "tela_que_nao_existe"
+    app._renderizar_tela()
+    assert chamadas == ["home"]
+    ss.clear()
+
+
+def test_continuar_pregao_parado_na_revisao_nao_quebra(monkeypatch, tmp_path):
+    """O rascunho NÃO guarda df_editavel e a restauração removia a chave da
+    sessão: a tela de revisão lia st.session_state.df_editavel e quebrava com
+    AttributeError ao 'Continuar' (ou retomar pela URL) um pregão parado ali."""
+    rascunho = _isolar_rascunhos(monkeypatch, tmp_path)
+    ss = app.st.session_state
+    ss.clear()
+    ss["extracao"] = {"itens": ["LUVA"]}             # extraído, ainda sem busca
+    ss["df_editavel"] = "tabela-em-edicao"
+    ss["orgao"] = "Prefeitura"; ss["numero"] = "004/2026"; ss["tela"] = "revisao"
+    app._salvar_rascunho()
+    slug = ss["_rascunho_slug"]
+
+    ss.clear()                                       # sessão nova (boot)
+    ss["tela"] = "home"; ss["extracao"] = None; ss["df_editavel"] = None
+    app._restaurar_rascunho(rascunho.carregar_pregao(slug), slug)
+    assert ss["tela"] == "revisao"
+    assert ss["extracao"] == {"itens": ["LUVA"]}
+    assert "df_editavel" in ss and ss["df_editavel"] is None   # revisão reconstrói
+    ss.clear()
+
+
+def test_url_acompanha_o_pregao_carregado(monkeypatch, tmp_path):
+    """Com um pregão carregado, a URL guarda ?pregao=<slug> (é o que sobrevive
+    ao recarregar a aba); ao descartar o pregão, o parâmetro sai."""
+    _isolar_rascunhos(monkeypatch, tmp_path)
+    qp = {}
+    monkeypatch.setattr(app.st, "query_params", qp, raising=False)
+    ss = app.st.session_state
+    ss.clear()
+    _pregao_na_sessao(ss, "Prefeitura", "002/2026")
+
+    app._salvar_rascunho()
+    app._marcar_pregao_na_url()
+    assert qp["pregao"] == ss["_rascunho_slug"]
+
+    app._limpar_pregao()
+    app._marcar_pregao_na_url()
+    assert "pregao" not in qp
+    ss.clear()
+
+
+def test_aba_recarregada_retoma_o_pregao_da_url(monkeypatch, tmp_path):
+    """Relato de campo 2026-10: recarregar a aba (Chrome descarta abas em
+    segundo plano) criava sessão nova e jogava o operador no Início. Com o slug
+    na URL, a sessão nova restaura o pregão e volta à tela de trabalho."""
+    _isolar_rascunhos(monkeypatch, tmp_path)
+    qp = {}
+    monkeypatch.setattr(app.st, "query_params", qp, raising=False)
+    ss = app.st.session_state
+    ss.clear()
+    _pregao_na_sessao(ss, "Prefeitura", "003/2026", codigo="7777")
+    app._salvar_rascunho()
+    app._marcar_pregao_na_url()
+
+    ss.clear(); ss["tela"] = "home"                   # aba recarregada
+    app._retomar_pregao_da_url()
+    assert ss["tela"] == "busca_precos"
+    assert ss["selecoes"][0].codigo_fornecedor == "7777"
+    assert qp["pregao"] == ss["_rascunho_slug"]
+    ss.clear()
+
+
+@pytest.mark.parametrize("slug", ["nao-existe", "../../data/pregoes", "X"])
+def test_url_com_pregao_inexistente_ou_invalido_fica_no_inicio(monkeypatch, tmp_path, slug):
+    """Rascunho descartado em outra aba, ou URL adulterada: não restaura nada,
+    não lê fora da pasta de rascunhos, limpa a URL e segue no Início."""
+    _isolar_rascunhos(monkeypatch, tmp_path)
+    qp = {"pregao": slug}
+    monkeypatch.setattr(app.st, "query_params", qp, raising=False)
+    ss = app.st.session_state
+    ss.clear(); ss["tela"] = "home"
+    app._retomar_pregao_da_url()
+    assert ss["tela"] == "home"
+    assert "itens_revisados" not in ss
+    assert "pregao" not in qp
+    ss.clear()
+
+
 def test_rascunho_nao_salva_sem_pregao_em_andamento(monkeypatch, tmp_path):
     rascunho = _isolar_rascunhos(monkeypatch, tmp_path)
     app.st.session_state.clear()                      # nada em andamento
@@ -1031,3 +1187,24 @@ def test_avisos_lote_vazio_fornecedor_zerado_gera_aviso():
     assert app._avisos_lote_vazio([("almeida", 5, 1, 4)], 10) == []
     # match só por variação ainda é resultado (ok=0, var>0) — sem aviso
     assert app._avisos_lote_vazio([("dantas", 0, 3, 7)], 10) == []
+
+
+def test_avisos_recusa_um_por_fornecedor_com_contagem():
+    """Site recusou consultas (405, campo 2026-11): o operador vê quantos itens
+    ficaram sem preço e o que fazer — não só o painel técnico fechado."""
+    from pregoes.scraper import ErroBusca, _MENSAGEM_RECUSA
+    erros = [ErroBusca(i, "almeida", "x", f"{_MENSAGEM_RECUSA} (excesso)") for i in range(3)]
+    erros += [ErroBusca(9, "dantas", "y", "TimeoutError: layout mudou")]
+    avisos = app._avisos_recusa(erros)
+    assert len(avisos) == 1
+    assert "Almeida" in avisos[0] and "3 itens" in avisos[0]
+    assert "Buscar preços dos itens sem resultado" in avisos[0]
+    assert app._avisos_recusa([]) == []
+
+
+def test_tempo_restante_so_aparece_com_progresso_suficiente():
+    assert app._tempo_restante(10, 0.5) == ""      # cedo demais
+    assert app._tempo_restante(600, 0.02) == ""    # pouco progresso: palpite ruim
+    assert app._tempo_restante(600, 1.0) == ""     # acabou
+    assert app._tempo_restante(600, 0.25) == "faltam ~30 min"
+    assert app._tempo_restante(40, 0.9) == "faltam ~1 min"   # nunca "~0 min"

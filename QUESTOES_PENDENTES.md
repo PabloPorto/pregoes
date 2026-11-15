@@ -4,6 +4,29 @@
 
 ## STATUS 2026-06 — o que mudou desde o briefing
 
+- **RESOLVIDO (2026-11-06) — dois editais reais que o extrator não lia (v1.1.13).**
+  - *Guarnição de João Pessoa 62/2026* (138 págs.): saía com **0 itens**. A
+    quantidade fica na coluna **'Soma'** (total das colunas por quartel) e o
+    preço em **'VALOR ESTIMADO'** — nenhum dos dois estava no vocabulário. Além
+    disso: a lista do órgão participante (itens 261–420) vem sem cabeçalho e com
+    7 colunas em vez de 13; as 60 páginas finais (estimativas mín./máx. por
+    quartel) repetiam os 260 itens com quantidades erradas; e a descrição que
+    atravessa a página virava um item 'duvidoso' a mais. Agora: 420/420 itens,
+    100% de confiança, e Σ quantidade × preço bate com os totais do edital
+    (R$ 6.288.442,08 + R$ 479.627,78).
+  - *Edital PE SRP 020/2026* (Cotolé do Rocha): coluna única 'Item - Código -
+    Descrição' → os 717 itens saíam **sem número**, com '1 - 0056802 - 1 -
+    0045799 -' na frente do nome e 6 duplicados (723). Agora 717/717 numerados,
+    descrição limpa, 0 divergências de quantidade contra o texto do PDF.
+  - Default assumido: 'soma' só vale como quantidade quando nenhuma coluna diz
+    'quantidade'; a emenda de continuação só acontece em tabela com coluna de
+    nº do item. Testes em `tests/test_fix_extrator.py`.
+  - **Em aberto (precisa dos logs do servidor):** no 20/2026 a busca voltou 0
+    resultado nos 654 itens nos DOIS fornecedores, enquanto o 15/2026 (03/11)
+    achou 54/57. Não é a descrição (a query principal sai igual com ou sem o
+    prefixo) — suspeita: janela de instabilidade/sessão dos sites durante o
+    lote longo. Conferir `journalctl -u pregoes` / `data/pregoes.log` do dia.
+
 - **RESOLVIDO (2026-06-25) — gerar a planilha não concluía o pregão (modal nagava).**
   Depois de gerar a matriz, o sistema seguia tratando o pregão como "em
   andamento" e mostrava o modal "Começar um novo pregão? (vai descartar…)".
@@ -801,3 +824,69 @@ de proposta (sem a tabela com preço) sairia com esses itens mal-parseados.
 referência). **Resolver se aparecer:** ensinar o detector de cabeçalho a mapear
 a coluna MARCA/MODELO (alinhar UNIDADE/QUANTIDADE/PREÇO corretamente na tabela
 de 7 colunas).
+
+### Q19. Sair da máquina única para um servidor — ✅ DECIDIDA (2026-10-15, pelo responsável)
+
+**Contexto.** O cliente precisa usar o sistema em mais de um computador do
+escritório, e manter o `.exe` (build + instalação à distância) ficou caro. O
+responsável está fora do país, sem acesso à máquina do cliente. Plano e roteiro
+em **`PLANO_SERVIDOR.md`**. Revisa a decisão fechada "Onde roda: local na
+máquina do cliente" (CLAUDE.md §7) e o princípio de não levar dados para fora da
+máquina (§9) — atualizar o CLAUDE.md quando o servidor for validado.
+
+**Decisão (o responsável tem autonomia para decidir pelo cliente):**
+1. VPS Hostinger KVM 1 em São Paulo, 1 mês no plano mensal para validar.
+   Descartados: Oracle Free (cadastro recusado), AWS (créditos de só 6 meses),
+   GCP (1 GB de RAM, só EUA), PC do escritório (exige configurar no local).
+2. Acesso pelo Cloudflare Tunnel + Access (código no e-mail, só e-mails
+   autorizados), com domínio `.com.br` próprio.
+3. Um único login por fornecedor: a fila única do scraper mantém UMA sessão por
+   fornecedor, como hoje.
+4. Sem migração: o servidor começa do zero — o cliente não tem dados que
+   precisem ser levados (decidido em 2026-10-15).
+5. Caminho mais simples sempre.
+
+**Condição.** Vale se o teste de IP (Fase 1) passar; se os fornecedores
+bloquearem o IP da VPS, pedir reembolso e repensar.
+
+### Q20. Fornecedores limitam consultas (405) — ✅ ritmo calibrado (v1.1.15); 🟡 decisão de velocidade em aberto
+
+**Contexto.** Desde 30/10 toda busca em LOTE falhava (12 tentativas no log; 0
+de 654 no Pregão 20/2026). Os preços do Itatuba (03/11) saíram da busca MANUAL.
+
+**Medição (servidor, 2026-11-06/07, os 2 fornecedores juntos, 4 threads cada).**
+A recusa é um firewall da AWS (`awselb`, página "Human Verification") que
+devolve **405** às consultas LOGADAS. Login novo **não** escapa; sem cookie
+segue 200. Por ritmo, por fornecedor:
+
+| Ritmo | Resultado |
+|---|---|
+| 2/s | bloqueou com ~420 consultas (3,5 min) |
+| 1/s | bloqueou com ~374 (6 min) |
+| 0,65/s | bloqueou com ~400 (10,4 min) |
+| **0,5/s** | **25 min, 757 consultas, nenhum bloqueio** (717 itens reais do Edital 020) |
+
+Tudo bate com **~350–400 consultas por fornecedor numa janela de ~10 min**; o
+bloqueio dura ~4–7 min depois que o ritmo para. Não deu para separar "por IP"
+de "por conta" (só temos um servidor e uma conta por fornecedor) — mudar de VPS
+pode ou não mudar algo; não conte com isso.
+
+**Já corrigido:** v1.1.14 — a recusa não descarta mais o que foi achado, o lote
+desiste rápido e a tela avisa. v1.1.15 — ritmo do lote **0,5 consulta/s por
+fornecedor** (`SCRAPER_MAX_REQ_POR_SEGUNDO`, ~20% abaixo do limite) e o painel
+mostra "faltam ~N min".
+
+**Custo:** com itens reais, um item gasta **~3,1 consultas por fornecedor**
+(quem acha, acha na 1ª consulta; quem não acha tenta as 4 camadas). Dá ~10
+itens/min: edital de 650 itens ≈ **1 h**, mas sai completo numa rodada só.
+Cuidados: dois operadores rodando lote ao mesmo tempo somam consultas e voltam
+a estourar; busca manual durante o lote também conta (pouco).
+
+**Decisão em aberto (responsável/cliente) — velocidade:** no teste, **85–95% dos
+itens achados saíram da 1ª consulta** (Almeida 70 de 83, Dantas 75 de 79); as camadas de reserva (2ª–4ª) acharam os
+outros 5–15% mas gastaram ~2/3 das consultas, quase todas em itens que no fim não
+existiam no fornecedor. Opções: (a) manter como está (~1 h por edital grande,
+máxima cobertura) — **default**; (b) o lote tenta só a 1ª e a 2ª camada e deixa o
+resto para "Buscar preços dos itens sem resultado" — ~2× mais rápido, perde
+parte desses 5–15% na 1ª rodada. Precisa: o cliente dizer se 1 h por edital grande
+é aceitável.

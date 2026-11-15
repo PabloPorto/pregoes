@@ -262,3 +262,282 @@ def test_dedup_mesmo_numero_duas_completas_distintas_nao_funde():
     b = _it_dedup(7, "CABO B DIFERENTE", 20, "M", None)
     out = _deduplicar_itens([a, b])
     assert len(out) == 2   # ambas com dados → preserva
+
+
+# ---------------------------------------------------------------------------
+# Cabeçalho mesclado e linha truncada (edital de Catingueira 25/2026, campo
+# 2026-10): 64 de 67 itens saíam sem nº e sem quantidade, e o item 46 sumia.
+# ---------------------------------------------------------------------------
+
+# Como o pdfplumber devolve a tabela: 'ITEM' e 'QUANT.' ocupam 2 colunas da
+# grade (None = coluna coberta pela mesclagem) e o valor cai ora numa, ora
+# noutra.
+_CAB_MESCLADO = ['ITEM', None, 'ESPECIFICAÇÃO', 'UNID', 'QUANT.', None,
+                 'Preço\nmáximo', 'TOTAL']
+
+
+def _tabela(pagina, linhas):
+    from pregoes.extrator import _TabelaBruta
+    return _TabelaBruta(pagina=pagina, indice_pagina=0, linhas=linhas)
+
+
+def test_cabecalho_mesclado_le_numero_e_quantidade_das_duas_colunas():
+    from pregoes.extrator import processar_tabelas_brutas
+    pag1 = _tabela(19, [
+        _CAB_MESCLADO,
+        ['', '1', "ALICATE UNIVERSAL 8'' ( SIMPLES )", 'Unidade', '', '15', 'R$ 43,77', 'R$ 656,55'],
+        ['3', None, 'ALAVANCA DE FERRO PEDREIRO 1 X 1,50 METROS', 'Unidade', '6', None, 'R$ 159,99', 'R$ 959,94'],
+    ])
+    # Continuação na página seguinte: sem cabeçalho, herda mapa E reservas.
+    pag2 = _tabela(20, [
+        ['', '47', 'PICARETA EM AÇO', 'Unidade', '', '10', 'R$ 102,87', 'R$ 1.028,70', None, None],
+    ])
+    r = processar_tabelas_brutas([pag1, pag2], arquivo="x.pdf")
+    lidos = [(i.item_numero, i.quantidade) for i in r.itens]
+    assert lidos == [(1, 15.0), (3, 6.0), (47, 10.0)]
+
+
+def test_cabecalho_mesclado_nunca_le_a_coluna_vizinha_com_cabecalho_proprio():
+    """Sem quantidade em nenhuma das colunas de QUANT., o preço ao lado NÃO
+    pode virar quantidade."""
+    from pregoes.extrator import _colunas_mescladas, _extrair_item_da_linha
+    mapa = {"codigo_orgao": 0, "descricao": 2, "unidade": 3, "quantidade": 4,
+            "valor_referencia": 6}
+    reservas = _colunas_mescladas([_CAB_MESCLADO], mapa)
+    assert reservas == {"codigo_orgao": (1,), "quantidade": (5,)}
+    it = _extrair_item_da_linha(
+        ['', '9', 'BROXA P/PINTURA 15 CM', 'Unidade', '', '', 'R$ 9,23', ''],
+        mapa, 19, reservas)
+    assert it.item_numero == 9 and it.quantidade is None
+
+
+def test_cabecalho_sem_mesclagem_nao_cria_reserva():
+    from pregoes.extrator import _colunas_mescladas
+    cab = ['ITEM', 'DESCRIÇÃO', 'UNID', 'QUANT.', 'VALOR UNIT.']
+    mapa = {"codigo_orgao": 0, "descricao": 1, "unidade": 2, "quantidade": 3,
+            "valor_referencia": 4}
+    assert _colunas_mescladas([cab], mapa) == {}
+
+
+def _chars(texto, x0, top, larg=5.0, alt=9.0):
+    """Caracteres no formato do pdfplumber (só o que _texto_na_area usa)."""
+    out = []
+    for k, ch in enumerate(texto):
+        cx = x0 + k * larg
+        out.append({"text": ch, "x0": cx, "x1": cx + larg, "top": top,
+                    "bottom": top + alt, "upright": True, "size": alt,
+                    "doctop": top, "fontname": "F", "adv": larg, "matrix": (1, 0, 0, 1, cx, top)})
+    return out
+
+
+def test_linha_truncada_pela_quebra_de_pagina_e_reconstruida():
+    """1ª linha da página com a grade incompleta: só as células das 2 primeiras
+    colunas existem; o resto é lido na posição das colunas das demais linhas."""
+    from pregoes.extrator import _reparar_linhas_truncadas
+    cheia = [(45, 88, 49, 99), (49, 88, 73, 99), (73, 88, 325, 99),
+             (325, 88, 373, 99), (373, 88, 418, 99)]
+    celulas = [
+        [(45, 77, 49, 88), (49, 77, 73, 88), None, None, None],   # truncada
+        cheia,
+    ]
+    faixas = [(45, 77, 418, 88), (45, 88, 418, 99)]
+    linhas = [['', '46', None, None, None], ['', '47', 'PICARETA', 'Unidade', '10']]
+    chars = (_chars("PENEIRA", 80, 78) + _chars("Unidade", 330, 78)
+             + _chars("10", 390, 78))
+    out = _reparar_linhas_truncadas(linhas, celulas, faixas, chars)
+    assert out[0] == ['', '46', 'PENEIRA', 'Unidade', '10']
+    assert out[1] == ['', '47', 'PICARETA', 'Unidade', '10']   # intacta
+
+
+def test_linha_com_celula_mesclada_nao_e_quebrada_em_colunas():
+    """Título que ocupa a linha toda (célula única cobrindo as colunas) fica
+    como está — não é linha truncada."""
+    from pregoes.extrator import _reparar_linhas_truncadas
+    cheia = [(45, 88, 73, 99), (73, 88, 325, 99), (325, 88, 418, 99)]
+    celulas = [[(45, 77, 418, 88), None, None], cheia]
+    faixas = [(45, 77, 418, 88), (45, 88, 418, 99)]
+    linhas = [['LOTE 1 - FERRAMENTAS', None, None], ['1', 'PICARETA', '10']]
+    chars = _chars("LOTE 1 - FERRAMENTAS", 100, 78)
+    out = _reparar_linhas_truncadas(linhas, celulas, faixas, chars)
+    assert out[0] == ['LOTE 1 - FERRAMENTAS', None, None]
+
+
+def test_celula_mesclada_na_vertical_nao_e_picotada():
+    """Descrição de várias linhas que desce sobre a linha seguinte (rowspan):
+    a 2ª linha vem sem a célula da descrição, mas ela está COBERTA pela de
+    cima — ler a faixa da 2ª linha picotava a descrição (regressão vista em
+    edital real ao validar o reparo)."""
+    from pregoes.extrator import _reparar_linhas_truncadas
+    celulas = [
+        [(45, 77, 73, 88), (73, 77, 325, 99), (325, 77, 373, 88)],   # descrição alta
+        [(45, 88, 73, 99), None, (325, 88, 373, 99)],
+        [(45, 99, 73, 110), (73, 99, 325, 110), (325, 99, 373, 110)],
+    ]
+    faixas = [(45, 77, 373, 99), (45, 88, 373, 99), (45, 99, 373, 110)]
+    linhas = [['1', 'DOBRADIÇA DE 04 POLEGADAS (REFORÇADA', '982'],
+              ['', None, ''],
+              ['2', 'CILINDRO', '10']]
+    chars = _chars("PAREDE GROSSA)", 80, 89)
+    out = _reparar_linhas_truncadas(linhas, celulas, faixas, chars)
+    assert out[1] == ['', None, '']
+
+
+# ---------------------------------------------------------------------------
+# Guarnição de João Pessoa 62/2026 (campo 2026-11): 138 páginas, 0 itens —
+# quantidade só na coluna 'Soma', lista do órgão participante sem cabeçalho e
+# com outra largura, e 60 páginas finais de estimativas por quartel.
+# ---------------------------------------------------------------------------
+
+_CAB_GUARNICAO = ['ITEM', 'DESCRIÇÃO/ESPECIFICAÇÃO', 'UNID', 'CATMAT', 'B Adm Gu\nJP',
+                  '15º BI Mtz', 'HGuJP', 'Soma', 'VALOR ESTIMADO', None]
+
+
+def _linha_guarnicao(n, desc, unid, qtd, preco):
+    return [str(n), desc, unid, '243048', '1', '2', '0', str(qtd), preco, 'R$ 1,00']
+
+
+def test_quantidade_na_coluna_soma_e_preco_em_valor_estimado():
+    from pregoes.extrator import processar_tabelas_brutas
+    t = _tabela(1, [
+        _CAB_GUARNICAO,
+        [None] * 8 + ['UNITÁRIO', 'TOTAL ITEM'],
+        _linha_guarnicao(1, 'TUBO METALON, FORMATO RETANGULAR', 'PEÇA', 251, 'R$ 81,83'),
+        _linha_guarnicao(2, 'CANTONEIRA METAL FERROSO', 'BARRA', 286, 'R$ 67,60'),
+        _linha_guarnicao(3, 'ELETRODO SOLDA E-6013', 'KG', 263, 'R$ 25,00'),
+    ])
+    r = processar_tabelas_brutas([t], arquivo="x.pdf")
+    assert [(i.item_numero, i.quantidade, i.valor_referencia) for i in r.itens] == [
+        (1, 251.0, 81.83), (2, 286.0, 67.6), (3, 263.0, 25.0)]
+
+
+def test_soma_nao_vence_coluna_quantidade():
+    """'soma' é fraca: com uma coluna 'Quantidade' de verdade, ela manda."""
+    from pregoes.extrator import _identifica_cabecalho_em_linha
+    mapa = _identifica_cabecalho_em_linha(['Item', 'Descrição', 'Quantidade', 'Soma'])
+    assert mapa["quantidade"] == 2
+
+
+def test_descricao_que_quebra_a_pagina_e_emendada_no_item():
+    from pregoes.extrator import processar_tabelas_brutas
+    pag1 = _tabela(1, [
+        _CAB_GUARNICAO,
+        _linha_guarnicao(1, 'TUBO METALON, FORMATO RETANGULAR', 'PEÇA', 251, 'R$ 81,83'),
+        _linha_guarnicao(2, 'CANTONEIRA METAL FERROSO', 'BARRA', 286, 'R$ 67,60'),
+        _linha_guarnicao(5, 'MASSA PLÁSTICA, COMPOSIÇÃO BÁSICA', 'PACOTE 100', 226, 'R$ 12,85'),
+    ])
+    pag2 = _tabela(2, [
+        ['', 'COM CATALISADOR, APLICAÇÃO CERÂMICAS.', 'UND', '', '', '', '', '', '', ''],
+        _linha_guarnicao(6, 'ELETRODO SOLDA E-6013', 'KG', 263, 'R$ 25,00'),
+    ])
+    r = processar_tabelas_brutas([pag1, pag2], arquivo="x.pdf")
+    assert [i.item_numero for i in r.itens] == [1, 2, 5, 6]
+    assert r.itens[2].descricao == 'MASSA PLÁSTICA, COMPOSIÇÃO BÁSICA COM CATALISADOR, APLICAÇÃO CERÂMICAS.'
+    assert r.itens[2].unidade == 'PACOTE 100 UND'
+
+
+def test_linha_sem_numero_nao_e_emendada_quando_tabela_nao_tem_coluna_de_numero():
+    """Sem coluna de nº, uma linha sem quantidade pode ser item real com dado
+    faltando — não some dentro do item anterior."""
+    from pregoes.extrator import processar_tabelas_brutas
+    cab = ['DESCRIÇÃO', 'UNID', 'QUANTIDADE']
+    pag1 = _tabela(1, [cab, ['ALICATE UNIVERSAL 8 POL', 'UND', '10'],
+                       ['MARTELO UNHA 27MM', 'UND', '5'], ['TRENA 5 METROS', 'UND', '8']])
+    pag2 = _tabela(2, [['SERROTE 22 POLEGADAS', '', ''], ['NIVEL DE BOLHA 12', 'UND', '3']])
+    r = processar_tabelas_brutas([pag1, pag2], arquivo="x.pdf")
+    assert 'SERROTE 22 POLEGADAS' not in r.itens[2].descricao
+
+
+def test_continuacao_com_menos_colunas_realinha_pela_direita():
+    """Lista do órgão participante: sem cabeçalho e sem as colunas por quartel —
+    QTD|UNITÁRIO|TOTAL ficam coladas à direita."""
+    from pregoes.extrator import processar_tabelas_brutas
+    pag1 = _tabela(1, [
+        _CAB_GUARNICAO,
+        _linha_guarnicao(1, 'TUBO METALON, FORMATO RETANGULAR', 'PEÇA', 251, 'R$ 81,83'),
+        _linha_guarnicao(2, 'CANTONEIRA METAL FERROSO', 'BARRA', 286, 'R$ 67,60'),
+        _linha_guarnicao(3, 'ELETRODO SOLDA E-6013', 'KG', 263, 'R$ 25,00'),
+    ])
+    pag2 = _tabela(2, [
+        ['261', 'MASSA PLÁSTICA, COMPOSIÇÃO BÁSICA', 'LATA', '238514', '10', 'R$ 12,85', 'R$ 128,50'],
+        ['262', 'ELETRODO SOLDA E-6013', 'KG', '431110', '10', 'R$ 25,00', 'R$ 250,00'],
+        ['263', 'WASH PRIMER ANTICORROSIVO', 'UND', '454883', '5', 'R$ 185,00', 'R$ 925,00'],
+    ])
+    r = processar_tabelas_brutas([pag1, pag2], arquivo="x.pdf")
+    assert [(i.item_numero, i.unidade, i.quantidade, i.valor_referencia) for i in r.itens[3:]] == [
+        (261, 'LATA', 10.0, 12.85), (262, 'KG', 10.0, 25.0), (263, 'UND', 5.0, 185.0)]
+
+
+def test_tabela_com_cabecalho_proprio_sem_quantidade_quebra_a_heranca():
+    """Estimativas por quartel (mínimo/máximo, sem preço): cabeçalho próprio
+    que não é de itens — ela e as páginas seguintes não repetem os itens."""
+    from pregoes.extrator import processar_tabelas_brutas
+    pag1 = _tabela(1, [
+        _CAB_GUARNICAO,
+        _linha_guarnicao(1, 'TUBO METALON, FORMATO RETANGULAR', 'PEÇA', 251, 'R$ 81,83'),
+        _linha_guarnicao(2, 'CANTONEIRA METAL FERROSO', 'BARRA', 286, 'R$ 67,60'),
+        _linha_guarnicao(3, 'ELETRODO SOLDA E-6013', 'KG', 263, 'R$ 25,00'),
+    ])
+    estimativas = ['ITEM', 'DESCRIÇÃO/ ESPECIFICAÇÃO', 'UNID', 'B Adm Gu JP', None,
+                   '15º BIMTZ', None, 'HGU', None, 'MARINHA']
+    pag2 = _tabela(2, [estimativas,
+                       [None, None, None] + ['Req.\nMínima', 'Req.\nMáxima'] * 3 + ['Req.\nMínima'],
+                       ['1', 'TUBO METALON, FORMATO RETANGULAR', 'PEÇA', '10', '20', '20', '40', '0', '0', '3']])
+    pag3 = _tabela(3, [['2', 'CANTONEIRA METAL FERROSO', 'BARRA', '13', '25', '40', '80', '0', '0', '3']])
+    r = processar_tabelas_brutas([pag1, pag2, pag3], arquivo="x.pdf")
+    assert [(i.item_numero, i.quantidade) for i in r.itens] == [(1, 251.0), (2, 286.0), (3, 263.0)]
+
+
+def test_linha_com_grade_propria_e_relida_pelas_celulas_reais():
+    """Emenda entre a lista geral e a do participante: a linha do item 261
+    vem na grade da tabela anterior, com None onde estão quantidade e preço."""
+    from pregoes.extrator import processar_tabelas_brutas
+    pag1 = _tabela(1, [
+        _CAB_GUARNICAO,
+        _linha_guarnicao(1, 'TUBO METALON, FORMATO RETANGULAR', 'PEÇA', 251, 'R$ 81,83'),
+        _linha_guarnicao(2, 'CANTONEIRA METAL FERROSO', 'BARRA', 286, 'R$ 67,60'),
+        _linha_guarnicao(3, 'ELETRODO SOLDA E-6013', 'KG', 263, 'R$ 25,00'),
+        ['261', 'MASSA PLÁSTICA, COMPOSIÇÃO BÁSICA', 'LATA', '238514', None, '10', None,
+         None, 'R$ 12,85', 'R$ 128,50'],
+    ])
+    r = processar_tabelas_brutas([pag1], arquivo="x.pdf")
+    it = r.itens[-1]
+    assert (it.item_numero, it.unidade, it.quantidade, it.valor_referencia) == (261, 'LATA', 10.0, 12.85)
+
+
+# ---------------------------------------------------------------------------
+# Edital PE SRP 020/2026 (campo 2026-11): coluna única 'Item - Código -
+# Descrição' — 717 itens sem número e com os códigos na frente do nome.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("texto,esperado", [
+    ("1 - 0056802 - 1 - 0045799 - ABRAÇADEIRA COLAR 50 X 1/2.",
+     (1, "1 - 0056802 - 1 - 0045799", "ABRAÇADEIRA COLAR 50 X 1/2.")),
+    ("12 - 0056813 - ADITIVO 18 L", (12, "12 - 0056813", "ADITIVO 18 L")),
+    ("requer mistura, com dispositivo anti- entupimento", (None, None,
+     "requer mistura, com dispositivo anti- entupimento")),
+    ("1/2 POL ADAPTADOR", (None, None, "1/2 POL ADAPTADOR")),
+])
+def test_separar_prefixo_numerico(texto, esperado):
+    from pregoes.extrator import _separar_prefixo_numerico
+    assert _separar_prefixo_numerico(texto) == esperado
+
+
+def test_coluna_item_codigo_descricao_separa_numero_e_emenda_continuacao():
+    from pregoes.extrator import processar_tabelas_brutas
+    cab = ['Item - Código - Descrição', 'Unidade', 'Quantidade', '', 'Vlr. Unit.', '']
+    pag1 = _tabela(17, [
+        cab, [None, None, None, None, 'Máximo', None],
+        ['1 - 0056802 - 1 - 0045799 - ABRAÇADEIRA COLAR 50 X 1/2.', 'UND', '100', '', None, None],
+        ['2 - 0056803 - 2 - 0045800 - ABRAÇADEIRA COLAR 50 X 3/4.', 'UND', '100', '', None, None],
+        ['3 - 0056804 - 3 - 0045801 - COLA INSTANTANEA 100G, adesivo', 'UND', '150', '', None, None],
+    ])
+    pag2 = _tabela(18, [
+        ['requer mistura, ótima qualidade.', '', '', ''],
+        ['4 - 0056805 - 4 - 0045802 - ABRAÇADEIRA COLAR 60 X 3/4.', 'UND', '50', ''],
+    ])
+    r = processar_tabelas_brutas([pag1, pag2], arquivo="x.pdf")
+    assert [(i.item_numero, i.quantidade) for i in r.itens] == [
+        (1, 100.0), (2, 100.0), (3, 150.0), (4, 50.0)]
+    assert r.itens[0].descricao == 'ABRAÇADEIRA COLAR 50 X 1/2.'
+    assert r.itens[2].descricao == 'COLA INSTANTANEA 100G, adesivo requer mistura, ótima qualidade.'
+    assert r.confianca_global == 1.0

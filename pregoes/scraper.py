@@ -32,6 +32,11 @@ ao serial — mais simples, sem regressão. Quando o cache estiver populado
 (TTL 2d), o segundo edital do dia roda quase instantâneo. Se for dor real
 no volume alvo, refatoramos para asyncio com `playwright.async_api`.
 
+**Thread DONA dos navegadores (2026-10).** Pela mesma regra, todo trabalho de
+navegador do app passa por `no_navegador()`: UMA thread permanente executa
+login, sessões vivas, buscas e fechamentos, em fila. Ver o bloco "Thread dona"
+abaixo — é o que torna o app seguro com vários operadores num servidor.
+
 Uso típico:
     cred = credenciais.carregar("almeida")
     with AlmeidaDistribuidor(cred["email"], cred["senha"]) as alm:
@@ -41,12 +46,16 @@ Uso típico:
 """
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import math
+import queue
 import re
+import threading
 import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field, replace
 from typing import Callable, Optional, Protocol
 from urllib.parse import quote_plus
@@ -650,7 +659,19 @@ _RE_HREF = re.compile(r'href="([^"]+)"')
 
 class SessaoHTTPExpirou(RuntimeError):
     """A sessão HTTP deslogou no meio de um lote em modo http-only (paralelo).
-    O item vira ErroBusca e a re-busca incremental (que reloga) recupera."""
+    O item vira ErroBusca e a re-busca incremental (que reloga) recupera.
+
+    ``status``: código HTTP quando o site RECUSOU a consulta (405 desde
+    2026-10-30 — ver _MENSAGEM_RECUSA), None quando a sessão deslogou."""
+
+    def __init__(self, msg: str, status: Optional[int] = None):
+        super().__init__(msg)
+        self.status = status
+
+
+# Texto do ErroBusca de item que ficou sem consulta porque o site recusou.
+# A UI reconhece o prefixo para avisar o operador em português claro.
+_MENSAGEM_RECUSA = "Site do fornecedor recusou a consulta"
 
 
 def _cookie_header_de(context) -> str:
@@ -743,7 +764,8 @@ def _consultar_cards_http(forn, url: str) -> Optional[list[dict]]:
     except Exception as exc:
         if getattr(forn, "_http_only", False):
             raise SessaoHTTPExpirou(
-                f"consulta HTTP falhou em modo paralelo ({type(exc).__name__})")
+                f"consulta HTTP falhou em modo paralelo ({type(exc).__name__})",
+                status=getattr(exc, "code", None))
         return None   # rede/HTTP falhou → o navegador cuida desta consulta
     # Deslogado (página de login) → zera o cookie e sinaliza, ANTES de olhar os
     # cards: o deslogado às vezes devolve 0 cards (não cards zerados), o que a
@@ -775,6 +797,111 @@ def _consultar_cards_http(forn, url: str) -> Optional[list[dict]]:
     return cards
 
 
+# === Thread DONA dos navegadores (multiusuário, 2026-10) ===
+# Objetos do Playwright sync são presos à thread que os criou: usar de outra
+# levanta "cannot switch to a different thread" — inclusive depois que a thread
+# criadora termina (validado). No Streamlit CADA interação roda numa thread
+# nova, então a partir do 2º clique o ping da sessão viva falhava (relogin à
+# toa), fechar o navegador falhava em silêncio e o driver compartilhado era
+# "recriado" sem conseguir parar o antigo — driver + Chromium órfãos somando a
+# cada clique. Com o app num servidor e vários operadores, isso vira falta de
+# memória. Solução simples: UMA thread permanente executa TODO trabalho de
+# navegador, uma operação por vez (fila). Quem chama espera o resultado; os
+# avisos de progresso voltam para a thread de quem chamou (o Streamlit só
+# desenha da thread do script).
+
+_estado_dono = threading.local()
+
+
+def _marcar_thread_dona() -> None:
+    _estado_dono.dona = True
+
+
+_dono = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pregoes-navegador",
+                           initializer=_marcar_thread_dona)
+
+# Parâmetros (kwargs) de progresso que no_navegador devolve à thread chamadora.
+_CALLBACKS_DE_PROGRESSO = ("progresso_callback", "progresso")
+
+
+class OperacaoInterrompida(BaseException):
+    """A tela que pediu a operação foi interrompida (o operador clicou em outra
+    coisa e o Streamlit reexecutou o script). A thread dona aborta o trabalho no
+    próximo aviso de progresso, em vez de seguir ocupando a fila à toa.
+    BaseException de propósito: não pode ser engolida pelos `except Exception`
+    do scraper (mesma escolha das exceções de controle do Streamlit)."""
+
+
+def _na_thread_dona() -> bool:
+    return getattr(_estado_dono, "dona", False)
+
+
+def no_navegador(fn, *args, aguardando: Optional[Callable[[], None]] = None,
+                 **kwargs):
+    """Executa ``fn(*args, **kwargs)`` na thread dona dos navegadores, espera e
+    devolve o resultado (ou levanta a exceção de ``fn``). Já dentro da thread
+    dona (chamada aninhada), executa direto.
+
+    Callbacks de progresso em ``kwargs`` (nomes em _CALLBACKS_DE_PROGRESSO) são
+    chamados na thread CHAMADORA. Se ela for interrompida (exceção vinda do
+    callback, ex.: rerun do Streamlit), ``fn`` é abortada no próximo aviso.
+    ``aguardando()`` é chamado uma vez se a operação ficar na fila atrás de
+    outra (ex.: a busca de outro operador)."""
+    if _na_thread_dona():
+        return fn(*args, **kwargs)
+    avisos: "queue.Queue" = queue.Queue()
+    interrompida = threading.Event()
+    for nome in _CALLBACKS_DE_PROGRESSO:
+        cb = kwargs.get(nome)
+        if cb is not None:
+            kwargs[nome] = functools.partial(_encaminhar_aviso, avisos,
+                                             interrompida, cb)
+    futuro = _dono.submit(fn, *args, **kwargs)
+    try:
+        while True:
+            try:
+                cb, a, kw = avisos.get(timeout=0.1)
+            except queue.Empty:
+                if futuro.done():
+                    break
+                if aguardando is not None and not futuro.running():
+                    aguardando()
+                    aguardando = None
+                continue
+            cb(*a, **kw)
+        while not avisos.empty():          # avisos que chegaram junto do fim
+            cb, a, kw = avisos.get_nowait()
+            cb(*a, **kw)
+        return futuro.result()
+    except BaseException:
+        interrompida.set()
+        raise
+
+
+def _encaminhar_aviso(avisos, interrompida, cb, *a, **kw) -> None:
+    """Roda na thread dona: em vez de chamar o callback, enfileira para a
+    thread chamadora — ou aborta, se ela já desistiu."""
+    if interrompida.is_set():
+        raise OperacaoInterrompida()
+    avisos.put((cb, a, kw))
+
+
+def _no_navegador_sem_esperar(fn, *args) -> None:
+    """Agenda ``fn`` na thread dona e volta na hora (para quem não precisa do
+    resultado e não pode travar a tela — ex.: fechar sessões no 'Novo
+    pregão' enquanto outro operador está no meio de uma busca)."""
+    if _na_thread_dona():
+        fn(*args)
+        return
+
+    def _logar_falha(futuro) -> None:
+        exc = futuro.exception()
+        if exc is not None:
+            _logger.warning("operação de navegador em segundo plano falhou: %r", exc)
+
+    _dono.submit(fn, *args).add_done_callback(_logar_falha)
+
+
 # === Driver Playwright COMPARTILHADO do processo (2026-07-06) ===
 # `sync_playwright().start()` só pode existir UMA vez por thread — o 2º start
 # falha com "sync API inside the asyncio loop" (validado em campo ao manter
@@ -786,8 +913,9 @@ _pw_driver = None
 
 
 def _playwright_compartilhado():
-    """Driver único do processo (criar/usar sempre na MESMA thread — a
-    principal). Se o driver morreu (ex.: crash do subprocesso), recria uma vez."""
+    """Driver único do processo (criar/usar sempre na MESMA thread — no app, a
+    thread dona de `no_navegador`). Se o driver morreu (ex.: crash do
+    subprocesso), recria uma vez."""
     global _pw_driver
     from playwright.sync_api import sync_playwright
     if _pw_driver is None:
@@ -1450,6 +1578,30 @@ def _payload_to_resultados(
     return out
 
 
+# Lote em paralelo com o site recusando consultas (ver SessaoHTTPExpirou):
+# quantas falhas no pool antes de parar de consultar, quanto esperar antes de
+# repetir na 2ª passada, e quantas recusas seguidas lá antes de desistir do
+# resto (que vira ErroBusca; o operador re-busca depois os "sem resultado").
+# Medido no servidor (2026-11-06/07): firewall da AWS ("Human Verification")
+# devolve 405 às consultas logadas quando passam de ~350–400 em 10 min por
+# fornecedor; login novo não escapa; o bloqueio dura ~4–7 min. O ritmo de
+# config.SCRAPER_MAX_REQ_POR_SEGUNDO fica abaixo disso; isto aqui é a rede de
+# segurança. A pausa curta cobre só o soluço passageiro; num bloqueio de
+# verdade o lote desiste rápido em vez de martelar (Q20).
+_MAX_FALHAS_HTTP_NO_POOL = 3
+_PAUSA_APOS_RECUSA_S = 10.0
+_MAX_RECUSAS_SEGUIDAS = 3
+
+
+def _erro_recusa(idx: int, item, fornecedores) -> "ErroBusca":
+    return ErroBusca(
+        indice_item=idx,
+        fornecedor=",".join(f.nome for f in fornecedores),
+        descricao_resumo=(item.descricao or "")[:60],
+        mensagem=f"{_MENSAGEM_RECUSA} (excesso de consultas ou sessão expirada)",
+    )
+
+
 def buscar_precos_para_itens(
     itens: list[ItemExtraido],
     fornecedores: list[Fornecedor],
@@ -1808,10 +1960,10 @@ def buscar_precos_para_itens(
         nonlocal cache_hits, cache_misses, codigo_hits, llm_judge_hits
         resultados[idx] = bag
         erros.extend(erros_item)
-        cache_hits += stats["cache_hits"]
-        cache_misses += stats["cache_misses"]
-        codigo_hits += stats["codigo_hits"]
-        llm_judge_hits += stats["llm_judge_hits"]
+        cache_hits += stats.get("cache_hits", 0)
+        cache_misses += stats.get("cache_misses", 0)
+        codigo_hits += stats.get("codigo_hits", 0)
+        llm_judge_hits += stats.get("llm_judge_hits", 0)
 
     # Quantos itens processar EM PARALELO. Serial (1) quando: diagnóstico
     # ligado (objeto compartilhado), algum fornecedor sem transporte HTTP
@@ -1863,7 +2015,15 @@ def buscar_precos_para_itens(
                         _conns_extra.append(c)
                 return c
 
+            falhas_http = [0]
+
             def _no_worker(idx: int, item):
+                # Depois de algumas falhas HTTP o site está recusando (405 por
+                # excesso de consultas, campo 2026-10/11) ou a sessão caiu:
+                # seguir disparando só prolonga o bloqueio. O resto do lote
+                # vai direto para a 2ª passada, sem consultar.
+                if falhas_http[0] >= _MAX_FALHAS_HTTP_NO_POOL:
+                    return ("navegador", idx, item, None, None, None)
                 c = _conn_da_thread()
                 try:
                     bag, erros_item, stats = _processar_item(idx, item, c)
@@ -1873,6 +2033,8 @@ def buscar_precos_para_itens(
                 except SessaoHTTPExpirou:
                     # Sessão HTTP caiu p/ este item: volta depois, SERIAL,
                     # pela via do navegador (fallback preservado).
+                    with _lk:
+                        falhas_http[0] += 1
                     return ("navegador", idx, item, None, None, None)
 
             # Workers só usam HTTP — nunca tocam o Playwright de outra thread.
@@ -1910,8 +2072,32 @@ def buscar_precos_para_itens(
 
             # 2ª passada: itens cuja sessão HTTP expirou — SERIAL, na thread
             # dona do Playwright, com o fallback de navegador liberado.
-            for idx, item in pendentes_navegador:
-                bag, erros_item, stats = _processar_item(idx, item, conn)
+            #
+            # Quando QUEM CHAMOU já tinha ligado o http-only (a UI busca os 2
+            # fornecedores em paralelo, cada um numa thread que não é a dona
+            # do navegador), não há navegador para cair: a 2ª passada repete a
+            # consulta HTTP, com pausa. O que ainda falhar vira ErroBusca DO
+            # ITEM — antes a exceção escapava e derrubava o fornecedor INTEIRO,
+            # descartando tudo o que já tinha sido achado (Pregão 20/2026: 0
+            # de 654 itens, campo 2026-11-06).
+            sem_navegador = bool(fornecedores) and all(
+                _http_only_antes.get(f.nome) for f in fornecedores)
+            if sem_navegador:
+                for f in fornecedores:
+                    f._http_only = True
+            recusas_seguidas = 0
+            for n_pend, (idx, item) in enumerate(pendentes_navegador):
+                if sem_navegador and recusas_seguidas >= _MAX_RECUSAS_SEGUIDAS:
+                    bag, erros_item, stats = [], [_erro_recusa(idx, item, fornecedores)], {}
+                else:
+                    if sem_navegador and (n_pend == 0 or recusas_seguidas):
+                        time.sleep(_PAUSA_APOS_RECUSA_S)
+                    try:
+                        bag, erros_item, stats = _processar_item(idx, item, conn)
+                        recusas_seguidas = 0
+                    except SessaoHTTPExpirou:
+                        recusas_seguidas += 1
+                        bag, erros_item, stats = [], [_erro_recusa(idx, item, fornecedores)], {}
                 _absorver(idx, bag, erros_item, stats)
                 if conn is not None:
                     conn.commit()
@@ -2068,6 +2254,11 @@ def cotar_por_codigo(fornecedor: str, codigo: str) -> Optional[ResultadoBusca]:
     - **Levanta exceção** se o login/navegador/rede falhar — é transitório, e
       o chamador deve avisar e NÃO usar o preço do catálogo.
     """
+    return no_navegador(_cotar_por_codigo, fornecedor, codigo)
+
+
+def _cotar_por_codigo(fornecedor: str, codigo: str) -> Optional[ResultadoBusca]:
+    """Corpo de `cotar_por_codigo` — roda na thread dona."""
     classes = {"almeida": AlmeidaDistribuidor, "dantas": DantasDistribuidora}
     cls = classes.get(fornecedor)
     cred = credenciais.carregar(fornecedor)
@@ -2126,18 +2317,39 @@ def _fechar_sessao_viva(fornecedor: str) -> None:
 def fechar_sessao_viva(fornecedor: str) -> None:
     """Descarta a sessão em cache de UM fornecedor (ex.: após falha grave no
     lote — o próximo uso reloga fresco)."""
-    _fechar_sessao_viva(fornecedor)
+    no_navegador(_fechar_sessao_viva, fornecedor)
 
 
-def fechar_sessoes_vivas() -> None:
+def fechar_sessoes_vivas(esperar: bool = True) -> None:
     """Fecha TODAS as sessões manuais em cache. Chamar ao iniciar um novo pregão
-    para não deixar um navegador aberto à toa."""
+    para não deixar um navegador aberto à toa.
+
+    ``esperar=False`` só agenda (a tela segue na hora): com vários operadores,
+    o fechamento entra na fila DEPOIS da busca que outro operador estiver
+    fazendo — nunca derruba o navegador no meio dela."""
+    if esperar:
+        no_navegador(_fechar_sessoes_vivas)
+    else:
+        _no_navegador_sem_esperar(_fechar_sessoes_vivas)
+
+
+def _fechar_sessoes_vivas() -> None:
     for fornecedor in list(_sessoes_vivas):
         _fechar_sessao_viva(fornecedor)
     _relogou_por_vazio.clear()   # novo pregão = novo período seco
 
 
-def obter_sessao_viva(fornecedor: str):
+def obter_sessao_viva(fornecedor: str, aguardando: Optional[Callable[[], None]] = None):
+    """Devolve a sessão logada reutilizável (ver `_obter_sessao_viva`), obtida na
+    thread dona. ``aguardando``: ver `no_navegador`.
+
+    A sessão devolvida só pode ser USADA (navegador) dentro da thread dona —
+    via `no_navegador`. Ler atributos (ex.: `_http_cookie`) pode de qualquer
+    thread."""
+    return no_navegador(_obter_sessao_viva, fornecedor, aguardando=aguardando)
+
+
+def _obter_sessao_viva(fornecedor: str):
     """Devolve a sessão LOGADA reutilizável do cache — loga só se preciso.
 
     Perf (campo 2026-07): a busca em LOTE abria navegador + login + condição de
@@ -2190,6 +2402,11 @@ def buscar_no_site(
         return []
     if fornecedor not in _FORNECEDORES_VALIDOS:
         raise ValueError(f"Fornecedor desconhecido: {fornecedor!r}")
+    return no_navegador(_buscar_no_site, fornecedor, termo, limite)
+
+
+def _buscar_no_site(fornecedor: str, termo: str, limite: int) -> list[ResultadoBusca]:
+    """Corpo de `buscar_no_site` — roda na thread dona."""
 
     def _consultar(forn):
         forn._rate_limiter.acquire()
@@ -2385,33 +2602,27 @@ def consultar_ncms(pedidos, *, progresso=None) -> dict:
                     else:
                         pendentes_navegador.append(item)
 
-        # 3) Fallback navegador — SERIAL na thread dona do Playwright, com a
-        # sessão logada REUSADA (não abre/fecha navegador por clique).
+        # 3) Fallback navegador — na thread DONA (`no_navegador`), com a sessão
+        # logada REUSADA. Banco e progresso ficam aqui: a conexão SQLite é presa
+        # à thread que a abriu, e o progresso precisa da thread chamadora.
         por_forn: dict = {}
         for item in pendentes_navegador:
             por_forn.setdefault(item[1], []).append(item)
         for forn_nome, lista in por_forn.items():
             try:
-                forn = obter_sessao_viva(forn_nome)
+                achados = no_navegador(_ncms_pelo_navegador, forn_nome,
+                                       [url for _c, _f, url, _cod in lista])
             except Exception:
-                for chave, *_ in lista:
-                    falhas.add(chave)
-                    _avancar()
-                continue
+                achados = {}                     # login falhou: tudo transitório
             for chave, _f, url, codigo in lista:
-                try:
-                    forn._page.goto(url, wait_until="networkidle",
-                                    timeout=config.SCRAPER_TIMEOUT_SEGUNDOS * 1000)
-                    forn._page.wait_for_timeout(500)
-                    txt = forn._page.evaluate("() => document.body.innerText")
-                    ncm = tributacao.ncm_de_texto(txt)   # str|None definitivo
-                    ncms[chave] = ncm
+                if url in achados:
+                    ncms[chave] = achados[url]   # str|None definitivo
                     if conn is not None and codigo:
                         try:
-                            db.ncm_cache_gravar(conn, forn_nome, codigo, ncm)
+                            db.ncm_cache_gravar(conn, forn_nome, codigo, achados[url])
                         except Exception:
                             pass
-                except Exception:
+                else:
                     falhas.add(chave)            # transitório — re-tentável
                 _avancar()
 
@@ -2427,3 +2638,21 @@ def consultar_ncms(pedidos, *, progresso=None) -> dict:
             except Exception:
                 pass
     return ncms, falhas
+
+
+def _ncms_pelo_navegador(fornecedor: str, urls: list) -> dict:
+    """(Thread dona.) Abre a página de detalhe de cada URL na sessão viva e lê o
+    NCM. Devolve ``{url: ncm|None}`` só com as DEFINITIVAS; URL que falhou fica
+    de fora (transitória). Levanta se o login falhar."""
+    forn = _obter_sessao_viva(fornecedor)
+    achados: dict = {}
+    for url in urls:
+        try:
+            forn._page.goto(url, wait_until="networkidle",
+                            timeout=config.SCRAPER_TIMEOUT_SEGUNDOS * 1000)
+            forn._page.wait_for_timeout(500)
+            txt = forn._page.evaluate("() => document.body.innerText")
+            achados[url] = tributacao.ncm_de_texto(txt)
+        except Exception:
+            pass
+    return achados

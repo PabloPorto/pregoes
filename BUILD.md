@@ -66,6 +66,19 @@ aponta o `.exe` para ela. **Confirme no teste 4 acima.** Se não funcionar:
   de desenvolvimento e proíbe `--server.port`, derrubando o app no boot. O
   `run_app.py` força `STREAMLIT_GLOBAL_DEVELOPMENT_MODE=false` antes de o
   Streamlit carregar. Se o erro voltar, confirme que essa linha está lá.
+- **O `.streamlit/config.toml` NÃO é lido pelo `.exe`** (RESOLVIDO na v1.1.10):
+  o Streamlit só procura o toml na pasta atual e em `~/.streamlit`; no `.exe`
+  ele viaja dentro de `_internal\`. Sintomas no cliente: botão "Deploy" e
+  popup "Clear caches" em inglês, stacktrace cru na tela. O `run_app.py`
+  (`_flags_config`) converte o toml empacotado em flags `--secao.opcao=valor`
+  e força as opções de produção por cima (`toolbarMode=minimal`,
+  `showErrorDetails=none`, sem `runOnSave`/file watcher). Opção nova que
+  precise valer no cliente: toml (vale nos dois) ou `_OPCOES_PRODUCAO`.
+- **Atalhos de tecla única do Streamlit** ("c" = Clear caches, "r" = rerun)
+  disparam quando o foco está fora de um campo. O `run_app.py` injeta um
+  guard no `index.html` (servido com `no-cache`). Não tente corrigir editando
+  o bundle JS: ele vai com cache `immutable` de 1 ano e o navegador do cliente
+  ignora a edição.
 - **`console=True`** no spec deixa uma janela preta junto do app — útil no
   piloto para ver erros. Para a versão final, trocar para `console=False`
   (mais limpo) **depois** de confirmar que está estável.

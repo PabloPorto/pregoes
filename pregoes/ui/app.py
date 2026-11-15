@@ -76,17 +76,23 @@ if "backup_feito" not in st.session_state:
         _log.exception("falha no backup diário de boot")
     # Backup EXTERNO (Google Drive) — off-site, protege contra pane do disco C:.
     # Em thread para NÃO atrasar o boot; best-effort (nunca derruba o app).
-    try:
-        import threading
-        from pregoes import backup as _backup
-        threading.Thread(target=_backup.fazer_backup_externo, daemon=True).start()
-    except Exception:
-        _log.exception("falha ao disparar o backup externo no boot")
+    # No servidor não: lá o envio é o diário das 03:00 (pregoes-backup.timer),
+    # e cada operador abrindo o app dispararia um envio.
+    if not config.MODO_SERVIDOR:
+        try:
+            import threading
+            from pregoes import backup as _backup
+            threading.Thread(target=_backup.fazer_backup_externo, daemon=True).start()
+        except Exception:
+            _log.exception("falha ao disparar o backup externo no boot")
     st.session_state.backup_feito = True
 
 # === Estado da sessão ===
 if "tela" not in st.session_state:
     st.session_state.tela = "home"
+    # Sessão NOVA: pode ser um recarregamento da aba no meio de um pregão —
+    # tratado por _retomar_pregao_da_url(), antes do roteador.
+    st.session_state["_sessao_nova"] = True
 if "extracao" not in st.session_state:
     st.session_state.extracao = None
 if "df_editavel" not in st.session_state:
@@ -251,10 +257,12 @@ def _limpar_pregao(preservar_rascunho: bool = False) -> None:
         st.session_state.pop(k, None)
     _limpar_busca_por_item()
     # Fecha as sessões manuais ao vivo em cache (navegador logado): um novo
-    # pregão começa do zero e não herda navegador/sessão do anterior.
+    # pregão começa do zero e não herda navegador/sessão do anterior. Sem
+    # esperar: se outro operador estiver buscando, o fechamento entra na fila
+    # depois da busca dele, e esta tela segue na hora.
     try:
         from pregoes import scraper as _scraper
-        _scraper.fechar_sessoes_vivas()
+        _scraper.fechar_sessoes_vivas(esperar=False)
     except Exception:
         pass
 
@@ -898,7 +906,7 @@ def _gerar_excel(itens: list, markup: float, selecoes: dict,
     try:
         import threading
         from pregoes import backup as _backup
-        threading.Thread(target=_backup.fazer_backup_externo, daemon=True).start()
+        threading.Thread(target=_backup.backup_externo_agora, daemon=True).start()
     except Exception:
         _log.exception("falha ao disparar o backup externo pós-geração")
 
@@ -1019,7 +1027,8 @@ def _persistir_edital(itens: list, selecoes: dict, destino, markup) -> None:
 
 # === Tela: HISTÓRICO ===
 def _data_amigavel(criado_em: str | None) -> str:
-    """Converte o timestamp do banco ('AAAA-MM-DD HH:MM:SS') para 'DD/MM HH:MM'.
+    """Converte o timestamp do banco ('AAAA-MM-DD HH:MM:SS', em UTC — é o
+    CURRENT_TIMESTAMP do SQLite) para 'DD/MM HH:MM' no horário de Brasília.
 
     Tolerante: se o formato não bater (banco antigo, valor nulo), devolve o
     texto cru — nunca estoura exceção na cara do operador.
@@ -1027,8 +1036,9 @@ def _data_amigavel(criado_em: str | None) -> str:
     if not criado_em:
         return "data desconhecida"
     try:
-        from datetime import datetime as _dt
-        return _dt.strptime(criado_em[:19], "%Y-%m-%d %H:%M:%S").strftime("%d/%m %H:%M")
+        from datetime import datetime as _dt, timezone as _tz
+        utc = _dt.strptime(criado_em[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=_tz.utc)
+        return utc.astimezone(config.FUSO_HORARIO).strftime("%d/%m %H:%M")
     except (ValueError, TypeError):
         return str(criado_em)
 
@@ -1237,6 +1247,8 @@ def tela_historico():
 def tela_configuracoes():
     style.header_pagina(
         "Configurações",
+        "Credenciais dos fornecedores. Ficam guardadas no servidor do sistema, "
+        "com backup diário." if config.MODO_SERVIDOR else
         "Credenciais dos fornecedores. Tudo fica salvo apenas no seu "
         "computador, sem envio para servidores externos.",
     )
@@ -1411,7 +1423,10 @@ def tela_configuracoes():
         _aba_catalogo()
 
     with aba_backup:
-        _aba_backup_externo()
+        if config.MODO_SERVIDOR:
+            _aba_backup_servidor()
+        else:
+            _aba_backup_externo()
 
 
 # === Tela: BUSCA DE PREÇOS ===
@@ -1617,6 +1632,37 @@ def _avisos_lote_vazio(stats_concluidos: list, total_itens: int) -> list[str]:
     return avisos
 
 
+def _avisos_recusa(erros: list) -> list[str]:
+    """Itens que ficaram sem consulta porque o site do fornecedor RECUSOU
+    (405 por excesso de consultas, campo 2026-10/11). O painel 'erros
+    técnicos' fica fechado e fala em layout/sessão — aqui o operador lê o que
+    fazer. Um aviso por fornecedor."""
+    from pregoes.scraper import _MENSAGEM_RECUSA
+    por_forn: dict = {}
+    for e in erros or []:
+        if (getattr(e, "mensagem", "") or "").startswith(_MENSAGEM_RECUSA):
+            for nome in (e.fornecedor or "").split(","):
+                por_forn.setdefault(nome, set()).add(e.indice_item)
+    return [
+        f"<b>Atenção — {nome.capitalize()}:</b> o site recusou consultas "
+        f"(limite de acessos) e <b>{len(idx)} itens</b> ficaram sem preço deste "
+        "fornecedor. O que já foi encontrado está mantido. Aguarde uns "
+        "10 minutos e use <b>Buscar preços dos itens sem resultado</b>."
+        for nome, idx in por_forn.items() if nome
+    ]
+
+
+def _tempo_restante(decorrido_s: float, frac: float) -> str:
+    """Estimativa "faltam ~N min" para o painel da busca. Com o ritmo abaixo do
+    limite dos fornecedores (Q20) um edital grande leva ~1 h — o operador
+    precisa saber se espera ou vai fazer outra coisa. Vazio no começo (pouco
+    progresso = palpite ruim) e no fim."""
+    if frac < 0.05 or frac >= 1.0 or decorrido_s < 30:
+        return ""
+    restante_s = decorrido_s * (1.0 - frac) / frac
+    return f"faltam ~{max(1, round(restante_s / 60))} min"
+
+
 def _buscar_fornecedores_paralelo(itens_alvo: list, sessoes: dict,
                                   progresso) -> dict:
     """Roda a busca dos fornecedores EM PARALELO (1 thread por fornecedor).
@@ -1624,11 +1670,12 @@ def _buscar_fornecedores_paralelo(itens_alvo: list, sessoes: dict,
     Só é chamada quando TODAS as sessões têm transporte HTTP (``_http_cookie``):
     os workers ficam em modo ``_http_only`` e NUNCA tocam o Playwright — objetos
     de navegador são presos à thread que os criou (greenlet; foi exatamente o
-    crash do ThreadPoolExecutor de 2026-05). Login/pagamento já aconteceram na
-    thread principal (``obter_sessao_viva``).
+    crash do ThreadPoolExecutor de 2026-05). Roda dentro da thread dona dos
+    navegadores, onde o login/pagamento já aconteceu (``obter_sessao_viva``).
 
-    ``progresso(nome, atual, total, msg)`` é chamado NA THREAD PRINCIPAL (os
-    workers só empurram numa fila — Streamlit não é thread-safe).
+    ``progresso(nome, atual, total, msg)`` é chamado na thread que chamou esta
+    função (os workers só empurram numa fila) — e o ``no_navegador`` o repassa
+    à thread da tela (Streamlit não é thread-safe).
 
     Devolve ``{nome: ResultadoLote | Exception}`` — exceção por fornecedor não
     derruba o outro."""
@@ -1769,7 +1816,11 @@ def _executar_busca(itens: list, fornecedores_nomes: list[str],
                     if fornecedor else
                     "Todos os fornecedores"
                 ),
-                tempo=_tempo(),
+                tempo=" · ".join(p for p in (
+                    _tempo(),
+                    "" if encerrado else _tempo_restante(
+                        time.monotonic() - t_inicio, frac),
+                ) if p),
                 item_atual=item_atual,
                 item_total=item_total,
                 item_descricao=item_desc,
@@ -1800,7 +1851,8 @@ def _executar_busca(itens: list, fornecedores_nomes: list[str],
         stats_concluidos=stats_concluidos,
     )
 
-    from pregoes.scraper import ErroBusca, fechar_sessao_viva, obter_sessao_viva
+    from pregoes.scraper import (ErroBusca, fechar_sessao_viva, no_navegador,
+                                 obter_sessao_viva)
 
     def _absorver_lote(nome: str, lote) -> None:
         """Sumário + mesclagem de um ResultadoLote no agregado (remapeando a
@@ -1839,85 +1891,100 @@ def _executar_busca(itens: list, fornecedores_nomes: list[str],
         ))
         stats_concluidos.append((nome, 0, 0, total_itens))
 
-    # --- Sessões na THREAD PRINCIPAL (Playwright é preso à thread criadora):
-    # login + condição de pagamento reusados do cache; falha vira erro global.
-    sessoes: dict = {}
-    for forn_idx, nome in enumerate(fornecedores_nomes):
-        if credenciais.carregar(nome) is None:
-            continue
-        _render(
-            frac=forn_idx / max(n_forn, 1) * 0.05,
-            fornecedor=nome, forn_idx=forn_idx,
-            item_atual=0, item_total=total_itens,
-            item_desc=f"Fazendo login em {nome.capitalize()}…",
-            stats_concluidos=stats_concluidos,
-        )
-        try:
-            sessoes[nome] = obter_sessao_viva(nome)
-        except Exception as exc:
-            _registrar_falha_grave(nome, exc)
-
-    # Condição de pagamento não confirmada vira alerta NA TELA de resultados
-    # (persiste na sessão; a próxima busca recalcula).
-    st.session_state["avisos_pagamento"] = _avisos_pagamento_de(sessoes)
-
-    # --- PARALELO (Fase 2 de perf): 1 thread por fornecedor, consultas via
-    # HTTP (thread-safe). Requer TODAS as sessões com transporte HTTP; o modo
-    # diagnóstico (objeto compartilhado) roda sequencial.
-    paralelo = (len(sessoes) > 1 and log_diag is None
-                and all(getattr(f, "_http_cookie", None) for f in sessoes.values()))
-    if paralelo:
-        prog = {n: (0, total_itens) for n in sessoes}
-
-        def _cb_paralelo(nome, atual, total, _msg):
-            prog[nome] = (atual, total)
-            frac = sum(a / max(t, 1) for a, t in prog.values()) / max(len(prog), 1)
-            _render(
-                frac=frac, fornecedor="", forn_idx=0,
-                item_atual=sum(a for a, _ in prog.values()),
-                item_total=sum(t for _, t in prog.values()),
-                item_desc=" · ".join(
-                    f"{n.capitalize()} {a}/{t}" for n, (a, t) in prog.items()),
+    # --- Login + busca de TODOS os fornecedores numa ÚNICA operação da thread
+    # dona dos navegadores (scraper.no_navegador). O Playwright é preso à thread
+    # que o criou, e cada clique no Streamlit roda numa thread nova; fazer
+    # login e busca juntos ainda impede que outro operador troque a sessão de
+    # um fornecedor no meio. Aqui dentro NADA de Streamlit: o painel é
+    # desenhado por `progresso`, que o no_navegador devolve à thread da tela.
+    def _buscar_na_thread_dona(progresso) -> dict:
+        # Login + condição de pagamento reusados do cache; falha vira erro global.
+        sessoes: dict = {}
+        for forn_idx, nome in enumerate(fornecedores_nomes):
+            if credenciais.carregar(nome) is None:
+                continue
+            progresso(
+                frac=forn_idx / max(n_forn, 1) * 0.05,
+                fornecedor=nome, forn_idx=forn_idx,
+                item_atual=0, item_total=total_itens,
+                item_desc=f"Fazendo login em {nome.capitalize()}…",
                 stats_concluidos=stats_concluidos,
             )
+            try:
+                sessoes[nome] = obter_sessao_viva(nome)
+            except Exception as exc:
+                _registrar_falha_grave(nome, exc)
 
-        saida = _buscar_fornecedores_paralelo(itens_alvo, sessoes, _cb_paralelo)
-        for nome in sessoes:
-            r = saida.get(nome)
-            if r is None or isinstance(r, Exception):
-                _registrar_falha_grave(
-                    nome, r if isinstance(r, Exception)
-                    else RuntimeError("fornecedor terminou sem resultado"))
-            else:
-                _absorver_lote(nome, r)
-    else:
-        for forn_idx, nome in enumerate(fornecedores_nomes):
-            forn = sessoes.get(nome)
-            if forn is None:
-                continue   # sem credencial ou login já falhou (registrado)
+        # PARALELO (Fase 2 de perf): 1 thread por fornecedor, consultas via
+        # HTTP (thread-safe). Requer TODAS as sessões com transporte HTTP; o
+        # modo diagnóstico (objeto compartilhado) roda sequencial.
+        paralelo = (len(sessoes) > 1 and log_diag is None
+                    and all(getattr(f, "_http_cookie", None) for f in sessoes.values()))
+        if paralelo:
+            prog = {n: (0, total_itens) for n in sessoes}
 
-            def cb(atual, total, msg, _forn_idx=forn_idx, _nome=nome):
-                frac_dentro = atual / max(total, 1)
-                frac_total = (_forn_idx + frac_dentro) / max(n_forn, 1)
-                _render(
-                    frac=frac_total,
-                    fornecedor=_nome, forn_idx=_forn_idx,
-                    item_atual=atual, item_total=total,
-                    item_desc=msg,
+            def _cb_paralelo(nome, atual, total, _msg):
+                prog[nome] = (atual, total)
+                frac = sum(a / max(t, 1) for a, t in prog.values()) / max(len(prog), 1)
+                progresso(
+                    frac=frac, fornecedor="", forn_idx=0,
+                    item_atual=sum(a for a, _ in prog.values()),
+                    item_total=sum(t for _, t in prog.values()),
+                    item_desc=" · ".join(
+                        f"{n.capitalize()} {a}/{t}" for n, (a, t) in prog.items()),
                     stats_concluidos=stats_concluidos,
                 )
 
-            try:
-                # judge/canônico ligados por padrão no orquestrador — sem
-                # controle de UI (operador não precisa saber).
-                lote = buscar_precos_para_itens(
-                    itens_alvo, [forn], progresso_callback=cb,
-                    diagnostico=log_diag,
-                )
-            except Exception as exc:
-                _registrar_falha_grave(nome, exc)
-                continue
-            _absorver_lote(nome, lote)
+            saida = _buscar_fornecedores_paralelo(itens_alvo, sessoes, _cb_paralelo)
+            for nome in sessoes:
+                r = saida.get(nome)
+                if r is None or isinstance(r, Exception):
+                    _registrar_falha_grave(
+                        nome, r if isinstance(r, Exception)
+                        else RuntimeError("fornecedor terminou sem resultado"))
+                else:
+                    _absorver_lote(nome, r)
+        else:
+            for forn_idx, nome in enumerate(fornecedores_nomes):
+                forn = sessoes.get(nome)
+                if forn is None:
+                    continue   # sem credencial ou login já falhou (registrado)
+
+                def cb(atual, total, msg, _forn_idx=forn_idx, _nome=nome):
+                    frac_dentro = atual / max(total, 1)
+                    frac_total = (_forn_idx + frac_dentro) / max(n_forn, 1)
+                    progresso(
+                        frac=frac_total,
+                        fornecedor=_nome, forn_idx=_forn_idx,
+                        item_atual=atual, item_total=total,
+                        item_desc=msg,
+                        stats_concluidos=stats_concluidos,
+                    )
+
+                try:
+                    # judge/canônico ligados por padrão no orquestrador — sem
+                    # controle de UI (operador não precisa saber).
+                    lote = buscar_precos_para_itens(
+                        itens_alvo, [forn], progresso_callback=cb,
+                        diagnostico=log_diag,
+                    )
+                except Exception as exc:
+                    _registrar_falha_grave(nome, exc)
+                    continue
+                _absorver_lote(nome, lote)
+        return _avisos_pagamento_de(sessoes)
+
+    # Condição de pagamento não confirmada vira alerta NA TELA de resultados
+    # (persiste na sessão; a próxima busca recalcula).
+    st.session_state["avisos_pagamento"] = no_navegador(
+        _buscar_na_thread_dona, progresso=_render,
+        aguardando=lambda: _render(
+            frac=0.0, fornecedor="", forn_idx=0,
+            item_atual=0, item_total=total_itens,
+            item_desc="Aguardando a busca de outro operador terminar…",
+            stats_concluidos=stats_concluidos,
+        ),
+    )
 
     # Empacota como ResultadoLote para preservar API que a UI espera
     lote = ResultadoLote(
@@ -1943,8 +2010,9 @@ def _executar_busca(itens: list, fornecedores_nomes: list[str],
     st.session_state.cache_stats = (lote.cache_hits, lote.cache_misses)
     # Honestidade com o operador: fornecedor com ZERO em tudo = site instável
     # (não "nada existe") — persiste o aviso para a tela de resultados.
-    st.session_state["avisos_lote_vazio"] = _avisos_lote_vazio(
-        stats_concluidos, total_itens)
+    st.session_state["avisos_lote_vazio"] = (
+        _avisos_lote_vazio(stats_concluidos, total_itens)
+        + _avisos_recusa(lote.erros))
     with status_final.container():
         hits, misses = lote.cache_hits, lote.cache_misses
         extras = []
@@ -2025,7 +2093,7 @@ def _form_condicao_pagamento(fornecedor: str) -> None:
             # todas para a próxima busca relogar já com a nova.
             try:
                 from pregoes import scraper as _scraper
-                _scraper.fechar_sessoes_vivas()
+                _scraper.fechar_sessoes_vivas(esperar=False)
             except Exception:
                 pass
             _cond = html.escape(forma["texto"])
@@ -2170,6 +2238,12 @@ def _restaurar_rascunho(estado: dict, slug: str | None = None) -> None:
     _limpar_busca_por_item()   # não herda buscas manuais de outro pregão
     for k, v in estado.items():
         st.session_state[k] = v
+    # As telas leem estas chaves por ATRIBUTO (como o boot as deixa). O pop
+    # acima as removeu e o snapshot não traz df_editavel (fica de fora de
+    # propósito) — sem isto, 'Continuar' um pregão parado na revisão quebrava
+    # com AttributeError (achado 2026-10, validando a retomada pela URL).
+    st.session_state.setdefault("extracao", None)
+    st.session_state.setdefault("df_editavel", None)
     st.session_state.pop("_rascunho_disponivel", None)
     st.session_state["_rascunho_slug"] = (
         slug or rascunho.slug_de(estado.get("orgao"), estado.get("numero")))
@@ -2180,6 +2254,48 @@ def _restaurar_rascunho(estado: dict, slug: str | None = None) -> None:
     # "home" e 'Continuar' o deixava preso lá (feedback 2026-07-06). Mesmo
     # cálculo do "Continuar o atual" do modal, para os dois caminhos baterem.
     st.session_state["tela"] = _tela_pregao_em_andamento()
+
+
+# === Retomada após recarregar a aba ===
+# Recarregar a página cria uma sessão NOVA do Streamlit (session_state vazio) e
+# o operador caía no Início no meio do pregão — relato de campo 2026-10 ("vou
+# pesquisar um item e volta para a página inicial"). Gatilhos comuns: o Chrome
+# DESCARTA abas em segundo plano para poupar memória (o operador troca de aba
+# enquanto a busca demora; ao voltar, a aba recarrega), PC que hibernou, F5 sem
+# querer. O trabalho já estava salvo (autosave do rascunho); faltava a aba saber
+# QUAL pregão retomar. Guardamos o slug na URL (?pregao=...): recarregar mantém
+# a URL, e uma aba nova (o .exe abre o endereço limpo) continua indo ao Início.
+_PARAM_PREGAO = "pregao"
+_RE_SLUG = re.compile(r"[a-z0-9-]{1,80}")   # formato de rascunho.novo_slug
+
+
+def _marcar_pregao_na_url() -> None:
+    """Mantém ``?pregao=<slug>`` na URL enquanto esta aba tem um pregão
+    carregado (o slug nasce no 1º autosave e sai em _limpar_pregao)."""
+    slug = st.session_state.get("_rascunho_slug")
+    atual = st.query_params.get(_PARAM_PREGAO)
+    if slug and atual != slug:
+        st.query_params[_PARAM_PREGAO] = slug
+    elif not slug and atual:
+        del st.query_params[_PARAM_PREGAO]
+
+
+def _retomar_pregao_da_url() -> None:
+    """Numa sessão nova, se a URL aponta um pregão com rascunho no disco,
+    restaura-o e volta direto à tela de trabalho. Slug inválido ou rascunho
+    inexistente (descartado em outra aba): limpa a URL e segue no Início."""
+    slug = st.query_params.get(_PARAM_PREGAO)
+    if not slug:
+        return
+    from pregoes import rascunho
+    estado = None
+    if _RE_SLUG.fullmatch(slug):
+        estado = rascunho.carregar_pregao(slug)
+    if estado:
+        _restaurar_rascunho(estado, slug)
+        _log.info("sessão nova: pregão '%s' retomado pela URL (aba recarregada)", slug)
+    else:
+        del st.query_params[_PARAM_PREGAO]
 
 
 def _filtrar_rascunhos_finalizados(pendentes: list) -> list:
@@ -3443,6 +3559,44 @@ def tela_mapeamento():
 
 # === Aba Backup (em Configurações) ===
 
+def _aba_backup_servidor():
+    """No servidor o backup é automático (deploy/backup_drive.sh, todo dia de
+    madrugada, para o Google Drive do responsável): não há pasta a configurar.
+    A aba só mostra quando foi o último envio e permite um envio na hora."""
+    from datetime import datetime, timedelta
+    from pregoes import backup as _backup
+
+    style.bloco_aviso(
+        "O sistema faz backup <b>sozinho</b>: todo dia de madrugada e a cada "
+        "planilha gerada, uma cópia completa (pregões, catálogo, histórico, "
+        "planilhas e credenciais) é guardada <b>fora do servidor</b>, com os "
+        "últimos 30 dias. Não precisa configurar nada.",
+        tipo="info",
+    )
+    ultimo = _backup.ultimo_envio_servidor()
+    if ultimo is None:
+        style.bloco_aviso(
+            "Ainda não houve nenhum backup. O primeiro acontece esta madrugada "
+            "— ou clique em <b>Fazer backup agora</b>.", tipo="warning")
+    elif datetime.now(ultimo.tzinfo) - ultimo > timedelta(days=2):
+        style.bloco_aviso(
+            f"O último backup é de <b>{ultimo:%d/%m/%Y às %H:%M}</b> — há mais de "
+            "2 dias. Clique em <b>Fazer backup agora</b>; se não funcionar, fale "
+            "com o suporte.", tipo="danger")
+    else:
+        style.bloco_aviso(
+            f"Último backup: <b>{ultimo:%d/%m/%Y às %H:%M}</b>.", tipo="success")
+
+    if st.button("Fazer backup agora", key="backup_servidor_agora"):
+        with st.spinner("Fazendo o backup…"):
+            ok = _backup.enviar_backup_servidor()
+        if ok:
+            st.rerun()      # redesenha com a data do envio que acabou de acontecer
+        style.bloco_aviso(
+            "Não consegui fazer o backup agora. Tente de novo em alguns minutos; "
+            "se persistir, fale com o suporte.", tipo="danger")
+
+
 def _aba_backup_externo():
     """Backup FORA da máquina (Google Drive) — protege contra pane/perda do
     disco C:. O app só grava um arquivo numa pasta LOCAL do Google Drive; é o
@@ -3693,11 +3847,39 @@ TELAS = {
     "configuracoes": tela_configuracoes,
 }
 
+def _renderizar_tela() -> None:
+    """Despacha a tela atual com uma rede de segurança: um erro inesperado vira
+    aviso em português com saída (tentar de novo / Início) e traceback no
+    pregoes.log — em vez da mensagem genérica do Streamlit, em inglês e sem
+    caminho de volta. O rascunho segue salvo (o autosave roda depois disto).
+    Não engole st.rerun()/st.stop(): no Streamlit eles derivam de BaseException."""
+    tela = st.session_state.tela
+    try:
+        TELAS.get(tela, tela_home)()
+    except Exception as exc:
+        _log.exception("erro inesperado na tela '%s'", tela)
+        style.bloco_aviso(
+            f"{erros.mensagem_amigavel(exc, 'mostrar esta tela')}<br>"
+            "<b>Seu trabalho está salvo.</b> Se o erro repetir, vá ao Início e "
+            "use <b>Continuar</b> no pregão.",
+            tipo="danger")
+        col_de_novo, col_inicio = st.columns(2)
+        if col_de_novo.button("Tentar de novo", type="primary", width="stretch",
+                              key="erro_tela_de_novo"):
+            st.rerun()
+        if col_inicio.button("Ir para o Início", width="stretch",
+                             key="erro_tela_inicio"):
+            ir_para("home")
+
+
+if st.session_state.pop("_sessao_nova", False):
+    _retomar_pregao_da_url()
 _renderizar_sidebar()
 # Ao fim de cada render, autosalva o rascunho do pregão em curso; a lista de
 # pregões guardados vive na HOME (cards de retomada — auditoria de UI 2026-07).
-TELAS[st.session_state.tela]()
+_renderizar_tela()
 _salvar_rascunho()
+_marcar_pregao_na_url()
 
 # Confirmação de "Novo pregão" — aberta aqui, no nível superior do script
 # (fora do `with st.sidebar`), para o modal não renderizar dentro da sidebar.

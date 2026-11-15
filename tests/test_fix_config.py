@@ -163,19 +163,20 @@ def test_iniciar_bat_loopback_garantido_via_run_app():
     """iniciar.bat agora sobe pelo run_app.py (entrypoint unificado com o .exe,
     para aplicar os patches do index.html: pt-BR + atalho de cache). O loopback
     127.0.0.1 (cinto e suspensório com o toml) passa a ser garantido no run_app.py."""
+    import run_app
     bat = _texto(BAT)
-    run_app = _texto(RUN_APP)
     assert "run_app.py" in bat, "iniciar.bat deve delegar ao run_app.py"
-    assert "--server.address=127.0.0.1" in run_app, (
+    assert "--server.address=127.0.0.1" in run_app._flags_config(), (
         "run_app.py precisa forçar o bind no loopback como reforço ao toml."
     )
-    assert "0.0.0.0" not in bat and "0.0.0.0" not in run_app
+    assert "0.0.0.0" not in bat and "0.0.0.0" not in _texto(RUN_APP)
 
 
 def test_iniciar_bat_usa_run_app_na_porta_8501():
     """A invocação principal do Streamlit vive no run_app.py (porta 8501)."""
+    import run_app
     assert "python run_app.py" in _texto(BAT)
-    assert "--server.port=8501" in _texto(RUN_APP)
+    assert "--server.port=8501" in run_app._flags_config()
 
 
 if __name__ == "__main__":
