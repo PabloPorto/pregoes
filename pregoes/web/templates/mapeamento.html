@@ -1,0 +1,110 @@
+{% extends "pregao_base.html" %}
+{% import "_macros.html" as m with context %}
+{# Mapeamento manual: o operador aponta a tabela de itens e diz o que é cada
+   coluna (3 passos). A tabela escolhida vai na URL (?tabela=N). #}
+{% block estilos %}<link rel="stylesheet" href="{{ raiz }}/static/revisao.css?v={{ versao }}">{% endblock %}
+{% block scripts %}<script src="{{ raiz }}/static/revisao.js?v={{ versao }}"></script>{% endblock %}
+{% block etapa %}
+{% set base = '/pregao/' ~ pregao.slug %}
+<div class="cabecalho">
+  <div class="titulos">
+    <h1>Mapeamento manual da tabela de itens</h1>
+    <p>Quando a extração automática não acerta, você indica qual é a tabela certa e o que é cada coluna. O sistema aprende para os próximos editais.</p>
+  </div>
+  {% if not nada %}<div class="acoes"><a class="btn" href="{{ raiz }}{{ base }}/revisao">{{ m.icone('voltar') }} Voltar para revisão</a></div>{% endif %}
+</div>
+
+<div class="pilha">
+{% if docling_tarefa %}
+  {% set t = docling_tarefa %}{% set ao_terminar = base ~ '/mapeamento?docling=1' %}
+  {% include "_tarefa.html" %}
+  <p class="map-nota">A extração profunda demora de <b>5 a 10 minutos</b>. Pode sair desta página — ela continua no servidor, e as tabelas encontradas aparecem aqui quando terminar.</p>
+{% elif nada %}
+  {{ m.aviso('erro', 'Nada para mapear — volte e envie um PDF primeiro.') }}
+  <div class="linha"><a class="btn primario" href="{{ raiz }}/">{{ m.icone('inicio') }} Voltar para o início</a></div>
+{% else %}
+  {% if docling_erro %}
+    {{ m.aviso('erro', 'Docling falhou: ' ~ docling_erro|e) }}
+  {% elif docling_fim is not none and docling_fim > 0 %}
+    {{ m.aviso('ok', 'Docling detectou ' ~ docling_fim ~ ' tabelas. Escolha abaixo.') }}
+  {% elif docling_fim == 0 %}
+    {{ m.aviso('alerta', 'A extração profunda não encontrou nenhuma tabela neste PDF. As tabelas abaixo continuam sendo as da leitura normal.') }}
+  {% endif %}
+
+  {% if usando_docling %}
+    {{ m.aviso('info', 'Mostrando tabelas detectadas pelo Docling (extração profunda).') }}
+  {% elif docling_disponivel %}
+  <details class="recolhe">
+    <summary>Não encontrou a tabela certa? Carregar com extração profunda (Docling)</summary>
+    <div class="corpo pilha">
+      <p class="map-nota">Docling usa um modelo de visão para detectar tabelas que o pdfplumber não viu. Funciona melhor em PDFs com layout complexo, mas demora <b>5-10 minutos</b> por edital. Use só quando a tabela certa não está na lista abaixo.</p>
+      <div><button class="btn" type="button" data-acao="{{ base }}/mapeamento/docling">{{ m.icone('raio') }} Carregar tabelas com Docling</button></div>
+    </div>
+  </details>
+  {% endif %}
+
+  <section class="cartao map-passo">
+    <div class="cab"><span class="n">1</span><h2>Passo 1 — Qual das tabelas é a de itens?</h2></div>
+    <div class="corpo pilha">
+      <label class="campo">Tabelas detectadas no PDF
+        <select name="tabela" data-map-tabela="{{ raiz }}{{ base }}/mapeamento?tabela=">
+          {% for rotulo in opcoes %}<option value="{{ loop.index0 }}"{{ ' selected' if loop.index0 == idx }}>{{ rotulo }}</option>{% endfor %}
+        </select>
+      </label>
+      {% if not n_cols %}
+        {{ m.aviso('alerta', 'Tabela vazia — escolha outra.') }}
+      {% else %}
+      <p class="map-nota"><b>Pré-visualização da Tabela #{{ idx + 1 }}</b> (primeiras 5 linhas):</p>
+      <div class="tabela-rolagem map-previa">
+        <table class="tabela">
+          <thead><tr>{% for c in range(n_cols) %}<th>Col {{ c + 1 }}</th>{% endfor %}</tr></thead>
+          <tbody>{% for linha in previa %}<tr>{% for cel in linha %}<td title="{{ cel }}">{{ cel }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+        </table>
+      </div>
+      {% endif %}
+    </div>
+  </section>
+
+  {% if n_cols %}
+  <form class="pilha" action="{{ base }}/mapeamento/aplicar" method="post" data-async data-map-form
+        data-obrigatorios="{{ obrigatorios|join(',') }}"
+        {% if tem_busca %}data-confirmar="Este pregão já tem preços buscados. Aplicar o mapeamento refaz a lista de itens e descarta a busca feita — os preços encontrados continuam na memória por 2 dias, então buscar de novo é rápido. Continuar?"{% endif %}>
+    <input type="hidden" name="tabela" value="{{ idx }}">
+    <section class="cartao map-passo">
+      <div class="cab"><span class="n">2</span><h2>Passo 2 — O que é cada coluna?</h2></div>
+      <div class="corpo pilha">
+        <p class="map-nota">A primeira linha do PDF acima é o cabeçalho — não vai virar item. Para cada coluna, escolha o campo correspondente.</p>
+        {% if mapa_salvo %}
+          {{ m.aviso('ok', 'Encontrei um mapa salvo desta assinatura de cabeçalho — os campos abaixo já vieram preenchidos. Ajuste se precisar.') }}
+        {% endif %}
+        <div class="grade c3 map-colunas">
+          {% for nome in colunas %}
+          {% set c = loop.index0 %}
+          <label class="campo"><span>Coluna {{ c + 1 }} — <code>{{ nome }}</code></span>
+            <select name="col_{{ c }}" data-map-coluna>
+              {% for campo in campos %}<option value="{{ campo }}"{{ ' selected' if escolhas[c] == campo }}>{{ rotulos[campo] }}</option>{% endfor %}
+            </select>
+            <span class="map-repetido" role="status">{% if c in repetidas %}“{{ rotulos[escolhas[c]] }}” já está em outra coluna.{% endif %}</span>
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+    </section>
+
+    <section class="cartao map-passo">
+      <div class="cab"><span class="n">3</span><h2>Passo 3 — Validar e aplicar</h2></div>
+      <div class="corpo pilha">
+        <div class="aviso erro{{ '' if faltando else ' oculto' }}" id="map-faltando" role="alert">{{ m.icone('erro') }}<div>Mapeamento incompleto — faltam: <b>{{ faltando|join(', ') }}</b>.</div></div>
+        <label class="checagem"><input type="checkbox" name="salvar" checked> Salvar este mapeamento para reuso automático em próximos editais com o mesmo formato</label>
+        <p class="map-nota">Ao aplicar, a lista de itens da revisão é refeita a partir desta tabela — as correções feitas à mão na grade são substituídas pelo que for lido aqui.</p>
+      </div>
+      <div class="pe">
+        <button class="btn primario" type="submit"{{ ' disabled' if faltando }}>{{ m.icone('ok') }} Aplicar mapeamento</button>
+        <a class="btn fantasma" href="{{ raiz }}{{ base }}/revisao">Cancelar</a>
+      </div>
+    </section>
+  </form>
+  {% endif %}
+{% endif %}
+</div>
+{% endblock %}

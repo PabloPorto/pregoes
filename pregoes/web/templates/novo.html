@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block titulo %}Novo pregão{% endblock %}
+{% block migalhas %}<b>Novo pregão</b>{% endblock %}
+{% block conteudo %}
+<div class="cabecalho"><div class="titulos"><h1>Novo pregão</h1><p>Envie o PDF do edital. O sistema lê a tabela de itens sozinho; você confere antes de buscar os preços.</p></div></div>
+<form class="cartao" action="/novo" method="post" enctype="multipart/form-data" data-async style="max-width:760px">
+  <div class="corpo pilha">
+    <div class="solta" tabindex="0" role="button" aria-label="Escolher o PDF do edital">
+      <div class="icone">{{ m.icone('enviar') }}</div>
+      <b>Arraste o PDF aqui ou clique para escolher</b>
+      <span class="mudo pequeno nome-arquivo">Edital, termo de referência ou a "Proposta" do portal de compras — em PDF com texto.</span>
+      <input type="file" name="pdf" accept="application/pdf,.pdf" required hidden>
+    </div>
+    <div class="grade c2">
+      <label class="campo">Órgão<input type="text" name="orgao" placeholder="Ex: Prefeitura Municipal de Araruna" required autocomplete="off"></label>
+      <label class="campo">Número do pregão<input type="text" name="numero" placeholder="Ex: 00006/2026" required autocomplete="off"></label>
+    </div>
+  </div>
+  <div class="pe">
+    <button class="btn primario" type="submit">{{ m.icone('raio') }} Extrair itens do PDF</button>
+    <span class="mudo pequeno">Envie o PDF <b>inteiro</b> — não precisa recortar em partes.</span>
+  </div>
+</form>
+{% endblock %}

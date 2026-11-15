@@ -1,0 +1,21 @@
+# Interface web NOVA do Pregões (Starlette), ao lado do Streamlit (pregoes.service).
+# Escuta só em 127.0.0.1:8502, sob o caminho /novo — quem publica é o túnel, na
+# MESMA hostname (logo, atrás do mesmo login do Cloudflare Access).
+# Trocar de vez para a interface nova: ver INTERFACE_WEB.md.
+[Unit]
+Description=Pregoes (interface web nova)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=pregoes
+WorkingDirectory=/home/pregoes/pregoes
+Environment=PREGOES_SERVIDOR=1
+Environment=PREGOES_WEB_PORTA=8502
+Environment=PREGOES_WEB_RAIZ=/novo
+ExecStart=/home/pregoes/pregoes/.venv/bin/python run_web.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block titulo %}Pregões em andamento{% endblock %}
+{% block migalhas %}<b>Pregões em andamento</b>{% endblock %}
+{% block topo_acoes %}<a class="btn primario" href="{{ raiz }}/novo">{{ m.icone('novo') }} Novo pregão</a>{% endblock %}
+{% block conteudo %}
+<div class="cabecalho">
+  <div class="titulos"><h1>Pregões em andamento</h1><p>Tudo o que foi começado e ainda não virou planilha. Continue de onde parou — o trabalho fica salvo sozinho.</p></div>
+</div>
+<div class="cartao">
+  <div class="cab">
+    <label class="busca-campo">{{ m.icone('busca') }}<input type="search" placeholder="Filtrar por órgão ou número…  ( / )" data-filtrar=".linha-pregao" data-atalho-busca aria-label="Filtrar pregões"></label>
+    <span class="mudo pequeno">{{ pendentes|length }} {{ 'pregão' if pendentes|length == 1 else 'pregões' }}</span>
+  </div>
+  {% if pendentes %}
+  <div class="tabela-rolagem"><table class="tabela">
+    <thead><tr><th>Pregão</th><th>Situação</th><th>Última alteração</th><th></th></tr></thead>
+    <tbody>{% for r in pendentes %}{% include "_pregao_linha.html" %}{% endfor %}</tbody>
+  </table></div>
+  {% else %}
+  <div class="vazio">{{ m.icone('pasta') }}<b>Nenhum pregão em andamento</b>Envie o PDF de um edital para começar.
+    <div style="margin-top:14px"><a class="btn primario" href="{{ raiz }}/novo">{{ m.icone('novo') }} Novo pregão</a></div></div>
+  {% endif %}
+</div>
+{% endblock %}

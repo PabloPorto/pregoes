@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% import "historico_macros.html" as adm with context %}
+{% block titulo %}Planilhas geradas{% endblock %}
+{% block estilos %}<link rel="stylesheet" href="{{ raiz }}/static/admin.css?v={{ versao }}">{% endblock %}
+{% block migalhas %}<b>Planilhas geradas</b>{% endblock %}
+{% block topo_acoes %}<a class="btn primario" href="{{ raiz }}/novo">{{ m.icone('novo') }} Novo pregão</a>{% endblock %}
+{% block conteudo %}
+<div class="cabecalho">
+  <div class="titulos">
+    <h1>Planilhas geradas</h1>
+    <p>Pregões processados e suas planilhas. Baixe de novo ou exclua.</p>
+  </div>
+</div>
+
+{% if not total %}
+<div class="cartao">
+  <div class="vazio">
+    {{ m.icone('planilha') }}
+    <b>Nenhum pregão processado ainda</b>
+    Comece em <b style="display:inline">Novo pregão</b>.
+    <div style="margin-top:14px"><a class="btn primario" href="{{ raiz }}/novo">{{ m.icone('novo') }} Novo pregão</a></div>
+  </div>
+</div>
+{% else %}
+<div class="cartao">
+  <form class="cab" method="get" action="{{ raiz }}/historico" role="search">
+    <label class="busca-campo">{{ m.icone('busca') }}<input type="search" name="q" value="{{ filtro }}" placeholder="Filtrar por órgão ou número do pregão…" data-atalho-busca aria-label="Buscar pregão" autocomplete="off"></label>
+    <button class="btn" type="submit">Filtrar</button>
+    {% if filtro %}<a class="btn fantasma" href="{{ raiz }}/historico">Limpar</a>{% endif %}
+    <span class="mudo pequeno contagem">{% if filtro %}{{ achados }} de {{ total }}{% else %}{{ total }}{% endif %} {{ 'pregão' if total == 1 else 'pregões' }}</span>
+  </form>
+  {% if editais %}
+  <div class="tabela-rolagem alta">
+    <table class="tabela">
+      <thead><tr><th>Pregão</th><th>Situação</th><th>Registrado em</th><th>Planilhas</th><th></th></tr></thead>
+      <tbody>{% for e in editais %}{% include "historico_linha.html" %}{% endfor %}</tbody>
+    </table>
+  </div>
+  {{ adm.paginacao(prefixo, pagina_atual, paginas) }}
+  {% else %}
+  <div class="vazio">
+    {{ m.icone('busca') }}
+    <b>Nenhum pregão encontrado para “{{ filtro }}”.</b>
+    Confira o texto ou <a href="{{ raiz }}/historico">veja todos os pregões</a>.
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,15 @@
+{# Cartão de progresso de uma tarefa demorada. Espera `t` (retrato da tarefa)
+   e, opcional, `ao_terminar` (para onde ir quando acabar; senão recarrega). #}
+<div class="cartao" data-tarefa="{{ t.id }}"{% if ao_terminar %} data-ao-terminar="{{ ao_terminar }}"{% endif %}>
+  <div class="progresso">
+    <div class="topo-p">
+      <span class="pct num">{{ (t.fracao * 100)|round|int }}%</span>
+      <b class="titulo-t">{{ t.titulo }}</b>
+      <span class="tempo num"></span>
+    </div>
+    <div class="barra"><i style="width: {{ (t.fracao * 100)|round|int }}%"></i></div>
+    <div class="item-atual">{{ t.detalhe }}</div>
+    <div class="aviso alerta pausa-t oculto" style="margin-top:12px">{{ m.icone('relogio') }}<div>O site dos fornecedores limitou as consultas. A busca <b>pausou e continua sozinha</b> em alguns minutos. Pode fechar esta página — o trabalho segue no servidor.</div></div>
+    {% if caller %}{{ caller() }}{% endif %}
+  </div>
+</div>

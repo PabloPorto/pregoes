@@ -1,0 +1,12 @@
+{# Faixa fixa no pé da tela de Preços: quantos itens têm escolha + seguir para
+   a planilha. Espera `mt` e `pregao`. Trocada (id="precos-rodape") a cada escolha. #}
+{% import "_macros.html" as m with context %}
+<div class="p-rodape" id="precos-rodape">
+  <div class="cartao">
+    <div class="p-rodape-texto">
+      <b class="num">{{ mt.selecionados }} de {{ mt.total }}</b> itens com marca/preço selecionados.
+      {% if mt.selecionados < mt.total %}<span class="mudo pequeno">Os demais saem com o preço em branco na planilha.</span>{% endif %}
+    </div>
+    <a class="btn primario" href="{{ raiz }}/pregao/{{ pregao.slug }}/planilha">Continuar para a planilha {{ m.icone('seta') }}</a>
+  </div>
+</div>

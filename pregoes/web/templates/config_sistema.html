@@ -1,0 +1,32 @@
+{# Aba Sistema: fatos para o suporte. Só leitura — nenhuma senha ou chave. #}
+<div class="cartao">
+  <div class="cab"><h2>Sobre esta instalação</h2></div>
+  <div class="corpo">
+    <dl class="fatos">
+      <dt>Versão do sistema</dt><dd class="num">{{ versao }}</dd>
+      <dt>Onde roda</dt><dd>{{ 'No servidor do sistema' if servidor else 'Neste computador' }}</dd>
+      <dt>Pasta de dados</dt><dd class="mono">{{ pasta_dados }}</dd>
+      <dt>Banco de dados</dt><dd class="num">{{ tamanho_banco }}</dd>
+      <dt>Pregões em andamento guardados</dt><dd class="num">{{ n_rascunhos|num }}</dd>
+      <dt>Último backup externo</dt>
+      <dd>{% if backup_fora is none %}<span class="selo alerta"><span class="ponto"></span>Nenhum</span>{% elif backup_fora is string %}<span class="num">{{ backup_fora }}</span>{% else %}<span class="num">{{ backup_fora|quando }}</span>{% endif %} <span class="mudo pequeno">· {{ backup_fora_onde }}</span></dd>
+      <dt>Última cópia de segurança do banco</dt>
+      <dd>{% if copia_banco %}<span class="num">{{ copia_banco|quando }}</span> <span class="mudo pequeno">· na pasta de dados (backups)</span>{% else %}<span class="fraco">Nenhuma ainda</span>{% endif %}</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="cartao">
+  <div class="cab">
+    <h2>Registro de atividades</h2>
+    {% if registro %}<span class="mudo pequeno">últimas {{ registro|length }} linhas</span>{% endif %}
+  </div>
+  {% if registro %}
+  <div class="registro" tabindex="0" role="log" aria-label="Últimas linhas do registro de atividades">
+    {%- for l in registro %}<div class="l {{ l.nivel }}">{{ l.texto }}</div>{% endfor -%}
+  </div>
+  <div class="pe"><span class="mudo pequeno">Linhas em <span class="legenda-alerta">amarelo</span> são avisos e em <span class="legenda-erro">vermelho</span> são erros. Senhas e chaves nunca aparecem aqui. Se o suporte pedir, envie o arquivo <span class="mono">{{ caminho_registro }}</span>.</span></div>
+  {% else %}
+  <div class="vazio">{{ m.icone('arquivo') }}<b>Nenhum registro ainda</b>O registro de atividades começa a ser gravado com o uso do sistema.</div>
+  {% endif %}
+</div>

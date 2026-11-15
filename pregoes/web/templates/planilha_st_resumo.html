@@ -1,0 +1,9 @@
+{# Linha de resumo da Substituição Tributária. Espera `resumo` (st/normal/sem_ncm)
+   e `st_manual` (quantos sem NCM o operador marcou com ST).
+   Trocada no lugar quando o operador muda um item (mesmo id na raiz). #}
+<div id="st-resumo" class="pl-st-resumo" role="status">
+  <span class="selo"><span class="ponto"></span>{{ resumo['normal'] }} {{ 'normal' if resumo['normal'] == 1 else 'normais' }}</span>
+  <span class="selo info"><span class="ponto"></span>{{ resumo['st'] }} com Substituição Tributária</span>
+  <span class="selo {{ 'alerta' if resumo['sem_ncm'] }}"><span class="ponto"></span>{{ resumo['sem_ncm'] }} sem NCM</span>
+  {% if st_manual %}<span class="mudo pequeno">· {{ st_manual }} {{ 'deles marcado' if st_manual == 1 else 'deles marcados' }} por você como Com Substituição Tributária</span>{% endif %}
+</div>

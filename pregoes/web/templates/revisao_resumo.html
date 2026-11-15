@@ -1,0 +1,7 @@
+{# As 4 métricas da revisão. Espera: c (regras_revisao.contagem), n_tabelas. #}
+<div id="rev-resumo" class="grade c4">
+  <div class="cartao metrica"><div class="rotulo">Total de itens</div><div class="valor">{{ c.total }}</div><div class="apoio">todos vão para a planilha</div></div>
+  <div class="cartao metrica"><div class="rotulo">OK</div><div class="valor">{{ c.ok }}</div><div class="apoio">lidos com segurança</div></div>
+  <div class="cartao metrica{{ ' rev-atencao' if c.duvidosos }}"><div class="rotulo">Duvidosos</div><div class="valor">{{ c.duvidosos }}</div><div class="apoio">{{ 'conferir' if c.duvidosos else 'nada a conferir' }}</div></div>
+  <div class="cartao metrica"><div class="rotulo">Tabelas detectadas</div><div class="valor">{{ n_tabelas }}</div><div class="apoio">no PDF</div></div>
+</div>

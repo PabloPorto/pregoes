@@ -1,0 +1,47 @@
+{# Resposta das buscas manuais, dentro do diálogo: troca #procura-estado (a
+   mensagem) e #procura-resultado (a lista). Um modelo, dois blocos — a rota
+   renderiza cada um com `parte`. Espera `pregao`, `i` e, conforme o caso:
+   `aviso` ({tipo, html}) · `texto` · `linhas` (catálogo) · `achados` (site). #}
+{% import "_macros.html" as m with context %}
+{% set base = '/pregao/' ~ pregao.slug ~ '/precos/item/' ~ i %}
+{% if parte == 'estado' %}
+<div id="procura-estado" class="p-estado">
+  {%- if aviso %}{{ m.aviso(aviso.tipo, aviso.html) }}{% elif texto %}<p class="mudo">{{ texto }}</p>{% endif -%}
+</div>
+{% else %}
+<div id="procura-resultado">
+  {% if linhas %}
+  <p class="pequeno mudo">O preço abaixo é só <b>referência da última compra</b>. Ao usar, o sistema busca o <b>preço atual</b> no site do fornecedor pelo código (preço muda todo dia).</p>
+  <div class="p-achados">
+    {% for l in linhas %}
+    <div class="p-achado">
+      <div class="p-achado-texto">
+        <div><b>{{ l.marca }}</b> · {{ l.descricao }}</div>
+        <div class="pequeno mudo"><span class="forn-{{ l.fornecedor }}">{{ l.fornecedor|capitalize }}</span> · <span class="mono">cód. {{ l.codigo }}</span> ·
+          {% if l.ref_preco is not none %}referência: {{ l.ref_preco|brl }} (últ. compra {{ l.ref_data }}){% else %}sem referência de preço{% endif %}</div>
+      </div>
+      {% if l.configurado %}
+      <button class="btn p" type="button" data-acao="{{ base }}/catalogo/usar" data-dados='{{ {"produto_id": l.produto_id, "fornecedor": l.fornecedor}|tojson }}'
+              data-espera="Buscando o preço atual do código {{ l.codigo }} na {{ l.fornecedor|capitalize }}…">Usar (preço atual)</button>
+      {% else %}
+      <span class="pequeno fraco" title="Cadastre o acesso deste fornecedor em Configurações">{{ l.fornecedor|capitalize }} não configurada</span>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% elif achados %}
+  <p class="pequeno mudo">{{ achados|length }} resultado(s) na {{ fornecedor|capitalize }} — <b>preço atual do site</b>. Clique em <b>Usar</b> no escolhido.</p>
+  <div class="p-achados">
+    {% for a in achados %}
+    <div class="p-achado">
+      <div class="p-achado-texto">
+        <div><b>{{ a.r.marca or 'Sem marca' }}</b> · <span class="num">{{ a.r.preco|brl }}</span></div>
+        <div class="pequeno mudo">{{ (a.r.descricao_encontrada or '')[:64] }} · <span class="mono">cód. {{ a.r.codigo_fornecedor or '' }}</span></div>
+      </div>
+      <button class="btn p" type="button" data-acao="{{ base }}/site/usar" data-dados='{{ a.pacote|tojson }}'>Usar</button>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+{% endif %}

@@ -1,0 +1,54 @@
+/* Etapa "Planilha" — só o que app.css não cobre. Cores sempre por variável. */
+
+.pl { max-width: 920px; display: flex; flex-direction: column; gap: 16px; }
+.pl > .cabecalho { margin-bottom: 4px; }
+.pl-cresce { flex: 1; min-width: 220px; }
+.pl code { font-family: var(--mono); font-size: .9em; word-break: break-all; }
+
+/* Resumo: três números lado a lado, num cartão só */
+.pl-numeros { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-bottom: 1px solid var(--borda); }
+.pl-numeros > .metrica + .metrica { border-left: 1px solid var(--borda); }
+.pl-resumo-notas > p { margin: 0; }
+
+/* Planilha gerada */
+.pl-pronta { border-color: var(--ok-borda); }
+.pl-pronta-corpo { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding: 22px; }
+.pl-pronta-selo { width: 46px; height: 46px; border-radius: 50%; flex: none; display: grid; place-items: center; background: var(--ok-fundo); color: var(--ok); }
+.pl-pronta-selo svg { width: 26px; height: 26px; }
+.pl-pronta-texto { flex: 1; min-width: 240px; }
+.pl-pronta-texto h2 { font-size: 1.05rem; }
+.pl-pronta-texto p { margin: 4px 0 0; color: var(--texto-2); font-size: .92rem; }
+.pl-anterior { margin-top: 6px; color: var(--texto-2); }
+.pl-refazer > .corpo > p { margin: 0; }
+
+/* Escolha entre poucas opções (Normal × Com ST; 15% / 12% / 7%) */
+.pl-seg { display: inline-flex; flex: none; border: 1px solid var(--borda-forte); border-radius: 8px; overflow: hidden; background: var(--superficie); }
+.pl-seg label { position: relative; cursor: pointer; }
+.pl-seg label + label { border-left: 1px solid var(--borda-forte); }
+.pl-seg input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.pl-seg span { display: block; padding: 7px 13px; font-size: .86rem; font-weight: 600; color: var(--texto-2); white-space: nowrap; transition: background .12s, color .12s; }
+.pl-seg label:hover span { background: var(--superficie-2); }
+.pl-seg input:checked + span { background: var(--primaria); color: var(--sobre-primaria); }
+.pl-seg input:focus-visible + span { outline: 2px solid var(--primaria); outline-offset: -2px; }
+.pl-rotulo { font-size: .9rem; font-weight: 600; color: var(--texto-2); }
+
+/* Substituição Tributária */
+.pl-st-resumo { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.pl-st-resumo .selo { font-size: .84rem; padding: 4px 11px; }
+.pl-st-lista > .corpo > p { margin: 0 0 6px; }
+.pl-st-item { display: flex; align-items: center; gap: 14px; padding: 10px 0; border-top: 1px solid var(--borda); margin: 0; }
+.pl-st-item .n { min-width: 34px; font-weight: 700; color: var(--texto-3); }
+.pl-st-item .d { flex: 1; min-width: 0; }
+.pl-st-item .d b { display: block; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pl #st .cartao { box-shadow: none; background: var(--superficie-2); }
+
+/* Ação final */
+.pl-acao > .corpo { display: flex; align-items: center; justify-content: flex-end; gap: 12px; flex-wrap: wrap; }
+
+@media (max-width: 760px) {
+  .pl-numeros { grid-template-columns: 1fr; }
+  .pl-numeros > .metrica + .metrica { border-left: none; border-top: 1px solid var(--borda); }
+  .pl-st-item { flex-wrap: wrap; }
+  .pl-st-item .d { flex-basis: calc(100% - 48px); }
+  .pl-seg { max-width: 100%; }
+}

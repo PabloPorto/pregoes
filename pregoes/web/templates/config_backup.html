@@ -1,0 +1,55 @@
+{# Aba Backup: no servidor é automático (só estado + "agora"); no computador
+   do cliente, a pasta do Google Drive. #}
+{% if servidor %}
+  {{ m.aviso('info', 'O sistema faz backup <b>sozinho</b>: todo dia de madrugada e a cada planilha gerada, uma cópia completa (pregões, catálogo, histórico, planilhas e credenciais) é guardada <b>fora do servidor</b>, com os últimos 30 dias. Não precisa configurar nada.') }}
+  {% if ultimo is none %}
+    {{ m.aviso('alerta', 'Ainda não houve nenhum backup. O primeiro acontece esta madrugada — ou clique em <b>Fazer backup agora</b>.') }}
+  {% elif atrasado %}
+    {{ m.aviso('erro', 'O último backup é de <b>' ~ ultimo.strftime('%d/%m/%Y às %H:%M') ~ '</b> — há mais de 2 dias. Clique em <b>Fazer backup agora</b>; se não funcionar, fale com o suporte.') }}
+  {% else %}
+    {{ m.aviso('ok', 'Último backup: <b>' ~ ultimo.strftime('%d/%m/%Y às %H:%M') ~ '</b>.') }}
+  {% endif %}
+  {% if tarefa %}
+    {% set t = tarefa %}{% include "_tarefa.html" %}
+    <p class="mudo pequeno" style="margin:0">Pode levar alguns minutos. Pode sair desta página — o backup continua.</p>
+  {% else %}
+    {% if pedido and not pedido.ok %}
+      {{ m.aviso('erro', 'Não consegui fazer o backup agora. Tente de novo em alguns minutos; se persistir, fale com o suporte.') }}
+    {% endif %}
+    <div><button class="btn primario" type="button" data-acao="/configuracoes/backup" data-dados='{"acao": "agora"}'>{{ m.icone('nuvem') }} Fazer backup agora</button></div>
+  {% endif %}
+{% else %}
+  {{ m.aviso('info', 'Tudo do sistema (catálogo, aprendizado, histórico e credenciais) fica só neste computador. Se o computador falhar, isso se perde. Aponte abaixo uma <b>pasta do Google Drive</b> e o sistema guarda uma cópia lá <b>sozinho</b> (ao abrir e ao gerar cada planilha) — o Google Drive envia para a nuvem automaticamente.') }}
+  <div class="cartao">
+    <div class="cab"><h2>Como preparar (uma vez)</h2></div>
+    <div class="corpo">
+      <ol class="passos">
+        <li>Instale o <b>Google Drive</b> para computador e faça login.</li>
+        <li>Crie uma pasta, por exemplo <code>Backup Pregões</code>, dentro do seu Drive.</li>
+        <li>Abra essa pasta, copie o caminho da barra de endereço (algo como <code>G:\Meu Drive\Backup Pregões</code>) e cole abaixo.</li>
+      </ol>
+    </div>
+  </div>
+  {% if tarefa %}
+    {% set t = tarefa %}{% include "_tarefa.html" %}
+  {% elif pedido %}
+    {% if pedido.ok %}
+      <div class="aviso ok" role="status">{{ m.icone('ok') }}<div>Backup feito: <code>{{ pedido.arquivo }}</code> na pasta indicada. O Google Drive vai enviar para a nuvem em seguida.<div class="pequeno mudo">{{ pedido.terminou_em|quando }}</div></div></div>
+    {% else %}
+      {{ m.aviso('erro', 'Não consegui gravar o backup. Verifique se o <b>Google Drive está aberto</b> e se o caminho da pasta está correto.') }}
+    {% endif %}
+  {% endif %}
+  <form class="cartao" action="/configuracoes/backup" method="post" data-async autocomplete="off">
+    <div class="cab"><h2>Pasta de backup</h2></div>
+    <div class="corpo">
+      <label class="campo">Pasta de backup (Google Drive)
+        <input type="text" name="pasta" value="{{ pasta }}" placeholder="G:\Meu Drive\Backup Pregões" spellcheck="false">
+        <span class="dica">Pasta no seu computador que o Google Drive sincroniza. Deixe em branco para desligar o backup automático.</span>
+      </label>
+    </div>
+    <div class="pe">
+      <button class="btn primario" type="submit" name="acao" value="salvar">Salvar pasta</button>
+      <button class="btn" type="submit" name="acao" value="agora"{% if tarefa %} disabled{% endif %}>{{ m.icone('nuvem') }} Fazer backup agora</button>
+    </div>
+  </form>
+{% endif %}

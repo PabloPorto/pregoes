@@ -1,0 +1,102 @@
+/* Revisão dos itens e mapeamento manual — só o que é específico destas telas.
+   Cores sempre pelas variáveis de app.css (tema claro/escuro). */
+
+/* ===== Barra da grade (filtro, filtros rápidos, marcar todos) ===== */
+.rev-barra { flex-wrap: wrap; row-gap: 10px; }
+.rev-barra .busca-campo { max-width: 340px; }
+.rev-barra .rev-marcar { margin-left: auto; }
+.rev-legenda { margin: 0; padding: 9px 18px; font-size: .85rem; color: var(--texto-2); border-bottom: 1px solid var(--borda); background: var(--superficie-2); display: flex; flex-wrap: wrap; gap: 4px 16px; justify-content: space-between; }
+.rev-teclas { color: var(--texto-3); white-space: nowrap; }
+.rev-so-leitor { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* ===== Grade ===== */
+/* O cartão da grade nunca passa da altura da janela: a tabela rola por dentro,
+   com o cabeçalho preso no topo, e o rodapé (contador + "Buscar preços") fica
+   sempre à vista — mesmo num edital de 700 linhas. 134px = barra do topo +
+   respiro + a margem de baixo da página. */
+#rev-cartao { display: flex; flex-direction: column; max-height: max(460px, calc(100vh - 134px)); }
+.rev-rolagem { flex: 1 1 auto; min-height: 0; border-radius: 0; scroll-padding-top: 40px; }
+table.rev-grade { table-layout: fixed; min-width: 760px; }
+.rev-grade .col-ok { width: 124px; } .rev-grade .col-num { width: 66px; }
+.rev-grade .col-un { width: 84px; } .rev-grade .col-qtd { width: 108px; }
+.rev-grade .col-ref { width: 116px; } .rev-grade .col-acoes { width: 44px; }
+.rev-grade th { z-index: 2; padding: 9px 8px; }
+.rev-grade th.c-ok { padding-left: 16px; cursor: help; }
+.rev-grade th.direita { text-align: right; padding-right: 13px; }
+.rev-grade td { padding: 3px 4px; vertical-align: top; }
+.rev-grade td.c-ok { padding: 10px 4px 0 16px; white-space: nowrap; }
+.rev-grade td.c-acoes { text-align: right; padding: 5px 8px 3px 0; }
+
+/* Campos "invisíveis": parecem texto até o operador passar o mouse ou focar —
+   700 caixas com borda cansam a vista e escondem o conteúdo. A borda existe
+   sempre (transparente), então nada pula quando ela aparece. */
+.rev-grade input[type=text], .rev-grade textarea {
+  display: block; width: 100%; min-height: 32px; padding: 5px 8px; font-size: .9rem; line-height: 1.4;
+  border: 1px solid transparent; border-radius: 6px; background: transparent; box-shadow: none;
+}
+.rev-grade textarea { resize: none; overflow: hidden; field-sizing: content; }
+.rev-grade tr:hover input[type=text], .rev-grade tr:hover textarea { border-color: var(--borda-forte); }
+.rev-grade input[type=text]:focus, .rev-grade textarea:focus {
+  background: var(--superficie); border-color: var(--primaria);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primaria) 22%, transparent);
+}
+.rev-grade input[name=item_numero], .rev-grade input[name=quantidade], .rev-grade input[name=valor_referencia] {
+  text-align: right; font-variant-numeric: tabular-nums;
+}
+.rev-grade input[name=item_numero] { color: var(--texto-2); font-weight: 600; }
+.rev-grade input[type=checkbox] { min-height: 0; padding: 0; width: 17px; height: 17px; cursor: pointer; }
+.rev-grade [aria-invalid=true], .rev-grade tr:hover [aria-invalid=true] { border-color: var(--erro); background: var(--erro-fundo); }
+
+/* Linha duvidosa: amarela, com filete à esquerda e o selo "conferir". */
+.rev-grade tbody tr.duvidoso td, .rev-grade tbody tr.duvidoso:hover td { background: var(--alerta-fundo); }
+.rev-grade tbody tr.duvidoso td:first-child { box-shadow: inset 3px 0 0 var(--alerta); }
+.rev-grade tbody tr[data-nova] td:first-child { box-shadow: inset 3px 0 0 var(--primaria); }
+/* Item que não vai para a busca: texto mais apagado (continua editável). */
+.rev-grade tbody tr:has(td.c-ok input:not(:checked)) textarea,
+.rev-grade tbody tr:has(td.c-ok input:not(:checked)) input[type=text] { color: var(--texto-2); }
+.rev-grade tbody tr.rev-fora { display: none; }
+.rev-grade td.c-ok input { vertical-align: top; }
+.rev-conferir { vertical-align: top; margin-left: 8px; }
+
+.rev-excluir {
+  width: 28px; height: 28px; padding: 0; border: none; border-radius: 6px; background: transparent;
+  color: var(--texto-3); cursor: pointer; vertical-align: middle; opacity: .55;
+  display: inline-grid; place-items: center; transition: opacity .12s, background .12s, color .12s;
+}
+.rev-excluir::before {
+  content: ""; width: 15px; height: 15px; background: currentColor;
+  --rev-lixo: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 7h16'/%3E%3Cpath d='M9 7V4h6v3'/%3E%3Cpath d='M6 7l1 14h10l1-14'/%3E%3C/svg%3E");
+  -webkit-mask: var(--rev-lixo) center / contain no-repeat; mask: var(--rev-lixo) center / contain no-repeat;
+}
+.rev-grade tr:hover .rev-excluir, .rev-excluir:focus-visible { opacity: 1; }
+.rev-excluir:hover { color: var(--erro); background: var(--erro-fundo); }
+.rev-excluir.ocupado { pointer-events: none; opacity: .3; }
+
+/* ===== Rodapé do cartão ===== */
+.rev-pe { row-gap: 10px; }
+.rev-acoes { margin-left: auto; }
+.rev-contador { flex: 1 1 340px; min-width: 0; font-size: .9rem; color: var(--texto-2); display: flex; flex-direction: column; gap: 1px; }
+.rev-contador b { color: var(--texto); }
+.rev-salvo { font-size: .8rem; color: var(--texto-3); font-variant-numeric: tabular-nums; min-height: 1.3em; }
+.rev-sem-fornecedor { flex-basis: 100%; display: flex; gap: 8px; align-items: center; font-size: .86rem; color: var(--alerta); }
+.rev-sem-fornecedor svg { width: 16px; height: 16px; flex: none; }
+.rev-sem-fornecedor span { color: var(--texto-2); }
+.rev-vazio-acoes { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 14px; }
+.metrica.rev-atencao { border-color: var(--alerta-borda); }
+.metrica.rev-atencao .apoio { color: var(--alerta); font-weight: 600; }
+#rev-sem-resultado .btn { margin-top: 12px; }
+
+/* ===== Mapeamento manual ===== */
+.map-passo > .cab .n { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; flex: none; font-size: .82rem; font-weight: 700; background: var(--primaria-suave); color: var(--primaria); }
+.map-previa { border: 1px solid var(--borda); border-radius: var(--raio-p); }
+.map-previa td, .map-previa th { white-space: nowrap; max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+.map-previa tbody tr:first-child td { font-weight: 650; background: var(--primaria-suave); }
+.map-colunas { align-items: start; }
+.map-colunas label.campo code { font-family: var(--mono); font-size: .85em; font-weight: 500; color: var(--texto); background: var(--superficie-2); border: 1px solid var(--borda); border-radius: 5px; padding: 0 5px; overflow-wrap: anywhere; }
+.map-repetido { min-height: 1.35em; font-size: .8rem; font-weight: 500; color: var(--alerta); }
+.map-nota { color: var(--texto-2); font-size: .88rem; margin: 0; }
+
+@media (max-width: 980px) {
+  .rev-barra .rev-marcar { margin-left: 0; }
+  .rev-teclas { display: none; }
+}

@@ -1,0 +1,76 @@
+{# Cartão de UM item na tela de Preços. Espera `it` (regras_selecao.visao_item)
+   e `pregao`. A raiz tem id="item-<posição>": as ações devolvem este pedaço
+   pronto e a página troca só ele (sem recarregar nem pular a rolagem). #}
+{% import "_macros.html" as m with context %}
+{% set base = '/pregao/' ~ pregao.slug ~ '/precos' %}
+{% macro opcao(c) -%}
+  {%- if c.escolhida %}
+  <div class="candidato escolhido" aria-current="true">
+  {%- else %}
+  <button class="candidato" type="button" title="Escolher esta opção" data-acao="{{ base }}/escolher" data-dados='{{ {"i": it.i, "k": c.k}|tojson }}'>
+  {%- endif %}
+    <span class="p-c-topo">
+      <span class="nome-c">{{ c.marca }}</span>
+      {% if c.pilula %}<span class="p-pilula {{ c.pilula[1] }}">{{ c.pilula[0] }}</span>{% endif %}
+      {% if c.escolhida %}<span class="p-escolhido">{{ m.icone('ok') }} escolhido</span>{% endif %}
+    </span>
+    <span class="p-c-desc">{{ c.desc }}</span>
+    <span class="linha-c">
+      {% if c.fornecedor %}<span class="p-forn forn-{{ c.fornecedor_chave }}">{{ c.fornecedor }}</span>{% endif %}
+      {% if c.codigo %}<span class="mono fraco">cód. {{ c.codigo }}</span>{% endif %}
+      {% if c.o.confianca == 'variacao' %}<span class="p-conferir" title="Encontrado por busca aproximada — confira se é o produto certo">conferir</span>{% endif %}
+      <span class="preco">{{ c.o.preco|brl }}</span>
+    </span>
+  {{ '</div>'|safe if c.escolhida else '</button>'|safe }}
+{%- endmacro %}
+<article class="item-cartao p-item st-{{ it.status }}{{ ' nao-usar' if it.nao_usar }}" id="item-{{ it.i }}">
+  <div class="topo-i">
+    <span class="num-i" title="Número do item no edital">{{ it.numero }}</span>
+    <div class="desc-i">
+      {{ it.titulo or '(sem descrição)' }}
+      <div class="meta-i">
+        {%- if it.quantidade is not none %}<span class="num">{{ it.quantidade|num }}</span> {{ it.unidade or '' }}{% elif it.unidade %}{{ it.unidade }}{% endif -%}
+      </div>
+      {% if it.descricao_longa %}
+      <details class="p-literal"><summary>ver descrição completa</summary><div>{{ it.descricao }}</div></details>
+      {% endif %}
+    </div>
+    <div class="p-situacao">
+      <span class="selo {{ it.cor }}">{% if it.cor %}<span class="ponto"></span>{% endif %}{{ it.rotulo }}</span>
+      {% if it.selecao %}
+      <div class="p-escolha" title="Sua escolha para este item"><b class="num">{{ it.selecao.preco|brl }}</b><span>{{ (it.selecao.marca or '')|trim|truncate(16, True, '…', 0) or 'sem marca' }}</span></div>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if it.nao_usar %}
+  <div class="p-nota info">{{ m.icone('info') }}<span>Este item ficará <b>sem preço</b> na planilha (em branco).</span>
+    <button class="btn p" type="button" data-acao="{{ base }}/nao-usar" data-dados='{{ {"i": it.i, "usar": true}|tojson }}'>Voltar a usar este item</button>
+  </div>
+  {% elif not it.opcoes %}
+  <div class="p-nota alerta">{{ m.icone('alerta') }}<span>Nenhum resultado nos fornecedores nesta busca. Use <b>Procurar de outro jeito</b>, ou deixe em branco (a coluna de preço fica vazia para preencher manualmente).</span></div>
+  {% elif not it.selecao %}
+  <div class="p-nota">{{ m.icone('info') }}<span>Nenhuma opção escolhida para este item — clique na que você quer usar.</span></div>
+  {% endif %}
+
+  {% if it.opcoes %}
+  <div class="candidatos">
+    {% for c in it.opcoes %}{{ opcao(c) }}{% endfor %}
+  </div>
+  {% endif %}
+  {% if it.ocultas %}
+  <details class="p-outras">
+    <summary>{{ 'Ver outra opção' if it.ocultas|length == 1 else 'Ver outras ' ~ it.ocultas|length ~ ' opções' }} <span class="fraco">(menos relevantes)</span></summary>
+    <div class="candidatos">
+      {% for c in it.ocultas %}{{ opcao(c) }}{% endfor %}
+    </div>
+  </details>
+  {% endif %}
+
+  <div class="sub-acoes">
+    <button class="btn p fantasma" type="button" data-modal="{{ base }}/item/{{ it.i }}/procurar">{{ m.icone('busca') }} Procurar de outro jeito</button>
+    {% if not it.nao_usar %}
+    <button class="btn p fantasma" type="button" data-acao="{{ base }}/nao-usar" data-dados='{{ {"i": it.i, "usar": false}|tojson }}'>Não usar este item</button>
+    {% endif %}
+  </div>
+</article>

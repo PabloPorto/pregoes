@@ -1,0 +1,62 @@
+/* Pregões — telas de administração: Planilhas geradas, Meu catálogo, Variação
+   de preços e Configurações. Só o que app.css não cobre; cores sempre pelas
+   variáveis de :root (valem para o tema claro e o escuro). */
+
+.nowrap { white-space: nowrap; }
+.cartao > form.cab, .cartao > .cab.barra-filtros { flex-wrap: wrap; }
+.cab .contagem { margin-left: auto; }
+.cab .busca-campo { max-width: 460px; }
+
+/* Tabelas longas rolam DENTRO do cartão — o cabeçalho fica preso no topo. */
+.tabela-rolagem.alta { max-height: min(70vh, 760px); }
+.pe-lista { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 4px 18px; border-top: 1px solid var(--borda); min-height: 52px; }
+.pe-lista .paginacao { padding: 8px 0; margin-left: auto; }
+.vazio .texto-vazio { max-width: 560px; margin: 6px auto 0; }
+
+/* ----- Planilhas geradas ----- */
+ul.planilhas { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+ul.planilhas li { display: flex; align-items: center; gap: 10px; white-space: nowrap; }
+details.mais-planilhas { margin-top: 6px; }
+.nota-ausente { margin-top: 6px; max-width: 320px; }
+details.mais-planilhas > summary { cursor: pointer; font-size: .85rem; font-weight: 600; color: var(--primaria); margin-bottom: 6px; }
+
+/* ----- Meu catálogo ----- */
+fieldset.opcoes { border: 1px solid var(--borda); border-radius: var(--raio); padding: 12px 16px; margin: 0; display: flex; gap: 18px; align-items: center; flex-wrap: wrap; }
+fieldset.opcoes legend { font-size: .86rem; font-weight: 600; color: var(--texto-2); padding: 0 6px; }
+fieldset.opcoes .dica { flex-basis: 100%; margin: 0; font-size: .82rem; color: var(--texto-3); }
+ul.lista-avisos { margin: 0; padding-left: 20px; font-size: .9rem; color: var(--texto-2); display: flex; flex-direction: column; gap: 4px; }
+
+/* ----- Variação de preços ----- */
+.barra-filtros { align-items: flex-end; gap: 14px 22px; }
+.barra-filtros form.linha { flex: 1; min-width: 280px; flex-wrap: nowrap; }
+.grupo-filtro { display: flex; flex-direction: column; gap: 5px; }
+.rotulo-filtro { font-size: .7rem; text-transform: uppercase; letter-spacing: .06em; font-weight: 650; color: var(--texto-3); }
+.var { font-weight: 700; font-variant-numeric: tabular-nums; }
+.var.sobe { color: var(--erro); }
+.var.desce { color: var(--ok); }
+.var.igual { color: var(--texto-3); font-weight: 600; }
+svg.mini { display: block; overflow: visible; color: var(--texto-3); }
+svg.mini polyline { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+svg.mini.sobe { color: var(--erro); }
+svg.mini.desce { color: var(--ok); }
+
+/* ----- Configurações ----- */
+.painel-config { max-width: 860px; }
+.painel-config[data-aba="sistema"] { max-width: none; }
+.painel-config code, .cartao code { font-family: var(--mono); font-size: .88em; padding: 1px 5px; border-radius: 5px; background: color-mix(in srgb, var(--texto) 7%, transparent); }
+ol.passos { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 6px; }
+dl.fatos { display: grid; grid-template-columns: minmax(180px, 280px) minmax(0, 1fr); gap: 10px 20px; margin: 0; }
+dl.fatos dt { color: var(--texto-2); font-size: .9rem; }
+dl.fatos dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+.registro { max-height: 460px; overflow: auto; padding: 10px 0; font-family: var(--mono); font-size: .78rem; line-height: 1.55; background: var(--superficie-2); }
+.registro .l { padding: 0 18px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--texto-2); border-left: 3px solid transparent; }
+.registro .l.alerta { color: var(--alerta); background: var(--alerta-fundo); border-left-color: var(--alerta); }
+.registro .l.erro { color: var(--erro); background: var(--erro-fundo); border-left-color: var(--erro); }
+.legenda-alerta { color: var(--alerta); font-weight: 600; }
+.legenda-erro { color: var(--erro); font-weight: 600; }
+
+@media (max-width: 980px) {
+  dl.fatos { grid-template-columns: 1fr; gap: 2px 0; }
+  dl.fatos dd { margin-bottom: 10px; }
+  .barra-filtros form.linha { flex-wrap: wrap; }
+}

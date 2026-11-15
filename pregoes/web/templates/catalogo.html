@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% import "historico_macros.html" as adm with context %}
+{% block titulo %}Meu catálogo{% endblock %}
+{% block estilos %}<link rel="stylesheet" href="{{ raiz }}/static/admin.css?v={{ versao }}">{% endblock %}
+{% block migalhas %}<b>Meu catálogo</b>{% endblock %}
+{% block conteudo %}
+<div class="cabecalho">
+  <div class="titulos">
+    <h1>Meu catálogo</h1>
+    <p>Os produtos que você já comprou, com os códigos de cada fornecedor.</p>
+  </div>
+  {% if sem_padronizar > 0 and not tarefa %}
+  <div class="acoes"><button class="btn" type="button" data-acao="/catalogo/padronizar">[dev] Padronizar {{ sem_padronizar }} nomes (IA)</button></div>
+  {% endif %}
+</div>
+
+<div class="pilha">
+  {{ m.aviso('info', 'O <b>catálogo histórico</b> acelera a busca de preços nos próximos pregões. Quando um item do edital casa com um produto que você já comprou no passado, o sistema vai direto pelo <b>código do produto</b> nos fornecedores — sem precisar adivinhar pela descrição.') }}
+
+  <div class="grade c4">
+    <div class="cartao metrica"><div class="rotulo">Produtos no catálogo</div><div class="valor">{{ metricas.total|num }}</div></div>
+    <div class="cartao metrica"><div class="rotulo">Com código Almeida</div><div class="valor">{{ metricas.com_almeida|num }}</div></div>
+    <div class="cartao metrica"><div class="rotulo">Com código Dantas</div><div class="valor">{{ metricas.com_dantas|num }}</div></div>
+    <div class="cartao metrica"><div class="rotulo">Nomes padronizados (IA)</div><div class="valor">{{ metricas.padronizados|num }}</div></div>
+  </div>
+
+  {% if tarefa %}
+    {# Importação em andamento: o cartão acompanha sozinho e a página recarrega no fim. #}
+    {% set t = tarefa %}{% include "_tarefa.html" %}
+    <div class="aviso" data-tarefa="{{ tarefa.id }}">{{ m.icone('info') }}<div>
+      <b data-extra="etapa1">{{ tarefa.extra.etapa1 or 'Lendo as planilhas…' }}</b>
+      <div data-extra="resumo">{{ tarefa.extra.resumo or '' }}</div>
+      <div class="mudo">{% if tem_ia %}Depois de ler as planilhas, o sistema prepara o catálogo para a busca (etapa 2). {% endif %}Os produtos já estão salvos mesmo se você sair — pode fechar esta página.</div>
+    </div></div>
+  {% elif resultado %}
+    {% include "catalogo_resultado.html" %}
+  {% endif %}
+
+  {% if not tarefa %}
+  <form class="cartao" action="/catalogo/importar" method="post" enctype="multipart/form-data" data-async>
+    <div class="cab"><h2>Importar planilhas</h2></div>
+    <div class="corpo pilha">
+      <p style="margin:0"><b>Importe suas planilhas de pregões anteriores</b> (formato MATRIZ). O sistema lê descrição, código, marca e preço, e usa esse histórico para encontrar os produtos mais rápido nos próximos editais. Re-enviar a mesma planilha não duplica nada.</p>
+      <div class="solta" tabindex="0" role="button" aria-label="Escolher as planilhas históricas">
+        <div class="icone">{{ m.icone('enviar') }}</div>
+        <b>Planilhas históricas (.xlsx)</b>
+        <span class="mudo pequeno nome-arquivo">Arraste as planilhas aqui ou clique para escolher — pode enviar várias de uma vez.</span>
+        <input type="file" name="planilhas" multiple hidden accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+      </div>
+      <fieldset class="opcoes">
+        <legend>Fornecedor principal destas planilhas:</legend>
+        <label class="checagem"><input type="radio" name="fornecedor" value="almeida" checked> Almeida</label>
+        <label class="checagem"><input type="radio" name="fornecedor" value="dantas"> Dantas</label>
+        <p class="dica">Os códigos sem a letra no fim são deste fornecedor. Códigos que terminam em D vão para a Dantas e A para a Almeida automaticamente.</p>
+      </fieldset>
+    </div>
+    <div class="pe">
+      <button class="btn primario" type="submit">{{ m.icone('enviar') }} Importar planilhas</button>
+      <span class="mudo pequeno">{% if tem_ia %}Em seguida a IA padroniza os nomes dos produtos (etapa 2), com o andamento na tela.{% else %}Sem chave da IA configurada, os nomes não são padronizados — a busca funciona mesmo assim.{% endif %}</span>
+    </div>
+  </form>
+  {% endif %}
+
+  {% if importacoes %}
+  <details class="recolhe">
+    <summary>Últimas planilhas importadas</summary>
+    <div class="corpo">
+      <div class="tabela-rolagem"><table class="tabela">
+        <thead><tr><th>Planilha</th><th>Quando</th><th class="direita">Produtos</th><th class="direita">Preços</th><th>Resultado</th></tr></thead>
+        <tbody>
+        {% for i in importacoes %}
+          <tr>
+            <td class="mono">{{ i.arquivo }}</td>
+            <td class="mudo num pequeno nowrap">{{ i.criado_em|quando }}</td>
+            <td class="direita num">{{ i.n_produtos|num }}</td>
+            <td class="direita num">{{ i.n_precos|num }}</td>
+            <td>{% if i.status == 'ok' %}<span class="selo ok"><span class="ponto"></span>Importada</span>{% elif i.status == 'nao_encontrado' %}<span class="selo alerta"><span class="ponto"></span>Arquivo não encontrado</span>{% else %}<span class="selo erro" title="{{ i.erro or '' }}"><span class="ponto"></span>Falhou</span>{% endif %}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table></div>
+    </div>
+  </details>
+  {% endif %}
+
+  <div class="cartao" id="produtos">
+    <form class="cab" method="get" action="{{ raiz }}/catalogo#produtos" role="search">
+      <h2>Produtos</h2>
+      <label class="busca-campo">{{ m.icone('busca') }}<input type="search" name="q" value="{{ consulta }}" placeholder="Buscar por descrição, marca, código ou NCM…" data-atalho-busca aria-label="Buscar no catálogo" autocomplete="off"></label>
+      <button class="btn" type="submit">Buscar</button>
+      {% if consulta %}<a class="btn fantasma" href="{{ raiz }}/catalogo#produtos">Limpar</a>{% endif %}
+    </form>
+    {% if produtos %}
+    <div class="tabela-rolagem alta">
+      <table class="tabela">
+        <thead><tr>
+          <th>Descrição</th><th>Marca</th><th>Un.</th><th>Cód. Almeida</th><th>Cód. Dantas</th><th>NCM</th>
+          <th class="direita">Último preço Almeida</th><th class="direita">Último preço Dantas</th>
+        </tr></thead>
+        <tbody>
+        {% for p in produtos %}
+          <tr>
+            <td class="desc">{{ p.descricao_canonica }}</td>
+            <td>{{ p.marca or '' }}</td>
+            <td class="mudo">{{ p.unidade_padrao or '' }}</td>
+            <td class="mono">{{ p.codigo_almeida or '' }}</td>
+            <td class="mono">{{ p.codigo_dantas or '' }}</td>
+            <td class="mono">{{ p.ncm or '' }}</td>
+            {% for forn in ('almeida', 'dantas') %}
+            <td class="direita num nowrap">{% set c = p.cotacoes.get(forn) %}{% if c %}<b>{{ c.preco|brl }}</b><div class="pequeno fraco">{{ (c.consultado_em|quando)[:10] }}</div>{% else %}<span class="fraco">—</span>{% endif %}</td>
+            {% endfor %}
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="pe-lista">
+      <span class="mudo pequeno num">{{ achados|num }} {{ 'produto' if achados == 1 else 'produtos' }}{% if consulta %} para “{{ consulta }}”{% endif %}</span>
+      {{ adm.paginacao(prefixo, pagina_atual, paginas) }}
+    </div>
+    {% elif consulta %}
+    <div class="vazio">{{ m.icone('busca') }}<b>Nenhum produto encontrado para “{{ consulta }}”.</b>Tente outras palavras ou o código do fornecedor.</div>
+    {% else %}
+    <div class="vazio">{{ m.icone('catalogo') }}<b>Catálogo vazio</b>Importe suas planilhas de pregões anteriores (acima) para o sistema começar a reconhecer os seus produtos.</div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

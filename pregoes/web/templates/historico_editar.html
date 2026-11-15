@@ -1,0 +1,13 @@
+{# Diálogo "Editar identificação do pregão" (aberto por data-modal). #}
+<form action="/historico/{{ e.id }}/editar" method="post" data-async>
+  <div class="cab"><h2>Editar identificação do pregão</h2></div>
+  <div class="corpo pilha">
+    <label class="campo">Órgão<input type="text" name="orgao" value="{{ e.orgao or '' }}" placeholder="Ex: Prefeitura Municipal de Araruna" autocomplete="off" autofocus></label>
+    <label class="campo">Número do pregão<input type="text" name="numero" value="{{ e.numero_pregao or '' }}" placeholder="Ex: 00006/2026" autocomplete="off"></label>
+    <p class="pequeno mudo" style="margin:0">É só o nome que aparece nesta lista — as planilhas já geradas não mudam.</p>
+  </div>
+  <div class="pe">
+    <button class="btn" type="button" data-fechar>Cancelar</button>
+    <button class="btn primario" type="submit">Salvar</button>
+  </div>
+</form>

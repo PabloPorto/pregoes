@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block titulo %}Lendo o edital{% endblock %}
+{% block migalhas %}<a href="{{ raiz }}/pregoes">Pregões em andamento</a> <span class="fraco">/</span> <b>{{ pregao.titulo }}</b>{% endblock %}
+{% block conteudo %}
+<div class="cabecalho"><div class="titulos"><h1>Lendo o edital</h1><p>{{ pregao.titulo }}</p></div></div>
+<div style="max-width:760px" class="pilha">
+{% if tarefa %}
+  {% set t = tarefa %}{% set ao_terminar = '/pregao/' ~ pregao.slug ~ '/revisao' %}
+  {% include "_tarefa.html" %}
+  <p class="mudo pequeno">A leitura rápida leva segundos. Se o edital tiver um formato difícil, o sistema usa a IA (até 1–2 minutos). Pode sair desta página — a leitura continua e o pregão fica em <a href="{{ raiz }}/pregoes">Pregões em andamento</a>.</p>
+{% else %}
+  {{ m.aviso('alerta' if not falhou else 'erro', (falhou.erro if falhou else 'A leitura deste PDF não terminou (o sistema pode ter sido reiniciado no meio).') ~ ' O PDF está guardado — é só ler de novo.') }}
+  <div class="linha">
+    <button class="btn primario" type="button" data-acao="/pregao/{{ pregao.slug }}/leitura">{{ m.icone('raio') }} Ler o PDF de novo</button>
+    <button class="btn perigo" type="button" data-acao="/pregao/{{ pregao.slug }}/descartar" data-confirmar="Descartar este pregão?">Descartar</button>
+  </div>
+{% endif %}
+</div>
+{% endblock %}

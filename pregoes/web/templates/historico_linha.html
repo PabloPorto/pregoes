@@ -1,0 +1,47 @@
+{# Uma linha da lista "Planilhas geradas". Espera `e` (pregão com `planilhas`
+   e `slug_rascunho`). A raiz precisa ter o id — a edição troca só esta linha. #}
+{% import "_macros.html" as m with context %}
+{% set n = e.planilhas|length %}
+<tr id="edital-{{ e.id }}">
+  <td class="desc">
+    <b>{{ e.titulo }}</b>
+    <div class="pequeno mudo">
+      {%- if n -%}
+        {{ n }} {{ 'planilha' if n == 1 else 'planilhas' }} · {{ e.planilhas[0].n_itens|num }} itens · {{ e.planilhas[0].n_selecoes|num }} com preço/marca
+      {%- else -%}
+        Nenhuma planilha registrada — gere de novo a partir do pregão.
+      {%- endif -%}
+    </div>
+  </td>
+  <td>
+    {%- if e.status == 'precificado' -%}<span class="selo ok"><span class="ponto"></span>Precificado</span>
+    {%- elif e.status == 'rascunho' -%}<span class="selo" title="Planilha gerada sem preços"><span class="ponto"></span>Rascunho</span>
+    {%- else -%}<span class="selo info"><span class="ponto"></span>{{ e.status|capitalize }}</span>{%- endif -%}
+  </td>
+  <td class="mudo num pequeno nowrap">{{ e.criado_em|quando or 'data desconhecida' }}</td>
+  <td>
+    {% if n %}
+    <ul class="planilhas">
+      {% for x in e.planilhas[:3] %}{% include "historico_planilha.html" %}{% endfor %}
+    </ul>
+    {% if n > 3 %}
+    <details class="mais-planilhas">
+      <summary>Ver as outras {{ n - 3 }}</summary>
+      <ul class="planilhas">
+        {% for x in e.planilhas[3:] %}{% include "historico_planilha.html" %}{% endfor %}
+      </ul>
+    </details>
+    {% endif %}
+    {% if e.planilhas|rejectattr('existe')|list %}<div class="pequeno fraco nota-ausente">Arquivo não está na pasta — gere de novo a partir do pregão.</div>{% endif %}
+    {% else %}
+    <span class="pequeno fraco">Sem planilha para baixar.</span>
+    {% endif %}
+  </td>
+  <td class="acoes-cel">
+    {% if e.slug_rascunho %}<a class="btn p" href="{{ raiz }}/pregao/{{ e.slug_rascunho }}" title="Este pregão ainda está guardado — abra para continuar ou gerar de novo">Reabrir {{ m.icone('seta') }}</a>{% endif %}
+    <button class="btn fantasma p" type="button" title="Editar nome do pregão" aria-label="Editar nome de {{ e.titulo }}" data-modal="/historico/{{ e.id }}/editar">{{ m.icone('lapis') }}</button>
+    <button class="btn fantasma p perigo" type="button" title="Excluir pregão" aria-label="Excluir {{ e.titulo }}"
+            data-acao="/historico/{{ e.id }}/excluir"
+            data-confirmar="Excluir este pregão e suas planilhas? Não dá para desfazer.&#10;&#10;{{ e.titulo }}">{{ m.icone('lixo') }}</button>
+  </td>
+</tr>

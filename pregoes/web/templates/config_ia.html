@@ -1,0 +1,34 @@
+{# Aba IA (Gemini): estado da chave, como obter, salvar / salvar e testar. #}
+{% if chave_mascarada %}
+  <div class="aviso ok" role="status">{{ m.icone('ok') }}<div>Chave configurada: <code>{{ chave_mascarada }}</code>. A IA roda automaticamente quando a extração rápida ficar abaixo de 95%.</div></div>
+{% else %}
+  {{ m.aviso('alerta', 'Sem chave configurada. A IA fica desligada — o sistema usa só extração rápida + mapeamento manual.') }}
+{% endif %}
+
+<div class="cartao">
+  <div class="cab"><h2>Como obter a chave gratuita (5min)</h2></div>
+  <div class="corpo">
+    <ol class="passos">
+      <li>Acesse <a href="https://aistudio.google.com" target="_blank" rel="noopener noreferrer">https://aistudio.google.com</a></li>
+      <li>Faça login com sua conta Google</li>
+      <li>Clique em <b>Get API key</b> → <b>Create API key</b></li>
+      <li>Copie a chave e cole abaixo</li>
+    </ol>
+    <p class="mudo" style="margin:12px 0 0"><b>Custo:</b> <i>Gratuito</i> dentro do free tier do Google (1500 requisições/dia — folga ampla para 10–30 editais/mês).</p>
+  </div>
+</div>
+
+<form class="cartao" action="/configuracoes/gemini" method="post" data-async autocomplete="off">
+  <div class="cab"><h2>Chave de API</h2></div>
+  <div class="corpo">
+    <label class="campo">Chave de API (Gemini)
+      <input type="password" name="chave" value="" autocomplete="new-password" spellcheck="false" placeholder="{{ '(chave salva — cole outra para trocar)' if chave_mascarada else 'AIza…' }}">
+      <span class="dica">Começa com 'AIza...'. {% if servidor %}Fica guardada no servidor do sistema.{% else %}Salva apenas no seu computador.{% endif %}{% if chave_mascarada %} A chave salva nunca é mostrada inteira; em branco, ela é mantida.{% endif %}</span>
+    </label>
+  </div>
+  <div class="pe">
+    <button class="btn primario" type="submit" name="acao" value="salvar">Salvar chave</button>
+    <button class="btn" type="submit" name="acao" value="testar">Salvar e testar</button>
+    <span class="mudo pequeno">O teste faz uma pergunta curta à IA e pode levar alguns segundos.</span>
+  </div>
+</form>

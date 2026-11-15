@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block titulo %}Configurações{% endblock %}
+{% block estilos %}<link rel="stylesheet" href="{{ raiz }}/static/admin.css?v={{ versao }}">
+  <script src="{{ raiz }}/static/admin.js?v={{ versao }}"></script>{% endblock %}
+{% block migalhas %}<b>Configurações</b>{% endblock %}
+{% block conteudo %}
+<div class="cabecalho">
+  <div class="titulos">
+    <h1>Configurações</h1>
+    <p>{% if servidor %}Credenciais dos fornecedores. Ficam guardadas no servidor do sistema, com backup diário.{% else %}Credenciais dos fornecedores. Tudo fica salvo apenas no seu computador, sem envio para servidores externos.{% endif %}</p>
+  </div>
+</div>
+<nav class="abas" aria-label="Seções das configurações">
+  {% for chave, rotulo in abas %}
+  <a class="{{ 'ativa' if chave == aba }}" href="{{ raiz }}/configuracoes?aba={{ chave }}"{% if chave == aba %} aria-current="page"{% endif %}>{{ rotulo }}</a>
+  {% endfor %}
+</nav>
+{% include "config_painel.html" %}
+{% endblock %}

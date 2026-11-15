@@ -1,0 +1,127 @@
+{% extends "pregao_base.html" %}
+{% import "_macros.html" as m with context %}
+{# Revisão dos itens lidos do PDF (etapa "Itens"). A grade é `itens_edital`:
+   cada célula alterada é gravada na hora (ver rotas_revisao.py). #}
+{% block estilos %}<link rel="stylesheet" href="{{ raiz }}/static/revisao.css?v={{ versao }}">{% endblock %}
+{% block scripts %}<script src="{{ raiz }}/static/revisao.js?v={{ versao }}"></script>{% endblock %}
+{% block etapa %}
+{% set base = '/pregao/' ~ pregao.slug %}
+{% set confirma_descarte = 'Este pregão já tem preços buscados. Esta alteração descarta a busca feita — os preços encontrados continuam na memória por 2 dias, então buscar de novo é rápido. Continuar?' %}
+<div class="cabecalho">
+  <div class="titulos">
+    <h1>Revisão dos itens extraídos</h1>
+    <p>Confira o que foi lido do PDF, edite o que precisar e marque o que entra na planilha.</p>
+  </div>
+</div>
+
+<div class="pilha">
+  {% if mapeado %}
+    {{ m.aviso('ok', ('Mapeamento salvo. Próximos PDFs com este cabeçalho usam automaticamente. ' if mapeado == 'salvo' else 'Mapeamento aplicado. ') ~ 'Itens extraídos: <b>' ~ res.total_itens ~ '</b>, confiança: <b>' ~ '{:.0%}'.format(res.confianca_global) ~ '</b>.') }}
+  {% endif %}
+
+  <div class="cartao">
+    <div class="corpo grade c2">
+      <label class="campo">Órgão<input type="text" name="orgao" value="{{ pregao.orgao }}" data-salvar="{{ base }}/revisao/identificacao" autocomplete="off"></label>
+      <label class="campo">Número do pregão<input type="text" name="numero" value="{{ pregao.numero }}" data-salvar="{{ base }}/revisao/identificacao" autocomplete="off"></label>
+    </div>
+  </div>
+
+  {{ m.aviso(confianca[1], '<b>' ~ confianca[0] ~ '</b> — ' ~ confianca[2]) }}
+
+  {% include "revisao_resumo.html" %}
+
+  {% for a in avisos %}{{ m.aviso('alerta', a|e) }}{% endfor %}
+
+  {% if oferecer_mapeamento %}
+  <div class="aviso">{{ m.icone('info') }}
+    <div>A confiança automática ficou abaixo de 95%. Você pode usar o <b>Mapeamento Manual</b> para indicar qual é a tabela de itens e o que é cada coluna. O sistema aprende e reaproveita o mapeamento em próximos editais com o mesmo formato.</div>
+    <div class="acoes"><a class="btn" href="{{ raiz }}{{ base }}/mapeamento">{{ m.icone('lapis') }} Mapeamento Manual</a></div>
+  </div>
+  {% endif %}
+
+  {% if busca_rodando %}
+  <div class="aviso alerta" id="rev-aviso-busca">{{ m.icone('relogio') }}
+    <div>A busca de preços deste pregão está <b>em andamento</b>. Dá para corrigir descrição, unidade, quantidade e referência, mas marcar, desmarcar, incluir ou excluir itens só depois que ela terminar.</div>
+    <div class="acoes"><a class="btn p" href="{{ raiz }}{{ base }}/precos">Acompanhar a busca</a></div>
+  </div>
+  {% elif tem_busca %}
+  <div class="aviso alerta" id="rev-aviso-busca">{{ m.icone('alerta') }}
+    <div>{{ aviso_tem_busca }}</div>
+    <div class="acoes"><a class="btn p" href="{{ raiz }}{{ base }}/precos">Ver os preços</a></div>
+  </div>
+  {% endif %}
+
+  {% if not itens %}
+    {% if sem_itens_lidos and escaneado %}
+      {{ m.aviso('erro', 'Este PDF parece ser <b>escaneado</b> (imagem), sem texto que o sistema consiga ler. Peça ao órgão o edital em PDF com texto (ou copie a tabela de itens para um PDF/planilha). Leitura de imagem (OCR) ainda não é suportada.') }}
+    {% elif sem_itens_lidos %}
+      {{ m.aviso('erro', 'Nenhum item foi extraído automaticamente. Se o PDF tem uma tabela de itens visível, use o <b>Mapeamento Manual</b> acima.') }}
+    {% endif %}
+    <div class="cartao">
+      <div class="vazio">
+        {{ m.icone('planilha') }}
+        <b>Nenhum item na lista</b>
+        Sem itens não há o que precificar. Se preferir, inclua os itens à mão.
+        <div class="rev-vazio-acoes">
+          <button class="btn" type="button" data-acao="{{ base }}/revisao/adicionar">{{ m.icone('novo') }} Adicionar item</button>
+          <a class="btn fantasma" href="{{ raiz }}/novo">Enviar outro PDF</a>
+        </div>
+      </div>
+    </div>
+  {% else %}
+  <div class="cartao" id="rev-cartao">
+    <div class="cab rev-barra">
+      <label class="busca-campo">{{ m.icone('busca') }}<input type="search" placeholder="Filtrar pela descrição…  ( / )" data-filtrar="#rev-grade .rev-linha" data-atalho-busca aria-label="Filtrar itens pela descrição" autocomplete="off"></label>
+      <div class="filtros" role="group" aria-label="Mostrar">
+        <button type="button" class="filtro ativo" data-rev-filtro="todos" aria-pressed="true">Todos<span class="q"></span></button>
+        <button type="button" class="filtro" data-rev-filtro="duvidosos" aria-pressed="false">Só duvidosos<span class="q"></span></button>
+        <button type="button" class="filtro" data-rev-filtro="desmarcados" aria-pressed="false">Só desmarcados<span class="q"></span></button>
+      </div>
+      <div class="acoes rev-marcar">
+        <button class="btn p" type="button" data-acao="{{ base }}/revisao/marcar-todos"
+                {% if tem_busca %}data-dados='{"valor": true, "confirmar": true}' data-confirmar="{{ confirma_descarte }}"{% else %}data-dados='{"valor": true}'{% endif %}>Marcar todos</button>
+        <button class="btn p" type="button" data-acao="{{ base }}/revisao/marcar-todos"
+                {% if tem_busca %}data-dados='{"valor": false, "confirmar": true}' data-confirmar="{{ confirma_descarte }}"{% else %}data-dados='{"valor": false}'{% endif %}>Desmarcar todos</button>
+      </div>
+    </div>
+    <p class="rev-legenda"><span>Confira os itens abaixo. Você pode editar qualquer célula clicando nela. Linhas em amarelo precisam de atenção.</span> <span class="rev-teclas"><kbd>Enter</kbd> desce para a linha de baixo · <kbd>Esc</kbd> desfaz o que foi digitado</span></p>
+    <div class="tabela-rolagem rev-rolagem" tabindex="-1">
+      <table class="tabela rev-grade" id="rev-grade"
+             data-celulas="{{ base }}/revisao/item" data-excluir="{{ base }}/revisao/excluir"
+             {% if tem_busca %}data-confirmar-busca="{{ confirma_descarte }}"{% endif %}>
+        <colgroup><col class="col-ok"><col class="col-num"><col><col class="col-un"><col class="col-qtd"><col class="col-ref"><col class="col-acoes"></colgroup>
+        <thead>
+          <tr>
+            <th class="c-ok" title="Marque os itens cujo preço o sistema deve buscar nos fornecedores. TODOS os itens do edital vão para a planilha — os desmarcados ficam sem preço, para preencher à mão.">Buscar preço?</th>
+            <th class="direita">Item</th>
+            <th>Descrição</th>
+            <th>Unidade</th>
+            <th class="direita">Quant</th>
+            <th class="direita">Ref. (R$)</th>
+            <th><span class="rev-so-leitor">Ações</span></th>
+          </tr>
+        </thead>
+        {% include "revisao_linhas.html" %}
+      </table>
+      <div class="vazio oculto" id="rev-sem-resultado">
+        {{ m.icone('busca') }}
+        <b>Nenhum item com este filtro</b>
+        <button class="btn p" type="button" data-rev-limpar>Mostrar todos os itens</button>
+      </div>
+    </div>
+    <div class="pe rev-pe">
+      {% include "revisao_contador.html" %}
+      <div class="acoes rev-acoes">
+        <button class="btn" type="button" data-acao="{{ base }}/revisao/adicionar"
+                {% if tem_busca %}data-dados='{"confirmar": true}' data-confirmar="{{ confirma_descarte }}"{% endif %}>{{ m.icone('novo') }} Adicionar item</button>
+        <a class="btn" href="{{ raiz }}{{ base }}/planilha?sem_precos=1" title="Gera a planilha com o EDITAL INTEIRO, sem preços (todas as colunas de preço/código/marca em branco, para preencher à mão).">Gerar sem buscar</a>
+        <button class="btn primario" type="button" data-acao="{{ base }}/revisao/buscar" title="Busca o preço dos itens MARCADOS em Almeida e Dantas (qualquer um configurado). Pode demorar minutos.">{{ m.icone('busca') }} {{ 'Ir para os preços' if tem_busca or busca_rodando else 'Buscar preços' }}</button>
+      </div>
+      {% if not fornecedores %}
+      <div class="rev-sem-fornecedor">{{ m.icone('alerta') }}<span>Nenhum fornecedor configurado. Acesse <a href="{{ raiz }}/configuracoes"><b>Configurações</b></a> para cadastrar Almeida e/ou Dantas.</span></div>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

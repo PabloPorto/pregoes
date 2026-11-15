@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block titulo %}Início{% endblock %}
+{% block migalhas %}<b>Início</b>{% endblock %}
+{% block topo_acoes %}<a class="btn primario" href="{{ raiz }}/novo">{{ m.icone('novo') }} Novo pregão</a>{% endblock %}
+{% block conteudo %}
+<div class="cabecalho">
+  <div class="titulos">
+    <h1>Início</h1>
+    <p>O que está em andamento e o que já foi entregue.</p>
+  </div>
+</div>
+
+{% if not situacao.almeida and not situacao.dantas %}
+  {{ m.aviso('alerta', 'Nenhum fornecedor configurado — a busca de preços não funciona até cadastrar o acesso da Almeida e/ou da Dantas em <a href="' ~ raiz ~ '/configuracoes">Configurações</a>.') }}
+  <div style="height:16px"></div>
+{% endif %}
+
+{% for t in em_curso %}
+  {% set ao_terminar = '/pregao/' ~ t.pregao if t.pregao else none %}
+  <a href="{{ raiz }}{{ '/pregao/' ~ t.pregao if t.pregao else '/' }}" style="display:block;color:inherit;text-decoration:none;margin-bottom:16px">{% include "_tarefa.html" %}</a>
+{% endfor %}
+
+<div class="grade c4" style="margin-bottom:20px">
+  <div class="cartao metrica"><div class="rotulo">Em andamento</div><div class="valor">{{ total_pendentes }}</div><div class="apoio">pregões guardados</div></div>
+  <div class="cartao metrica"><div class="rotulo">Planilhas geradas</div><div class="valor">{{ contagens.planilhas }}</div><div class="apoio">{{ contagens.registrados }} {{ 'pregão' if contagens.registrados == 1 else 'pregões' }} · {{ contagens.precificados }} com preço</div></div>
+  <div class="cartao metrica"><div class="rotulo">Meu catálogo</div><div class="valor">{{ contagens.produtos|num }}</div><div class="apoio">produtos conhecidos</div></div>
+  <div class="cartao metrica"><div class="rotulo">Escolhas aprendidas</div><div class="valor">{{ contagens.aprendidos|num }}</div><div class="apoio">voltam sozinhas no próximo edital</div></div>
+</div>
+
+<div class="cartao">
+  <div class="cab">
+    <h2>Pregões em andamento</h2>
+    {% if total_pendentes > pendentes|length %}<a class="btn p" href="{{ raiz }}/pregoes">Ver todos ({{ total_pendentes }})</a>{% endif %}
+  </div>
+  {% if pendentes %}
+  <div class="tabela-rolagem">
+    <table class="tabela">
+      <thead><tr><th>Pregão</th><th>Situação</th><th>Última alteração</th><th></th></tr></thead>
+      <tbody>{% for r in pendentes %}{% include "_pregao_linha.html" %}{% endfor %}</tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="vazio">
+    {{ m.icone('pasta') }}
+    <b>Nenhum pregão em andamento</b>
+    Envie o PDF de um edital para começar.
+    <div style="margin-top:14px"><a class="btn primario" href="{{ raiz }}/novo">{{ m.icone('novo') }} Novo pregão</a></div>
+  </div>
+  {% endif %}
+</div>
+
+<div class="grade c3" style="margin-top:20px">
+  <div class="cartao"><div class="corpo linha entre"><div><b>Almeida</b><div class="pequeno mudo">Fornecedor</div></div>{% if situacao.almeida %}<span class="selo ok"><span class="ponto"></span>Configurada</span>{% else %}<a class="selo alerta" href="{{ raiz }}/configuracoes"><span class="ponto"></span>Pendente</a>{% endif %}</div></div>
+  <div class="cartao"><div class="corpo linha entre"><div><b>Dantas</b><div class="pequeno mudo">Fornecedor</div></div>{% if situacao.dantas %}<span class="selo ok"><span class="ponto"></span>Configurada</span>{% else %}<a class="selo alerta" href="{{ raiz }}/configuracoes"><span class="ponto"></span>Pendente</a>{% endif %}</div></div>
+  <div class="cartao"><div class="corpo linha entre"><div><b>Leitura com IA</b><div class="pequeno mudo">Para editais difíceis</div></div>{% if situacao.ia %}<span class="selo ok"><span class="ponto"></span>Configurada</span>{% else %}<a class="selo" href="{{ raiz }}/configuracoes#ia"><span class="ponto"></span>Opcional</a>{% endif %}</div></div>
+</div>
+{% endblock %}

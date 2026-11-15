@@ -1,0 +1,99 @@
+{% import "_macros.html" as m with context %}
+{# Resumo + Substituição Tributária + margem + botão de gerar. Incluído por
+   planilha.html (aberto, ou dentro de "Ajustar e gerar de novo"). #}
+{% set base = '/pregao/' ~ pregao.slug %}
+{% set refazendo = situacao != 'nova' %}
+
+<section class="cartao" aria-labelledby="pl-resumo-titulo">
+  <div class="cab"><h2 id="pl-resumo-titulo">O que vai para a planilha</h2></div>
+  <div class="pl-numeros">
+    <div class="metrica"><div class="rotulo">Itens do edital</div><div class="valor">{{ total|num }}</div><div class="apoio">todos vão para a planilha</div></div>
+    <div class="metrica"><div class="rotulo">Com preço e marca</div><div class="valor">{{ com_preco|num }}</div><div class="apoio">saem com custo, código e marca</div></div>
+    <div class="metrica"><div class="rotulo">Sem preço</div><div class="valor">{{ sem_preco|num }}</div><div class="apoio">ficam em branco, para preencher à mão</div></div>
+  </div>
+  <div class="corpo pilha pl-resumo-notas">
+    {% if not sem_precos %}
+      <p class="mudo">{{ com_preco|num }} de {{ total|num }} {{ 'item' if total == 1 else 'itens' }} com marca/preço selecionados. A planilha traz o edital inteiro, na ordem original.</p>
+      {% if aviso_dantas %}{{ m.aviso('info', aviso_dantas) }}{% endif %}
+    {% elif tem_selecoes %}
+      {{ m.aviso('info', 'Esta planilha sai <b>sem preços</b>: o edital inteiro, com preço, código e marca em branco. Este pregão já tem preço escolhido para ' ~ n_escolhidos ~ (' item' if n_escolhidos == 1 else ' itens') ~ ' — para incluí-los, <a href="' ~ raiz ~ base ~ '/planilha">gere a planilha com preços</a>.') }}
+    {% else %}
+      {{ m.aviso('info', 'Nenhum preço foi escolhido neste pregão. A planilha sai com o edital inteiro, com preço, código e marca em branco — para preencher à mão. Se preferir, <a href="' ~ raiz ~ base ~ '/precos">busque os preços</a> antes.') }}
+    {% endif %}
+  </div>
+</section>
+
+{% if not sem_precos %}
+<section class="cartao" id="st" aria-labelledby="pl-st-titulo">
+  <div class="cab"><h2 id="pl-st-titulo">Substituição Tributária deste pregão</h2></div>
+  <div class="corpo pilha">
+    <p class="mudo">{{ textos.LEGENDA_ST }}</p>
+    {% set resumo = st.resumo %}{% set st_manual = st.st_manual %}
+    {% include "planilha_st_resumo.html" %}
+
+    {% if tarefa_ncm %}
+      {% set t = tarefa_ncm %}{% set ao_terminar = base ~ '/planilha' %}
+      {% include "_tarefa.html" %}
+    {% else %}
+      {% if aviso_ncm %}{{ m.aviso('alerta', aviso_ncm) }}{% endif %}
+      {% if st.n_identificaveis %}
+      <div class="linha">
+        <button class="btn" type="button" data-acao="{{ base }}/planilha/ncm">{{ m.icone('busca') }} Identificar NCM e classificar ({{ st.n_identificaveis }} {{ 'item' if st.n_identificaveis == 1 else 'itens' }})</button>
+        <span class="mudo pequeno">Consulta o NCM na página de cada produto escolhido e classifica sozinho.</span>
+      </div>
+      {% endif %}
+    {% endif %}
+
+    {% if st.sem_ncm %}
+    <details class="recolhe pl-st-lista" {{ 'open' if st.sem_ncm|length <= 12 }}>
+      <summary>{{ st.sem_ncm|length }} {{ 'item' if st.sem_ncm|length == 1 else 'itens' }} sem NCM — escolha Normal ou Com Substituição Tributária</summary>
+      <div class="corpo">
+        <p class="mudo pequeno">Sem NCM o sistema não presume nada: o item sai como <b>Normal</b> até você marcar o contrário. A escolha é salva na hora.</p>
+        {% for it in st.sem_ncm %}
+        <form class="pl-st-item" id="st-item-{{ it.off }}" onsubmit="return false">
+          <span class="n num">{{ it.numero }}</span>
+          <div class="d">
+            <b title="{{ it.descricao }}">{{ it.descricao }}</b>
+            {% if it.marca or it.fornecedor %}<span class="mudo pequeno">{{ [it.marca, it.fornecedor]|select|join(' · ') }}</span>{% endif %}
+          </div>
+          <div class="pl-seg" role="radiogroup" aria-label="Tributação de {{ it.descricao }}">
+            <label><input type="radio" name="st" value="normal" data-salvar="{{ base }}/planilha/st" data-dados='{"i": {{ it.off }}}' {{ 'checked' if not it.com_st }}><span>Normal</span></label>
+            <label><input type="radio" name="st" value="st" data-salvar="{{ base }}/planilha/st" data-dados='{"i": {{ it.off }}}' {{ 'checked' if it.com_st }}><span>Com Substituição Tributária</span></label>
+          </div>
+        </form>
+        {% endfor %}
+      </div>
+    </details>
+    {% endif %}
+  </div>
+</section>
+
+<section class="cartao" aria-labelledby="pl-margem-titulo">
+  <div class="cab"><h2 id="pl-margem-titulo">Margem do preço de venda</h2></div>
+  <div class="corpo pilha">
+    <p class="mudo">{{ textos.LEGENDA_MARGEM }}</p>
+    <div class="linha">
+      <span class="pl-rotulo" id="pl-margem-rotulo">Margem aplicada ao preço de venda</span>
+      <div class="pl-seg" role="radiogroup" aria-labelledby="pl-margem-rotulo">
+        {% for coluna, rotulo in margens %}
+        <label><input type="radio" name="margem" value="{{ coluna }}" form="form-gerar" data-salvar="{{ base }}/planilha/margem" {{ 'checked' if coluna == margem }}><span>{{ rotulo }}</span></label>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</section>
+{% endif %}
+
+<form id="form-gerar" class="cartao pl-acao" action="{{ base }}/planilha/gerar" method="post" data-async>
+  {% if sem_precos %}<input type="hidden" name="sem_precos" value="1">{% endif %}
+  <div class="corpo">
+    <div class="pl-cresce">
+      <b>{{ 'Atualizar a planilha' if refazendo else 'Tudo conferido?' }}</b>
+      <div class="mudo pequeno">A planilha sai no modelo MATRIZ, com as fórmulas prontas, e fica guardada em Planilhas geradas.</div>
+    </div>
+    <a class="btn fantasma" href="{{ raiz }}{{ base }}/{{ 'revisao' if sem_precos else 'precos' }}">{{ m.icone('voltar') }} {{ 'Voltar para a revisão' if sem_precos else 'Voltar para os preços' }}</a>
+    <button class="btn g {{ '' if situacao == 'pronta' else 'primario' }}" type="submit">{{ m.icone('planilha') }}
+      {%- if refazendo %} {{ 'Gerar de novo sem preços' if sem_precos else 'Gerar de novo' }}
+      {%- else %} {{ 'Gerar planilha sem preços' if sem_precos else 'Gerar planilha matriz com preços' }}{% endif %}</button>
+  </div>
+</form>

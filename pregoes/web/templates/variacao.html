@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% import "historico_macros.html" as adm with context %}
+{% block titulo %}Variação de preços{% endblock %}
+{% block estilos %}<link rel="stylesheet" href="{{ raiz }}/static/admin.css?v={{ versao }}">{% endblock %}
+{% block migalhas %}<b>Variação de preços</b>{% endblock %}
+{% block conteudo %}
+<div class="cabecalho">
+  <div class="titulos">
+    <h1>Variação de preços</h1>
+    <p>Quanto o preço de cada produto mudou entre a primeira e a última cotação do mesmo fornecedor.</p>
+  </div>
+</div>
+
+{% if not tem_historico %}
+<div class="cartao">
+  <div class="vazio">
+    {{ m.icone('grafico') }}
+    <b>Ainda não há histórico de preços</b>
+    <p class="texto-vazio">O histórico se forma com o uso: cada planilha de pregão anterior importada em <a href="{{ raiz }}/catalogo">Meu catálogo</a> registra o preço pago por produto e fornecedor. Quando o mesmo produto tiver duas cotações do mesmo fornecedor, a variação aparece aqui.</p>
+    <div style="margin-top:14px"><a class="btn primario" href="{{ raiz }}/catalogo">{{ m.icone('catalogo') }} Ir para Meu catálogo</a></div>
+  </div>
+</div>
+{% else %}
+<div class="pilha">
+  <div class="grade c4">
+    <div class="cartao metrica"><div class="rotulo">Produtos acompanhados</div><div class="valor">{{ resumo.total|num }}</div><div class="apoio">com 2 ou mais cotações</div></div>
+    <div class="cartao metrica"><div class="rotulo">Subiram</div><div class="valor var sobe">{{ resumo.subiram|num }}</div><div class="apoio">último preço maior que o primeiro</div></div>
+    <div class="cartao metrica"><div class="rotulo">Caíram</div><div class="valor var desce">{{ resumo.cairam|num }}</div><div class="apoio">último preço menor que o primeiro</div></div>
+    <div class="cartao metrica"><div class="rotulo">Sem alteração</div><div class="valor">{{ resumo.estaveis|num }}</div><div class="apoio">mesmo preço</div></div>
+  </div>
+
+  <div class="cartao">
+    <div class="cab barra-filtros">
+      <form class="linha" method="get" action="{{ raiz }}/precos" role="search">
+        {% if fornecedor %}<input type="hidden" name="fornecedor" value="{{ fornecedor }}">{% endif %}
+        {% if periodo != 'tudo' %}<input type="hidden" name="periodo" value="{{ periodo }}">{% endif %}
+        {% if ordem != 'alta' %}<input type="hidden" name="ordem" value="{{ ordem }}">{% endif %}
+        <label class="busca-campo">{{ m.icone('busca') }}<input type="search" name="q" value="{{ consulta }}" placeholder="Filtrar por produto ou marca…" data-atalho-busca aria-label="Filtrar por produto ou marca" autocomplete="off"></label>
+        <button class="btn" type="submit">Filtrar</button>
+      </form>
+      <div class="grupo-filtro"><span class="rotulo-filtro">Fornecedor</span>
+        <div class="filtros">
+          <a class="filtro {{ 'ativo' if not fornecedor }}" href="{{ raiz }}{{ link(fornecedor='') }}">Todos</a>
+          <a class="filtro {{ 'ativo' if fornecedor == 'almeida' }}" href="{{ raiz }}{{ link(fornecedor='almeida') }}">Almeida</a>
+          <a class="filtro {{ 'ativo' if fornecedor == 'dantas' }}" href="{{ raiz }}{{ link(fornecedor='dantas') }}">Dantas</a>
+        </div>
+      </div>
+      <div class="grupo-filtro"><span class="rotulo-filtro">Período</span>
+        <div class="filtros">
+          <a class="filtro {{ 'ativo' if periodo == '30' }}" href="{{ raiz }}{{ link(periodo='30') }}">30 dias</a>
+          <a class="filtro {{ 'ativo' if periodo == '90' }}" href="{{ raiz }}{{ link(periodo='90') }}">90 dias</a>
+          <a class="filtro {{ 'ativo' if periodo == '365' }}" href="{{ raiz }}{{ link(periodo='365') }}">1 ano</a>
+          <a class="filtro {{ 'ativo' if periodo == 'tudo' }}" href="{{ raiz }}{{ link(periodo='') }}">Tudo</a>
+        </div>
+      </div>
+      <div class="grupo-filtro"><span class="rotulo-filtro">Ordem</span>
+        <div class="filtros">
+          <a class="filtro {{ 'ativo' if ordem == 'alta' }}" href="{{ raiz }}{{ link(ordem='') }}">Maiores altas</a>
+          <a class="filtro {{ 'ativo' if ordem == 'queda' }}" href="{{ raiz }}{{ link(ordem='queda') }}">Maiores quedas</a>
+        </div>
+      </div>
+    </div>
+
+    {% if variacoes %}
+    <div class="tabela-rolagem alta">
+      <table class="tabela">
+        <thead><tr>
+          <th>Produto</th><th>Fornecedor</th>
+          <th class="direita">Primeiro preço</th><th class="direita">Último preço</th>
+          <th class="direita">Variação</th><th>Evolução</th><th class="direita">Cotações</th>
+        </tr></thead>
+        <tbody>
+        {% for v in variacoes %}
+          {% set diferenca = (v.ultimo - v.primeiro)|round(2) %}
+          {% set sentido = 'sobe' if diferenca > 0 else ('desce' if diferenca < 0 else 'igual') %}
+          <tr>
+            <td class="desc">{{ v.descricao_canonica }}{% if v.marca or v.unidade_padrao %}<div class="pequeno mudo">{{ [v.marca, v.unidade_padrao]|select|join(' · ') }}</div>{% endif %}</td>
+            <td>{{ adm.fornecedor(v.fornecedor) }}</td>
+            <td class="direita num nowrap">{{ v.primeiro|brl }}<div class="pequeno fraco">{{ (v.primeira_data|quando)[:10] }}</div></td>
+            <td class="direita num nowrap"><b>{{ v.ultimo|brl }}</b><div class="pequeno fraco">{{ (v.ultima_data|quando)[:10] }}</div></td>
+            <td class="direita num nowrap"><span class="var {{ sentido }}" title="{{ 'Subiu' if sentido == 'sobe' else ('Caiu' if sentido == 'desce' else 'Sem alteração') }} {{ (diferenca|abs)|brl }}">{% if v.variacao is none %}—{% else %}{{ ('%+.1f'|format(v.variacao))|replace('.', ',')|replace('-', '−') }}%{% endif %}</span></td>
+            <td>{% if v.pontos %}<svg class="mini {{ sentido }}" viewBox="0 0 96 26" width="96" height="26" role="img" aria-label="Evolução do preço em {{ v.n }} cotações"><polyline points="{{ v.pontos }}"/></svg>{% endif %}</td>
+            <td class="direita num mudo">{{ v.n|num }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="pe-lista">
+      <span class="mudo pequeno num">{{ resumo.total|num }} {{ 'produto' if resumo.total == 1 else 'produtos' }} · vermelho = ficou mais caro, verde = ficou mais barato</span>
+      {{ adm.paginacao(prefixo, pagina_atual, paginas) }}
+    </div>
+    {% elif filtrando %}
+    <div class="vazio">{{ m.icone('busca') }}<b>Nenhum produto com variação para estes filtros</b>Amplie o período ou <a href="{{ raiz }}/precos">limpe os filtros</a>.</div>
+    {% else %}
+    <div class="vazio">
+      {{ m.icone('grafico') }}
+      <b>Ainda não há produto com duas cotações do mesmo fornecedor</b>
+      <p class="texto-vazio">A variação aparece quando o mesmo produto é cotado mais de uma vez no mesmo fornecedor. O histórico cresce a cada planilha de pregão anterior importada em <a href="{{ raiz }}/catalogo">Meu catálogo</a>.</p>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+{% endblock %}

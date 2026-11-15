@@ -1,0 +1,166 @@
+{% extends "pregao_base.html" %}
+{% import "_macros.html" as m with context %}
+{# Etapa 3 — Preços: busca nos fornecedores e escolha da marca/preço por item.
+   Estados: bloqueio (sem itens / sem fornecedor) · antes da busca · busca em
+   andamento (tarefa) · depois da busca (lista). Ver rotas_precos.precos. #}
+{% block estilos %}<link rel="stylesheet" href="{{ raiz }}/static/precos.css?v={{ versao }}">{% endblock %}
+{% block scripts %}<script src="{{ raiz }}/static/precos.js?v={{ versao }}"></script>{% endblock %}
+{% set base = '/pregao/' ~ pregao.slug %}
+
+{% block etapa %}
+<div class="cabecalho">
+  <div class="titulos">
+    <h1>Busca de preços</h1>
+    <p>Escolha a marca e o preço de cada item.</p>
+  </div>
+  {% if condicoes %}
+  <div class="p-pagamento" title="Condição de pagamento usada na busca — o preço do site é o dessa condição">
+    {% for c in condicoes %}<span class="selo">{{ c }}</span>{% endfor %}
+  </div>
+  {% endif %}
+</div>
+
+{% if bloqueio == 'sem_itens' %}
+  <div class="pilha" style="max-width:760px">
+    {{ m.aviso('erro', 'Nenhum item para buscar. Volte para a revisão.') }}
+    <div><a class="btn" href="{{ raiz }}{{ base }}/revisao">{{ m.icone('voltar') }} Voltar para revisão</a></div>
+  </div>
+{% elif bloqueio == 'sem_fornecedor' %}
+  <div class="pilha" style="max-width:760px">
+    {{ m.aviso('erro', 'Nenhum fornecedor configurado. Vá em <b>Configurações</b> para cadastrar Almeida e/ou Dantas.') }}
+    <div><a class="btn primario" href="{{ raiz }}/configuracoes">{{ m.icone('ajustes') }} Abrir Configurações</a></div>
+  </div>
+{% else %}
+
+<div class="pilha">
+  {% if sem_condicao %}
+    {{ m.aviso('alerta', 'Sem condição de pagamento configurada para <b>' ~ sem_condicao|join(', ') ~ '</b> — o preço vem da condição <b>default</b> do site (pode não bater com a sua). Configure em <b>Configurações</b>, na aba do fornecedor.') }}
+  {% endif %}
+  {% if aviso_tarefa %}{{ m.aviso(aviso_tarefa.tipo, aviso_tarefa.texto|e) }}{% endif %}
+
+  {# ------------------------------------------------ busca em andamento #}
+  {% if tarefa %}
+    {% set t = tarefa %}{% set ao_terminar = base ~ '/precos?fim=' ~ tarefa.id %}
+    {% include "_tarefa.html" %}
+    <div class="cartao p-andamento" data-tarefa="{{ tarefa.id }}">
+      <div class="corpo">
+        <div class="p-forn-grade">
+          {% for nome in fornecedores %}
+          <div class="p-forn-caixa">
+            <div class="linha entre">
+              <b class="forn-{{ nome }}">{{ nome|capitalize }}</b>
+              <span class="num mudo" data-extra="prog_{{ nome }}">{{ tarefa.extra.get('prog_' ~ nome, 'aguardando') }}</span>
+            </div>
+            <div class="pequeno mudo" data-extra="resumo_{{ nome }}">{{ tarefa.extra.get('resumo_' ~ nome, 'Em andamento') }}</div>
+          </div>
+          {% endfor %}
+        </div>
+        {# Leva em espera: o lote já usou as consultas que cabem na janela dos
+           sites. Não é problema — precos.js mantém este aviso em dia com o
+           `espera_s` que a consulta de progresso traz (span abaixo). #}
+        <span data-extra="espera_s" id="p-espera-s" hidden>{{ espera_s }}</span>
+        <div class="p-leva{{ '' if espera_s > 15 else ' oculto' }}" id="p-leva" role="status">{{ m.icone('relogio') }}<span>Respeitando o limite de consultas dos fornecedores — a próxima leva de itens sai em ~<b id="p-leva-min">{{ espera_min }}</b> min. Está tudo certo; pode fechar a página.</span></div>
+        <div class="linha entre p-andamento-pe">
+          <span class="mudo pequeno">{{ m.icone('nuvem') }} A busca roda no servidor: pode fechar esta página e voltar depois — o pregão fica em <a href="{{ raiz }}/pregoes">Pregões em andamento</a>.</span>
+          <button class="btn perigo p" type="button" data-acao="/api/tarefas/{{ tarefa.id }}/cancelar"
+                  data-confirmar="Cancelar a busca? Nada do que foi encontrado até aqui entra neste pregão — mas fica na memória de preços por {{ cache_dias }} dias, então recomeçar é rápido.">Cancelar busca</button>
+        </div>
+      </div>
+    </div>
+
+  {# ------------------------------------------------ depois da busca #}
+  {% elif pregao.tem_busca %}
+    {% for a in avisos %}{{ m.aviso('alerta', a) }}{% endfor %}
+    {% include "precos_resumo.html" %}
+
+    <details class="recolhe">
+      <summary>A busca teve problemas? Re-buscar ou voltar</summary>
+      <div class="corpo">
+        <p class="mudo pequeno">Os dois caminhos descartam os resultados e as marcas já escolhidas nesta tela — re-buscar é rápido: itens que já têm preço respondem da memória ({{ cache_dias }} dias) e só os sem resultado são tentados outra vez.</p>
+        <div class="linha">
+          <button class="btn" type="button" data-acao="{{ base }}/precos/refazer" data-dados='{"destino": "precos"}'
+                  data-confirmar="Descartar os resultados e as marcas escolhidas e buscar tudo de novo?">Buscar preços novamente</button>
+          <button class="btn" type="button" data-acao="{{ base }}/precos/refazer" data-dados='{"destino": "revisao"}'
+                  data-confirmar="Descartar os resultados e as marcas escolhidas e voltar para a revisão?">Voltar para a revisão</button>
+        </div>
+      </div>
+    </details>
+
+    {% if erros %}
+    <details class="recolhe">
+      <summary>Ver erros técnicos ({{ erros|length }})</summary>
+      <div class="corpo">
+        <p class="mudo pequeno">Erros isolados durante a busca — esses itens ficaram sem preço pelo fornecedor que falhou. Verifique se o site mudou de layout ou se a sessão expirou.</p>
+        <ul class="p-erros">
+          {% for e in erros[:50] %}
+          <li>{% if e.numero is none %}<b>Fornecedor inteiro</b>{% else %}Item <b>{{ e.numero }}</b>{% endif %} ({{ e.fornecedor }}) — <span class="mono">{{ e.descricao_resumo }}</span>: {{ e.mensagem }}</li>
+          {% endfor %}
+        </ul>
+        {% if erros|length > 50 %}<p class="mudo pequeno">... e mais {{ erros|length - 50 }} erros.</p>{% endif %}
+      </div>
+    </details>
+    {% endif %}
+
+    <section class="cartao p-lista" id="itens">
+      <div class="p-ferramentas">
+        <nav class="filtros" aria-label="Filtrar itens pela situação">
+          {% for chave, rotulo in situacoes %}
+          <a class="filtro {{ 'ativo' if situacao == chave }}" {% if situacao == chave %}aria-current="true"{% endif %}
+             href="{{ raiz }}{{ base }}/precos?{{ {'status': chave, 'q': q}|urlencode }}#itens">{{ rotulo }}<span class="q" id="q-{{ chave }}">{{ contagens[chave] }}</span></a>
+          {% endfor %}
+        </nav>
+        <form class="busca-campo" method="get" action="{{ raiz }}{{ base }}/precos#itens" role="search">
+          {{ m.icone('busca') }}
+          <input type="hidden" name="status" value="{{ situacao }}">
+          <input type="search" name="q" value="{{ q }}" placeholder="Filtrar por descrição, nº do item ou marca" aria-label="Filtrar itens" data-atalho-busca autocomplete="off">
+        </form>
+        {% if q or situacao != 'todos' %}<a class="btn fantasma p" href="{{ raiz }}{{ base }}/precos#itens">Limpar filtros</a>{% endif %}
+      </div>
+
+      {% for it in cartoes %}{% include "precos_item.html" %}{% endfor %}
+      {% if not cartoes %}
+      <div class="vazio">
+        {{ m.icone('busca') }}
+        <b>Nenhum item neste filtro</b>
+        {% if q %}Nada combina com “{{ q }}”{% if situacao != 'todos' %} nesta situação{% endif %}.{% else %}Nenhum item está nesta situação agora.{% endif %}
+      </div>
+      {% endif %}
+
+      {% if n_paginas > 1 %}
+      <nav class="paginacao" aria-label="Páginas">
+        {% if pagina > 1 %}<a class="btn p" href="{{ raiz }}{{ base }}/precos?{{ {'status': situacao, 'q': q, 'pagina': pagina - 1}|urlencode }}#itens">{{ m.icone('voltar') }} Anterior</a>
+        {% else %}<span class="btn p" disabled aria-disabled="true">{{ m.icone('voltar') }} Anterior</span>{% endif %}
+        <span class="mudo pequeno num">Página {{ pagina }} de {{ n_paginas }} — itens {{ inicio + 1 }}–{{ fim }} de {{ n_filtrados }}</span>
+        {% if pagina < n_paginas %}<a class="btn p" href="{{ raiz }}{{ base }}/precos?{{ {'status': situacao, 'q': q, 'pagina': pagina + 1}|urlencode }}#itens">Próxima {{ m.icone('seta') }}</a>
+        {% else %}<span class="btn p" disabled aria-disabled="true">Próxima {{ m.icone('seta') }}</span>{% endif %}
+      </nav>
+      {% endif %}
+    </section>
+
+  {# ------------------------------------------------ antes da busca #}
+  {% else %}
+    <div class="grade c3">
+      <div class="cartao metrica"><div class="rotulo">Itens a buscar</div><div class="valor">{{ n_itens|num }}</div><div class="apoio">marcados na revisão</div></div>
+      <div class="cartao metrica"><div class="rotulo">Fornecedores</div><div class="valor p-valor-texto">{{ fornecedores|map('capitalize')|join(' + ') }}</div><div class="apoio">com acesso configurado</div></div>
+      <div class="cartao metrica"><div class="rotulo">Cache de preço</div><div class="valor p-valor-texto">{{ cache_dias }} dias</div><div class="apoio">preço já consultado responde na hora</div></div>
+    </div>
+    <div class="cartao">
+      <div class="corpo p-estimativa">
+        <div class="p-estimativa-icone">{{ m.icone('relogio') }}</div>
+        <div>
+          <h2>Tempo estimado: {{ estimativa.texto }}</h2>
+          <p class="mudo">Os sites dos fornecedores aceitam cerca de <b>{{ estimativa.limite }} consultas a cada {{ estimativa.janela_min }} minutos</b>, somando os dois, e cada item gasta uma ou duas consultas em cada fornecedor. Por isso a busca anda em levas: a primeira sai na hora{% if estimativa.segundos %} e as seguintes de {{ estimativa.janela_min }} em {{ estimativa.janela_min }} minutos — {{ n_itens|num }} {{ 'item leva' if n_itens == 1 else 'itens levam' }} {{ estimativa.texto }}{% else %} e este pregão cabe nela{% endif %}. Item consultado nos últimos {{ cache_dias }} dias responde da memória, então costuma ser mais rápido do que isso.</p>
+          <p class="mudo" style="margin:0">A busca roda no servidor: depois de iniciar, <b>pode fechar esta página</b> e voltar quando quiser — o pregão continua em <a href="{{ raiz }}/pregoes">Pregões em andamento</a>.</p>
+        </div>
+      </div>
+      <div class="pe">
+        <button class="btn primario g" type="button" data-acao="{{ base }}/precos/buscar">{{ m.icone('busca') }} Iniciar busca</button>
+        <a class="btn g" href="{{ raiz }}{{ base }}/revisao">Voltar para revisão</a>
+      </div>
+    </div>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}
+
+{% block fita %}{% if not bloqueio and not tarefa and pregao.tem_busca %}{% include "precos_rodape.html" %}{% endif %}{% endblock %}

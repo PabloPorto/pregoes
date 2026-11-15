@@ -1,0 +1,22 @@
+{# Peças das telas de administração (histórico, catálogo, variação, configurações).
+   Uso: {% import "historico_macros.html" as adm with context %} #}
+{% import "_macros.html" as m with context %}
+
+{# Navegação entre páginas. `prefixo` é o endereço já com os filtros e
+   terminando em "p=" (ex.: "/historico?q=araruna&p="). #}
+{% macro paginacao(prefixo, pagina_atual, paginas) -%}
+  {% if paginas > 1 %}
+  <nav class="paginacao" aria-label="Páginas">
+    {% if pagina_atual > 1 %}<a class="btn p" href="{{ raiz }}{{ prefixo }}{{ pagina_atual - 1 }}" rel="prev">{{ m.icone('voltar') }} Anterior</a>
+    {% else %}<span class="btn p" aria-disabled="true" disabled>{{ m.icone('voltar') }} Anterior</span>{% endif %}
+    <span class="mudo pequeno num">Página {{ pagina_atual }} de {{ paginas }}</span>
+    {% if pagina_atual < paginas %}<a class="btn p" href="{{ raiz }}{{ prefixo }}{{ pagina_atual + 1 }}" rel="next">Próxima {{ m.icone('seta') }}</a>
+    {% else %}<span class="btn p" aria-disabled="true" disabled>Próxima {{ m.icone('seta') }}</span>{% endif %}
+  </nav>
+  {% endif %}
+{%- endmacro %}
+
+{# Selo do fornecedor, nas cores já usadas na escolha de preços. #}
+{% macro fornecedor(nome) -%}
+  <b class="forn-{{ nome }}">{{ {'almeida': 'Almeida', 'dantas': 'Dantas'}.get(nome, nome) }}</b>
+{%- endmacro %}

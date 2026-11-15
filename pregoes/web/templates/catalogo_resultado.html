@@ -1,0 +1,29 @@
+{# Desfecho da última importação (`resultado` = o que a tarefa devolveu). Fica
+   na tela mesmo depois de recarregar, enquanto a tarefa estiver guardada. #}
+<div class="pilha" id="resultado-importacao">
+{% if resultado.erro %}
+  {{ m.aviso('erro', resultado.erro|e) }}
+{% else %}
+  <div class="aviso ok" role="status">{{ m.icone('ok') }}<div>
+    <b>{{ 'Etapa 1 de 2 — importação concluída e salva.' if resultado.duas_etapas else 'Importação concluída e salva.' }}</b><br>
+    {{ resultado.resumo }}
+    {% if resultado.terminou_em %}<div class="pequeno mudo">Terminou em {{ resultado.terminou_em|quando }}.</div>{% endif %}
+  </div></div>
+  {% if resultado.avisos %}
+  <details class="recolhe">
+    <summary>Avisos ({{ resultado.avisos|length }})</summary>
+    <div class="corpo"><ul class="lista-avisos">{% for a in resultado.avisos %}<li>{{ a }}</li>{% endfor %}</ul></div>
+  </details>
+  {% endif %}
+  {% if resultado.duas_etapas %}
+    {% if resultado.erro_padronizacao %}
+      {{ m.aviso('alerta', 'A importação está salva, mas não consegui padronizar os nomes agora (' ~ (resultado.erro_padronizacao|e) ~ '). A busca funciona mesmo assim; tente importar de novo mais tarde.') }}
+    {% else %}
+      {{ m.aviso('ok', 'Etapa 2 de 2 concluída — catálogo pronto para a busca.') }}
+      {% if resultado.falhos %}
+        {{ m.aviso('alerta', resultado.falhos ~ ' produto(s) não foram padronizados (limite da IA ou internet). A importação está salva e a busca funciona; para cobertura total clique em importar de novo mais tarde.') }}
+      {% endif %}
+    {% endif %}
+  {% endif %}
+{% endif %}
+</div>

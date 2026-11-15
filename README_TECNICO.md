@@ -138,6 +138,19 @@ permanente, em fila, uma operação por vez.
   funções públicas do scraper (já passam pela fila) ou `no_navegador(fn, ...)`.
 - Troca aceita: com dois operadores, uma busca pode esperar a outra.
 
+### Interface web nova (2026-11) — substitui o Streamlit
+
+`pregoes/web/` (Starlette + Jinja2 + JavaScript puro; nenhuma dependência
+nova). Guia: `INTERFACE_WEB.md`; contrato: `docs/ARQUITETURA_WEB.md`. Ideias
+centrais: (1) o **rascunho em disco é o estado** — a URL diz qual pregão
+(`/pregao/<slug>/…`), não existe estado de sessão; as chaves gravadas são as
+mesmas do Streamlit, então os rascunhos são intercambiáveis; (2) **tarefas
+demoradas rodam no servidor** (`web/tarefas.py`) e a página só consulta o
+progresso; (3) regras que viviam em `ui/app.py` foram copiadas como funções
+puras para `web/regras_*.py`, com testes de paridade contra o original.
+Enquanto as duas interfaces coexistem, regra de negócio alterada em uma tem de
+ser alterada na outra.
+
 ### Busca de preços em camadas (estado atual, 2026-06)
 
 Por item, do mais preciso ao mais cobertor:

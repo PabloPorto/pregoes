@@ -1,0 +1,18 @@
+{# Corpo da grade da revisão: uma linha por item de `itens_edital`. Marcação
+   enxuta de propósito (um edital passa de 700 linhas): sem atributo de ação
+   por célula — quem salva é static/revisao.js, por delegação, usando a
+   posição `data-i` da linha e o `name` do campo.
+   Espera: itens, marcados (set de posições), valor(item, campo), nova (opcional). #}
+<tbody id="rev-corpo" data-n="{{ itens|length }}">
+{%- for it in itens %}
+<tr class="rev-linha{{ ' duvidoso' if it.confianca == 'duvidoso' }}" data-i="{{ loop.index0 }}"{{ ' data-nova' if nova == loop.index0 }}>
+<td class="c-ok"><input type="checkbox" name="marcado"{{ ' checked' if loop.index0 in marcados }} aria-label="Buscar preço?">{% if it.confianca == 'duvidoso' %}<span class="selo alerta rev-conferir">conferir</span>{% endif %}</td>
+<td><input type="text" name="item_numero" value="{{ valor(it, 'item_numero') }}" aria-label="Item"></td>
+<td><textarea name="descricao" rows="1" aria-label="Descrição">{{ it.descricao }}</textarea></td>
+<td><input type="text" name="unidade" value="{{ it.unidade or '' }}" aria-label="Unidade"></td>
+<td><input type="text" name="quantidade" value="{{ valor(it, 'quantidade') }}" aria-label="Quantidade"></td>
+<td><input type="text" name="valor_referencia" value="{{ valor(it, 'valor_referencia') }}" aria-label="Valor de referência"></td>
+<td class="c-acoes"><button type="button" class="rev-excluir" title="Excluir linha" aria-label="Excluir linha"></button></td>
+</tr>
+{%- endfor %}
+</tbody>

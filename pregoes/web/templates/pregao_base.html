@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{# Moldura das telas de um pregão: título, identificação e as 4 etapas.
+   Espera `pregao` (web.pregao.Pregao) e `etapa` (0..3 = a tela mostrada). #}
+{% block titulo %}{{ pregao.titulo }}{% endblock %}
+{% block migalhas %}<a href="{{ raiz }}/pregoes">Pregões em andamento</a> <span class="fraco">/</span> <b>{{ pregao.titulo }}</b>{% endblock %}
+{% block conteudo %}
+{% set passo = pregao.passo() %}
+{% set tem_itens = pregao.extracao is not none or pregao.itens_revisados %}
+<nav class="etapas" aria-label="Etapas do pregão" style="margin-bottom:20px">
+  <span class="etapa feita"><span class="n">✓</span> Edital</span>
+  {% for n, nome, caminho, liberada in [
+      (1, 'Itens', 'revisao', tem_itens),
+      (2, 'Preços', 'precos', pregao.itens_revisados),
+      (3, 'Planilha', 'planilha', pregao.itens_edital)] %}
+  {# etapa já vencida: está atrás da tela aberta, ou o pregão já passou dela #}
+  {% set feita = etapa != n and (etapa > n or passo > n or (n == 3 and passo >= 3)) %}
+  <a class="etapa {{ 'atual' if etapa == n else ('feita' if feita else '') }} {{ '' if liberada else 'bloqueada' }}" href="{{ raiz }}/pregao/{{ pregao.slug }}/{{ caminho }}"{% if etapa == n %} aria-current="step"{% endif %}><span class="n">{{ '✓' if feita else n + 1 }}</span> {{ nome }}</a>
+  {% endfor %}
+</nav>
+{% block etapa %}{% endblock %}
+{% endblock %}

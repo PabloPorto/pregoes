@@ -1,0 +1,73 @@
+{% extends "pregao_base.html" %}
+{% import "_macros.html" as m with context %}
+{# Etapa 4 — Planilha. Contexto montado em rotas_planilha.tela:
+   situacao = nova | pronta | desatualizada | sem_registro | sem_arquivo. #}
+{% block estilos %}<link rel="stylesheet" href="{{ raiz }}/static/planilha.css?v={{ versao }}">{% endblock %}
+{% block etapa %}
+{% set base = '/pregao/' ~ pregao.slug %}
+<div class="pl">
+  <div class="cabecalho">
+    <div class="titulos">
+      <h1>Planilha matriz</h1>
+      <p>Última etapa: confira o resumo e gere a planilha deste pregão.</p>
+    </div>
+  </div>
+
+  {% if total == 0 %}
+    {{ m.aviso('erro', textos.MSG_SEM_ITENS) }}
+    <div class="linha"><a class="btn" href="{{ raiz }}{{ base }}/revisao">{{ m.icone('voltar') }} Voltar para a revisão</a></div>
+  {% else %}
+
+    {% if sem_identidade %}
+      <div class="aviso erro" role="alert">{{ m.icone('erro') }}
+        <div>{{ textos.MSG_SEM_IDENTIDADE }}</div>
+        <div class="acoes"><a class="btn p" href="{{ raiz }}{{ base }}/revisao">Voltar para a revisão</a></div>
+      </div>
+    {% endif %}
+    {% if busca_em_curso %}
+      {{ m.aviso('alerta', 'A busca de preços deste pregão <b>ainda está em andamento</b>. Dá para gerar agora, mas os itens que ainda não foram buscados saem sem preço.') }}
+    {% endif %}
+
+    {% if situacao == 'pronta' %}
+      {% if historico_falhou %}{{ m.aviso('alerta', textos.MSG_HISTORICO_FALHOU) }}{% endif %}
+      <section class="cartao pl-pronta" aria-labelledby="pl-pronta-titulo">
+        <div class="pl-pronta-corpo">
+          <div class="pl-pronta-selo">{{ m.icone('ok') }}</div>
+          <div class="pl-pronta-texto">
+            <h2 id="pl-pronta-titulo">Planilha gerada: <code>{{ pronta.arquivo }}</code></h2>
+            {% for linha in pronta.linhas %}<p>{{ linha }}</p>{% endfor %}
+          </div>
+          <a class="btn primario g" href="{{ raiz }}{{ pronta.baixar }}">{{ m.icone('baixar') }} Baixar planilha matriz</a>
+        </div>
+        <div class="pe">
+          {% if pronta.no_historico %}<span class="mudo pequeno pl-cresce">{{ textos.MSG_CONCLUIDO }}</span>{% else %}<span class="pl-cresce"></span>{% endif %}
+          <a class="btn" href="{{ raiz }}/novo">{{ m.icone('novo') }} Começar um novo pregão</a>
+          {% if pronta.no_historico %}<a class="btn fantasma" href="{{ raiz }}/historico">Ver em Planilhas geradas</a>{% endif %}
+        </div>
+      </section>
+      <details class="recolhe pl-refazer">
+        <summary>Ajustar e gerar de novo</summary>
+        <div class="corpo pilha">
+          <p class="mudo">Mudou de ideia sobre um preço, a tributação ou a margem? Ajuste e gere de novo — o registro deste pregão em Planilhas geradas é atualizado, sem duplicar.</p>
+          {% include "planilha_ajustes.html" %}
+        </div>
+      </details>
+
+    {% else %}
+      {% if situacao == 'desatualizada' %}
+        <div class="aviso alerta" role="alert">{{ m.icone('alerta') }}
+          <div><b>A planilha registrada está desatualizada.</b> Este pregão foi alterado depois que ela foi gerada (itens, preços escolhidos ou tributação). Use <b>Gerar de novo</b> para atualizar.
+            {% if ultima and ultima.existe %}<div class="pequeno pl-anterior">Planilha anterior: <a href="{{ raiz }}/historico/planilha/{{ ultima.id }}"><code>{{ ultima.arquivo }}</code></a> · {{ ultima.criado_em|quando }}</div>{% endif %}
+          </div>
+        </div>
+      {% elif situacao == 'sem_registro' %}
+        {{ m.aviso('alerta', 'A planilha deste pregão foi gerada, mas não ficou registrada no <b>histórico</b>. Use <b>Gerar de novo</b> para registrar e baixar.') }}
+      {% elif situacao == 'sem_arquivo' %}
+        {{ m.aviso('alerta', 'A planilha deste pregão está no histórico, mas o <b>arquivo não está mais disponível</b>. Use <b>Gerar de novo</b> para recriá-la.') }}
+      {% endif %}
+      {% include "planilha_ajustes.html" %}
+    {% endif %}
+
+  {% endif %}
+</div>
+{% endblock %}

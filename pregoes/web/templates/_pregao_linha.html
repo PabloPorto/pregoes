@@ -1,0 +1,15 @@
+{# Uma linha da lista de pregões em andamento. Espera `r` (dict de em_andamento). #}
+<tr class="linha-pregao" id="pregao-{{ r.slug }}">
+  <td>
+    <a href="{{ raiz }}/pregao/{{ r.slug }}"><b>{{ r.titulo }}</b></a>
+    <div class="pequeno mudo">{{ r.n_itens }} {{ 'item' if r.n_itens == 1 else 'itens' }}{% if r.tem_busca %} · busca de preços feita{% endif %}</div>
+  </td>
+  <td>{% if r.tem_busca %}<span class="selo info"><span class="ponto"></span>Escolhendo preços</span>{% elif r.n_itens %}<span class="selo alerta"><span class="ponto"></span>Revisando itens</span>{% else %}<span class="selo"><span class="ponto"></span>Lendo o edital</span>{% endif %}</td>
+  <td class="mudo num pequeno">{{ r.mtime|quando }}</td>
+  <td class="acoes-cel">
+    <a class="btn primario p" href="{{ raiz }}/pregao/{{ r.slug }}">Continuar {{ m.icone('seta') }}</a>
+    <button class="btn fantasma p perigo" type="button" title="Descartar este pregão" aria-label="Descartar {{ r.titulo }}"
+            data-acao="/pregao/{{ r.slug }}/descartar"
+            data-confirmar="Descartar “{{ r.titulo }}”? O trabalho feito neste pregão será apagado. Não dá para desfazer.">{{ m.icone('lixo') }}</button>
+  </td>
+</tr>

@@ -1,0 +1,21 @@
+{# Números do topo da lista + re-busca só dos itens sem resultado. Espera
+   `mt` (regras_selecao.metricas), `n_faltantes` e `pregao`. Trocado inteiro
+   (id="precos-resumo") a cada escolha. #}
+{% import "_macros.html" as m with context %}
+<div id="precos-resumo" class="pilha">
+  <div class="grade c4">
+    <div class="cartao metrica"><div class="rotulo">Itens</div><div class="valor">{{ mt.total|num }}</div><div class="apoio">neste pregão</div></div>
+    <div class="cartao metrica cor-ok"><div class="rotulo">Com preço</div><div class="valor">{{ mt.com_preco|num }}</div><div class="apoio">Casamento exato com a descrição do edital</div></div>
+    <div class="cartao metrica {{ 'cor-alerta' if mt.por_variacao }}"><div class="rotulo">Por variação</div><div class="valor">{{ mt.por_variacao|num }}</div><div class="apoio">Encontrado, mas por busca aproximada — conferir</div></div>
+    <div class="cartao metrica {{ 'cor-erro' if mt.sem_resultado }}"><div class="rotulo">Sem resultado</div><div class="valor">{{ mt.sem_resultado|num }}</div><div class="apoio">Sem preço em nenhum fornecedor — use a re-busca ou a busca manual</div></div>
+  </div>
+  {% if n_faltantes %}
+  <div class="p-faltantes">
+    <div>
+      <b>{{ '1 item ficou' if n_faltantes == 1 else n_faltantes|num ~ ' itens ficaram' }} sem resultado.</b>
+      <span class="mudo">A re-busca tenta só {{ 'ele' if n_faltantes == 1 else 'eles' }} — os resultados e as escolhas que você já fez ficam como estão.</span>
+    </div>
+    <button class="btn" type="button" data-acao="/pregao/{{ pregao.slug }}/precos/buscar" data-dados='{"faltantes": true}'>{{ m.icone('busca') }} {{ 'Buscar preço do 1 item sem resultado' if n_faltantes == 1 else 'Buscar preços dos ' ~ n_faltantes ~ ' itens sem resultado' }}</button>
+  </div>
+  {% endif %}
+</div>

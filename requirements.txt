@@ -17,6 +17,9 @@ pandas==3.0.2
 
 # UI web local
 streamlit==1.57.0
+# A interface web nova (pregoes/web) usa starlette, jinja2, uvicorn e
+# python-multipart — todos já instalados como dependências do Streamlit. Quando
+# o Streamlit sair daqui, fixar os quatro explicitamente.
 
 # Geração de PDFs sintéticos para testes
 reportlab==4.5.0

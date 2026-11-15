@@ -1,0 +1,10 @@
+{# Uma planilha gerada (`x`) dentro da linha do pregão: baixar + resumo. #}
+<li>
+  {% if x.existe %}
+  <a class="btn p" href="{{ raiz }}/historico/planilha/{{ x.id }}" title="Baixar planilha ({{ x.arquivo }})" download>{{ m.icone('baixar') }} <span class="num">{{ x.criado_em|quando }}</span></a>
+  <span class="pequeno mudo">{{ x.n_itens|num }} itens · {{ x.n_selecoes|num }} com preço</span>
+  {% else %}
+  <button class="btn p" type="button" disabled aria-disabled="true">{{ m.icone('baixar') }} <span class="num">{{ x.criado_em|quando }}</span></button>
+  <span class="selo alerta" title="Arquivo não está na pasta — gere de novo a partir do pregão.">Arquivo ausente</span>
+  {% endif %}
+</li>

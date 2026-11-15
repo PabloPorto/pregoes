@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block titulo %}{{ titulo }}{% endblock %}
+{% block conteudo %}
+<div class="cartao" style="max-width:640px;margin:48px auto">
+  <div class="vazio">
+    {{ m.icone('alerta') }}
+    <b>{{ titulo }}</b>
+    <p>{{ mensagem }}</p>
+    <div class="linha" style="justify-content:center;margin-top:14px">
+      <a class="btn primario" href="{{ raiz }}/">{{ m.icone('inicio') }} Ir para o Início</a>
+      <a class="btn" href="javascript:location.reload()">Tentar de novo</a>
+    </div>
+  </div>
+</div>
+{% endblock %}

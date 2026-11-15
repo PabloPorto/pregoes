@@ -1,0 +1,10 @@
+{# Painel da aba aberta em Configurações. Cada ação devolve este pedaço de
+   novo (a raiz precisa ter id="painel"), com `mensagens` = [(tipo, html)]. #}
+{% import "_macros.html" as m with context %}
+<div id="painel" class="pilha painel-config" data-aba="{{ aba }}">
+  {% for tipo, texto in mensagens %}{{ m.aviso(tipo, texto) }}{% endfor %}
+  {% if aba in ('almeida', 'dantas') %}{% include "config_fornecedor.html" %}
+  {% elif aba == 'ia' %}{% include "config_ia.html" %}
+  {% elif aba == 'backup' %}{% include "config_backup.html" %}
+  {% else %}{% include "config_sistema.html" %}{% endif %}
+</div>

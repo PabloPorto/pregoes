@@ -1,0 +1,70 @@
+{# Diálogo "Procurar de outro jeito" de um item: as duas buscas manuais, uma
+   por vez (Meus produtos = catálogo do cliente · Site do fornecedor = busca
+   ao vivo). Espera `pregao`, `it` (visao_item), `fonte`, `n_catalogo`,
+   `fornecedores`, `fila_ocupada`. #}
+{% import "_macros.html" as m with context %}
+{% set base = '/pregao/' ~ pregao.slug ~ '/precos/item/' ~ it.i %}
+<div data-largo="1">
+  <div class="cab">
+    <h2>Procurar de outro jeito</h2>
+    <button class="btn fantasma p" type="button" data-fechar>Fechar</button>
+  </div>
+  <div class="corpo">
+    <div class="p-alvo">
+      <span class="num-i">Item {{ it.numero }}</span>
+      <div>
+        <b>{{ it.titulo or '(sem descrição)' }}</b>
+        {% if it.descricao_longa %}<div class="pequeno mudo p-alvo-literal">{{ it.descricao }}</div>{% endif %}
+      </div>
+    </div>
+
+    <div class="p-fonte">
+      <span class="pequeno mudo">Onde procurar este item?</span>
+      <div class="p-segmento" role="tablist">
+        <button type="button" role="tab" class="{{ 'ativo' if fonte == 'catalogo' }}" aria-selected="{{ 'true' if fonte == 'catalogo' else 'false' }}" data-modal="{{ base }}/procurar?fonte=catalogo">Meus produtos</button>
+        <button type="button" role="tab" class="{{ 'ativo' if fonte == 'site' }}" aria-selected="{{ 'true' if fonte == 'site' else 'false' }}" data-modal="{{ base }}/procurar?fonte=site">Site do fornecedor</button>
+      </div>
+    </div>
+
+    {% if fila_ocupada %}
+    <div class="p-nota">{{ m.icone('relogio') }}<span>Há uma busca de preços em lote rodando agora. Consultas ao site do fornecedor esperam a vez dela e podem demorar.</span></div>
+    {% endif %}
+
+    {% if fonte == 'site' %}
+      {% if not fornecedores %}
+        <p class="mudo">Configure as credenciais dos fornecedores em Configurações para buscar direto no site.</p>
+      {% else %}
+      <form class="p-procura" action="{{ base }}/site" data-async data-espera="Buscando “{termo}” na {fornecedor}…">
+        <label class="campo p-procura-campo">Nome ou código do produto
+          <input type="text" name="termo" placeholder="ex.: alicate de pressão  ·  8811" autocomplete="off" autofocus>
+        </label>
+        <fieldset class="p-radios">
+          <legend>Fornecedor</legend>
+          {% for nome in fornecedores %}
+          <label class="checagem"><input type="radio" name="fornecedor" value="{{ nome }}" {{ 'checked' if loop.first }}> {{ nome|capitalize }}</label>
+          {% endfor %}
+        </fieldset>
+        <button class="btn primario" type="submit">{{ m.icone('busca') }} Buscar no site ao vivo</button>
+      </form>
+      <p class="pequeno mudo">Busca AO VIVO no site, sem filtro — você vê o que o site devolve e escolhe. O preço é o atual do site.</p>
+      {% endif %}
+    {% else %}
+      {% if not n_catalogo %}
+        <p class="mudo">Catálogo interno vazio — importe suas planilhas históricas em Configurações para usar esta busca.</p>
+      {% else %}
+      <form class="p-procura" action="{{ base }}/catalogo" data-async>
+        <label class="campo p-procura-campo">Procurar por palavras ou código
+          <input type="text" name="q" placeholder="ex.: tubo pvc 75  ·  válvula lavatório  ·  8811" autocomplete="off" autofocus>
+        </label>
+        <button class="btn primario" type="submit">{{ m.icone('busca') }} Procurar</button>
+      </form>
+      <p class="pequeno mudo">Busque por palavras (acha quem contém todas) ou pelo código do fornecedor. Nos produtos que você já comprou.</p>
+      {% endif %}
+    {% endif %}
+
+    <div id="procura-estado" class="p-estado">
+      {%- if fonte != 'site' and n_catalogo %}<p class="mudo">Digite palavras (ex.: 'tubo pvc 75') ou um código para procurar nos seus {{ n_catalogo|num }} produtos.</p>{% endif -%}
+    </div>
+    <div id="procura-resultado"></div>
+  </div>
+</div>

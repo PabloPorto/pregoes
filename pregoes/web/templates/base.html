@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="pt-BR" translate="no" data-raiz="{{ raiz }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block titulo %}Pregões{% endblock %} · Pregões</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231f47d0'/%3E%3Ctext x='16' y='22' font-family='Arial' font-size='18' font-weight='700' fill='white' text-anchor='middle'%3EP%3C/text%3E%3C/svg%3E">
+  <meta name="google" content="notranslate">
+  <link rel="stylesheet" href="{{ raiz }}/static/app.css?v={{ versao }}">
+  {% block estilos %}{% endblock %}
+  <script>try{var t=localStorage.getItem("pregoes-tema");if(t)document.documentElement.dataset.tema=t;}catch(e){}</script>
+</head>
+<body>
+{% import "_macros.html" as m with context %}
+<div class="app">
+  <aside class="lateral">
+    <a class="marca" href="{{ raiz }}/"><span class="marca-selo">P</span> Pregões</a>
+    <nav aria-label="Navegação principal">
+      <a class="item {{ 'ativo' if secao == 'inicio' }}" href="{{ raiz }}/">{{ m.icone('inicio') }} Início</a>
+      <a class="item {{ 'ativo' if secao == 'novo' }}" href="{{ raiz }}/novo">{{ m.icone('novo') }} Novo pregão</a>
+      <a class="item {{ 'ativo' if secao == 'pregoes' }}" href="{{ raiz }}/pregoes">{{ m.icone('pasta') }} Pregões em andamento</a>
+      <a class="item {{ 'ativo' if secao == 'historico' }}" href="{{ raiz }}/historico">{{ m.icone('historico') }} Planilhas geradas</a>
+      <div class="grupo">Inteligência</div>
+      <a class="item {{ 'ativo' if secao == 'catalogo' }}" href="{{ raiz }}/catalogo">{{ m.icone('catalogo') }} Meu catálogo</a>
+      <a class="item {{ 'ativo' if secao == 'precos' }}" href="{{ raiz }}/precos">{{ m.icone('grafico') }} Variação de preços</a>
+      <div class="grupo">Sistema</div>
+      <a class="item {{ 'ativo' if secao == 'config' }}" href="{{ raiz }}/configuracoes">{{ m.icone('ajustes') }} Configurações</a>
+    </nav>
+    <div class="rodape">
+      {% if operador %}<div><b>{{ operador }}</b></div>{% endif %}
+      <div>Versão {{ versao }}</div>
+    </div>
+  </aside>
+  <div class="principal">
+    <header class="topo">
+      <div class="migalhas">{% block migalhas %}{% endblock %}</div>
+      <div class="espaco"></div>
+      {% block topo_acoes %}{% endblock %}
+      <button class="btn fantasma p" type="button" data-tema-alternar title="Alternar tema claro/escuro" aria-label="Alternar tema claro/escuro">{{ m.icone('tema') }}</button>
+    </header>
+    <main class="conteudo">
+      {% block conteudo %}{% endblock %}
+    </main>
+    {% block fita %}{% endblock %}
+  </div>
+</div>
+<script src="{{ raiz }}/static/app.js?v={{ versao }}"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

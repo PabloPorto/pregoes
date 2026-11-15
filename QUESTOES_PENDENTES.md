@@ -849,6 +849,42 @@ máquina (§9) — atualizar o CLAUDE.md quando o servidor for validado.
 **Condição.** Vale se o teste de IP (Fase 1) passar; se os fornecedores
 bloquearem o IP da VPS, pedir reembolso e repensar.
 
+### Q21. Troca da interface (Streamlit → web) — 🟡 nova pronta e no ar em `/novo`; troca definitiva aguarda o responsável
+
+**Contexto.** Em 2026-11-15 o responsável pediu a profissionalização da UI e
+autorizou sair do Streamlit, sem perder função nem dado, decidindo sempre pelo
+recomendado. Foi feito: inventário completo da interface antiga
+(`docs/INVENTARIO_UI.md`), interface nova com paridade + melhorias
+(`INTERFACE_WEB.md`), 150+ testes novos, ensaio com cópia dos dados reais
+(os 10 pregões em andamento abrem; planilha gerada com as 143 escolhas nas
+linhas certas; busca real nos fornecedores a partir do servidor).
+
+**Default adotado:** as duas interfaces lado a lado — antiga em `/` (intocada,
+é a que os operadores usam), nova em `/novo`. **Não** troquei a de produção
+sozinho.
+
+**Alternativa não escolhida:** trocar de vez agora. Motivo: os operadores
+encontrariam uma tela diferente na segunda-feira sem aviso, e fluxos menos
+usados (importar planilhas, identificar NCM ao vivo, mapeamento manual com
+PDF difícil) só foram exercitados por teste automático.
+
+**O que precisa para resolver:** o responsável (e de preferência um operador)
+usar `/novo` num pregão real do começo ao fim; estando bom, rodar os 3
+comandos de `INTERFACE_WEB.md`. Voltar atrás é 1 comando.
+
+**Decisões tomadas na reescrita (diferenças de propósito):**
+- O rascunho NÃO é apagado ao gerar a planilha (some da lista "em andamento",
+  mas dá para reabrir pelo histórico, ajustar e gerar de novo).
+- Voltar à revisão e mudar QUAIS itens estão marcados (ou incluir/excluir
+  linha) descarta a busca feita, com confirmação — os resultados são
+  indexados pela posição e ficariam no item errado.
+- "Variação de preços" lê `precos_historico`, que hoje só é alimentado pela
+  importação de planilhas. Alimentá-lo também com as buscas é decisão de
+  backend em aberto.
+- `db.pregao_finalizado` compara órgão/número com `TRIM`, e o registro do
+  edital usa `lower(trim())`: um rascunho cujo órgão difere só em
+  maiúsculas de um edital já gerado continua em "em andamento". Cosmético.
+
 ### Extrator — o que os PDFs reais do cliente mostraram (2026-11-14)
 
 Dos 26 PDFs distintos enviados entre 15/10 e 13/11, **9 saíam com 0 itens** no

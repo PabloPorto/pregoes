@@ -198,7 +198,7 @@ PDF do edital
 | Item | Decisão | Origem |
 |---|---|---|
 | Onde roda | Local na máquina do cliente | Resp 13 + recomendação aceita |
-| Servidor de UI | Streamlit em localhost:8501 | Confirmado |
+| Servidor de UI | **Revisado 2026-11-15**: interface web própria (`pregoes/web/`, Starlette + Jinja2, sem dependência nova) substitui o Streamlit; as duas coexistem até a troca (Q21, `INTERFACE_WEB.md`) | Pedido do responsável |
 | Banco | SQLite em arquivo | Princípio 1 (simplicidade) |
 | Markup | Variável por pregão, indicado pelo usuário antes de gerar a planilha (default 1.45) | Q7 — Resp 2026-05-12 |
 | Markup por ST | Por item via NCM: `1.30` para item com ST (consta no Anexo 05 do RICMS/PB), `1.45` caso contrário | Fase 4 (markup) — entregue |
@@ -264,8 +264,12 @@ adicionadas a `QUESTOES_PENDENTES.md`** com:
   cliente (`run_app.py`, `pregoes.spec`, `build_exe.bat`; ver `BUILD.md`).
 - ❌ **Não troque SQLite por PostgreSQL "para escalabilidade".** SQLite
   aguenta de sobra esse volume.
-- ❌ **Não troque Streamlit por React/Next.js/Flask sem motivo concreto.**
-  Streamlit serve o caso bem e mantém um único Python.
+- ⚠️ **Interface: REVISADO (2026-11-15).** O responsável pediu sair do
+  Streamlit (visual amador). A interface nova é `pregoes/web/` — Starlette +
+  Jinja2 + JS puro, um único processo Python, nenhum build nem CDN. Continua
+  proibido: React/Next.js/npm, framework de front, segundo serviço. Enquanto
+  as duas coexistem, regra de negócio mexida em `ui/app.py` tem de ser mexida
+  em `web/regras_*.py` (e vice-versa).
 - ❌ **Não crie ORM pesado (SQLAlchemy ORM completo).** `sqlite3` puro
   com SQL escrito está bom.
 - ❌ **Não crie abstrações para "futuros fornecedores" enquanto só temos

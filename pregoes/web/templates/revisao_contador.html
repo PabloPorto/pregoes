@@ -1,0 +1,6 @@
+{# Linha "N de M itens marcados…" + o sinal de que o trabalho está salvo.
+   Espera: c (regras_revisao.contagem), salvo_as (opcional, "HH:MM:SS"). #}
+<div id="rev-contador" class="rev-contador" role="status">
+  <span><b class="num">{{ c.marcados }}</b> de <b class="num">{{ c.total }}</b> itens marcados para <b>buscar preço</b> · todos os <b class="num">{{ c.total }}</b> vão para a planilha (os demais sem preço).</span>
+  <span class="rev-salvo">{% if salvo_as %}Salvo às {{ salvo_as }}{% else %}As alterações são salvas sozinhas{% endif %}</span>
+</div>

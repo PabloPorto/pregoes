@@ -1,0 +1,49 @@
+{# Abas Almeida e Dantas: acesso ao site + condição de pagamento. #}
+{% if tem_credencial %}
+  <div class="aviso ok" role="status">{{ m.icone('ok') }}<div>Credencial ativa: <code>{{ email }}</code> (senha oculta).</div></div>
+{% elif forn == 'almeida' %}
+  {{ m.aviso('alerta', 'Nenhuma credencial salva. A busca de preços não funciona até configurar.') }}
+{% else %}
+  <div class="aviso alerta" role="alert">{{ m.icone('alerta') }}<div>Nenhuma credencial salva. A busca não inclui Dantas até configurar.</div>
+    {% if pode_copiar %}<div class="acoes"><button class="btn p" type="button" data-acao="/configuracoes/copiar-almeida">Usar as mesmas credenciais da Almeida</button></div>{% endif %}
+  </div>
+{% endif %}
+
+<form class="cartao" action="/configuracoes/credenciais" method="post" data-async autocomplete="off">
+  <div class="cab"><h2>Acesso ao site da {{ nome }}</h2></div>
+  <div class="corpo">
+    <input type="hidden" name="fornecedor" value="{{ forn }}">
+    <div class="grade c2">
+      <label class="campo">E-mail
+        <input type="text" name="email" value="{{ email }}" inputmode="email" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="o e-mail que você usa no site da {{ nome }}">
+      </label>
+      <label class="campo">Senha
+        <input type="password" name="senha" value="" autocomplete="new-password" placeholder="{{ '(senha salva — digite para trocar)' if tem_credencial else 'a senha do site' }}">
+        <span class="dica">{% if tem_credencial %}A senha salva nunca é mostrada. Deixe em branco para manter a atual.{% else %}É a mesma senha que você digita no site do fornecedor.{% endif %}</span>
+      </label>
+    </div>
+  </div>
+  <div class="pe"><button class="btn primario" type="submit">Salvar credenciais</button></div>
+</form>
+
+{% if formas %}
+<form class="cartao" action="/configuracoes/pagamento" method="post" data-async>
+  <div class="cab"><h2>Condição de pagamento</h2></div>
+  <div class="corpo pilha">
+    <p style="margin:0"><b>Condição de pagamento</b> — o preço no site <b>muda</b> conforme a forma (e o prazo, quando houver). Escolha a condição sob a qual você realmente compra; o sistema busca os preços nela. <b>PIX e pagamento antecipado não têm prazo</b> — deixe o prazo em <i>Não se aplica</i>.</p>
+    <input type="hidden" name="fornecedor" value="{{ forn }}">
+    <div class="grade c2">
+      <label class="campo">Forma de Pagamento
+        <select name="forma">{% for o in formas %}<option value="{{ o.value }}"{% if o.value == forma_sel %} selected{% endif %}>{{ o.texto }}</option>{% endfor %}</select>
+      </label>
+      <label class="campo">Prazo de Pagamento (só para boleto/cartão)
+        <select name="prazo">{% for o in prazos %}<option value="{{ o.value }}"{% if o.value == prazo_sel %} selected{% endif %}>{{ o.texto }}</option>{% endfor %}</select>
+      </label>
+    </div>
+  </div>
+  <div class="pe">
+    <button class="btn primario" type="submit">Salvar condição de pagamento</button>
+    <span class="mudo pequeno">{% if condicao_atual %}Condição atual: {{ condicao_atual }}{% else %}Ainda não configurado — o sistema usa a condição <b>default</b> do site (o preço pode não bater com a sua).{% endif %}</span>
+  </div>
+</form>
+{% endif %}
