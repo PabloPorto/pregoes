@@ -1,5 +1,6 @@
-# Serviço do Pregões no servidor (systemd). Instalado por deploy/instalar_servidor.sh.
-# Sobe sozinho com a máquina e reinicia se cair. Log: journalctl -u pregoes -f
+# Interface ANTIGA do Pregões (Streamlit). DESLIGADA desde 2026-11-17: a de
+# produção é pregoes-web.service, na mesma porta (8501) — as duas não sobem
+# juntas. Fica aqui só como plano de volta (ver INTERFACE_WEB.md).
 [Unit]
 Description=Pregoes (Streamlit)
 After=network-online.target

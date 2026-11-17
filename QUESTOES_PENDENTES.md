@@ -571,7 +571,23 @@ mapeamento manual cobre os 2 restantes com aprendizado para reuso.
 
 ---
 
-### Q2. Bootstrap do catálogo histórico (5.000 produtos mencionados) — 🟡 PARCIALMENTE RESOLVIDA
+### Q2. Bootstrap do catálogo histórico (5.000 produtos mencionados) — 🟡 catálogo ZERADO a pedido do cliente em 2026-11-17
+
+**Limpeza de 2026-11-17 (pedido do cliente, via responsável).** O catálogo
+interno do servidor foi esvaziado: 66 produtos, as 66 formas padronizadas e os
+57 preços de referência — tudo vindo de UMA importação (15/10/2026, a
+planilha `pregao_CATINGUEIRA_000252026_…xlsx`, gerada pelo próprio sistema) —
+mais o registro dessa importação. Também foi tirada a marca "no seu catálogo"
+dos resultados guardados no cache de preços, para as próximas buscas não
+priorizarem produto que não está mais no catálogo. **Não** foram tocados: as
+368 escolhas aprendidas (Camada 4), os pregões em andamento (quem já tinha
+busca feita continua mostrando a etiqueta "no seu catálogo" até buscar de
+novo), as planilhas geradas e o arquivo importado em `data/historico/`. Cópia
+do banco de antes da limpeza: `/root/pregoes_antes_de_limpar_catalogo_*.db`
+no servidor. A Camada 0 (busca por código) volta a ficar inerte até uma nova
+importação. (O "1408 produtos" abaixo era o banco de desenvolvimento de
+06/2026, não o servidor.)
+
 
 **Contexto.** O cliente declarou base mental de ~5.000 produtos acumulados em pregões anteriores.
 
@@ -849,7 +865,18 @@ máquina (§9) — atualizar o CLAUDE.md quando o servidor for validado.
 **Condição.** Vale se o teste de IP (Fase 1) passar; se os fornecedores
 bloquearem o IP da VPS, pedir reembolso e repensar.
 
-### Q21. Troca da interface (Streamlit → web) — 🟡 nova pronta e no ar em `/novo`; troca definitiva aguarda o responsável
+### Q21. Troca da interface (Streamlit → web) — ✅ RESOLVIDA em 2026-11-17: a interface web é a de produção
+
+**Resolução (2026-11-17).** O responsável mandou trocar ("Trocar agora"),
+depois de dois dias com as duas no ar e os operadores já usando a nova (um
+lote real de 717 itens rodou nela em 16/11: 2 h 10, 670 com candidato, 0
+erros). A interface web responde na raiz, porta 8501; o Streamlit foi
+desligado e desabilitado (`pregoes.service`), sem apagar nada — voltar é 1
+comando (`INTERFACE_WEB.md`). A troca foi feita com uma busca de 354 itens em
+andamento: ela foi retomada sozinha quando o serviço subiu. Endereços
+`/novo/...` da fase de convivência redirecionam. O texto abaixo é o histórico
+da decisão.
+
 
 **Contexto.** Em 2026-11-15 o responsável pediu a profissionalização da UI e
 autorizou sair do Streamlit, sem perder função nem dado, decidindo sempre pelo

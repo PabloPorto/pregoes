@@ -37,30 +37,23 @@ Quando o Streamlit sair do `requirements.txt`, fixar essas três + `python-multi
 
 ## No servidor
 
-Fase atual — **as duas lado a lado**: a antiga em `/` (o que os operadores
-usam), a nova em `/novo` (`deploy/pregoes-web.service`, porta 8502), na mesma
-hostname e atrás do mesmo login.
+**Desde 2026-11-17 esta é a interface de produção** (`deploy/pregoes-web.service`,
+porta 8501, na raiz do endereço, atrás do mesmo login). O Streamlit
+(`pregoes.service`) está desligado e desabilitado; o código dele continua no
+repositório como plano de volta. Entre 15 e 17/11 as duas conviveram (a nova
+em `/novo`): endereços daquela fase (`/novo/...`) redirecionam para o lugar
+certo.
 
-Trocar de vez (a nova passa a responder em `/`):
+Voltar ao Streamlit (as duas usam a porta 8501 — nunca as duas ligadas):
 
 ```bash
-ssh -i ~/.ssh/pregoes_vps root@IP '
-  sed -i "s/^Environment=PREGOES_WEB_PORTA=8502/Environment=PREGOES_WEB_PORTA=8501/; /PREGOES_WEB_RAIZ/d" /etc/systemd/system/pregoes-web.service
-  systemctl daemon-reload
-  systemctl disable --now pregoes && systemctl restart pregoes-web'
+ssh -i ~/.ssh/pregoes_vps root@IP 'systemctl disable --now pregoes-web && systemctl enable --now pregoes'
 ```
 
-(e tirar a regra `/novo` de `/home/pregoes/.cloudflared/config.yml` +
-`systemctl restart pregoes-tunel`). Voltar atrás: `systemctl disable --now
-pregoes-web && systemctl enable --now pregoes`. Os dados não mudam de lugar
-nem de formato em nenhum dos sentidos.
+Os dados não mudam de lugar nem de formato em nenhum dos sentidos. O que se
+perde voltando: a busca com a página fechada, a retomada após reinício e a
+escolha do ritmo pela tela (o ritmo salvo continua valendo).
 
 A velocidade da busca em lote (rápida × segura) se escolhe em Configurações →
-Sistema, só na interface nova — mas vale para as duas, porque é do motor de
-busca. Só a interface nova continua a busca com a página fechada e a retoma
-sozinha se o serviço reiniciar; na antiga a aba precisa ficar aberta.
-
-Cuidado enquanto as duas estão no ar: cada uma conta sozinha o limite de
-consultas dos fornecedores (Q20). Dois lotes grandes ao mesmo tempo, um em cada
-interface, podem encostar no limite — nada se perde (o lote pausa e retoma),
-só demora mais.
+Sistema (Q20). A busca continua com a página fechada e é retomada sozinha se
+o serviço reiniciar.

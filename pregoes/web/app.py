@@ -207,6 +207,18 @@ def tarefa_cancelar(request: Request):
     return falha("Esta tarefa já terminou.")
 
 
+def do_endereco_antigo(request: Request):
+    """Enquanto as duas interfaces conviveram (15–17/11/2026) esta ficava em
+    `/novo/…`. Favoritos e abas que ficaram abertas naquele endereço continuam
+    funcionando: `/novo/qualquer-coisa` vai para `/qualquer-coisa` (307 mantém
+    o método, então uma ação disparada de uma aba antiga também chega). Só
+    `/novo` exato é a tela Novo pregão."""
+    destino = "/" + request.path_params["resto"]
+    if request.url.query:
+        destino += "?" + request.url.query
+    return RedirectResponse(destino, 307)
+
+
 def saude(request: Request):
     return JSONResponse({"ok": True, "versao": config.VERSAO_APP})
 
@@ -286,6 +298,8 @@ def criar_app() -> Starlette:
     ]
     tratadores = {Exception: _erro_inesperado, 404: _nao_existe}
     if not RAIZ:
+        rotas.append(Route("/novo/{resto:path}", do_endereco_antigo,
+                           methods=["GET", "POST"]))
         return Starlette(routes=rotas, lifespan=_vida, exception_handlers=tratadores)
     # Servido num subcaminho (ex.: /painel atrás do mesmo túnel).
     interno = Starlette(routes=rotas, exception_handlers=tratadores)

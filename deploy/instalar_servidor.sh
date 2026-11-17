@@ -30,9 +30,11 @@ sudo -u "$APP_USER" "$APP_DIR/.venv/bin/pip" install -q -r "$APP_DIR/requirement
 "$APP_DIR/.venv/bin/python" -m playwright install-deps chromium   # libs do sistema (root)
 sudo -u "$APP_USER" "$APP_DIR/.venv/bin/python" -m playwright install chromium
 
-install -m 644 "$APP_DIR/deploy/pregoes.service" /etc/systemd/system/pregoes.service
+# A interface de produção é a web (pregoes-web); a antiga (Streamlit,
+# deploy/pregoes.service) não é mais instalada — usa a mesma porta.
+install -m 644 "$APP_DIR/deploy/pregoes-web.service" /etc/systemd/system/pregoes-web.service
 systemctl daemon-reload
-systemctl enable pregoes
-systemctl restart pregoes
+systemctl enable pregoes-web
+systemctl restart pregoes-web
 sleep 5
-systemctl --no-pager --lines=5 status pregoes
+systemctl --no-pager --lines=5 status pregoes-web

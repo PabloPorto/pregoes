@@ -117,8 +117,8 @@ virar() {
         # Qualquer falha daqui em diante deixaria as DUAS fora do ar sem dizer
         # como voltar: o aviso sai sempre.
         _ANTIGA_PARADA=$antigo
-        trap 'if [ -n "${_ANTIGA_PARADA:-}" ]; then echo; echo "A TROCA NÃO TERMINOU e a antiga está parada. Para religar a antiga:"; echo "    ssh -i $CHAVE root@$_ANTIGA_PARADA systemctl start pregoes pregoes-tunel pregoes-backup.timer"; fi' EXIT
-        ssh_em "$antigo" 'systemctl stop pregoes-backup.timer pregoes-tunel pregoes; systemctl stop pregoes-web 2>/dev/null || true'
+        trap 'if [ -n "${_ANTIGA_PARADA:-}" ]; then echo; echo "A TROCA NÃO TERMINOU e a antiga está parada. Para religar a antiga:"; echo "    ssh -i $CHAVE root@$_ANTIGA_PARADA systemctl start pregoes-web pregoes-tunel pregoes-backup.timer"; fi' EXIT
+        ssh_em "$antigo" 'systemctl stop pregoes-backup.timer pregoes-tunel pregoes-web; systemctl stop pregoes 2>/dev/null || true'
         passo "Tirando o pacote FRESCO dos dados da antiga"
         pacote_na_antiga "$antigo" "$pacote"
     else
@@ -137,7 +137,7 @@ se está mesmo inacessível ou desligada, repita com SEM_ANTIGA=1 na frente do c
     mkdir -p "$pasta/extraido" && tar -xzf "$pacote" -C "$pasta/extraido"
     (cd "$pasta/extraido/pacote" && shasum -a 256 -c MANIFESTO.sha256 --quiet) \
         || falha "o pacote não confere com o manifesto — NÃO restaurado. A antiga está parada: religue com
-    ssh -i $CHAVE root@$antigo 'systemctl start pregoes pregoes-tunel pregoes-backup.timer'"
+    ssh -i $CHAVE root@$antigo 'systemctl start pregoes-web pregoes-tunel pregoes-backup.timer'"
 
     passo "Restaurando na VPS nova ($novo)"
     scp -q -i "$CHAVE" -o BatchMode=yes "$pacote" "root@$novo:/root/pregoes_servidor.tgz"
@@ -159,21 +159,22 @@ se está mesmo inacessível ou desligada, repita com SEM_ANTIGA=1 na frente do c
         install -m 644 $APP/deploy/pregoes-tunel.service $APP/deploy/pregoes-backup.service \
             $APP/deploy/pregoes-backup.timer $APP/deploy/pregoes-web.service /etc/systemd/system/
         systemctl daemon-reload
-        systemctl enable --now pregoes pregoes-web pregoes-tunel pregoes-backup.timer
-        systemctl restart pregoes"
+        systemctl disable --now pregoes 2>/dev/null || true   # Streamlit: mesma porta, fora de uso
+        systemctl enable --now pregoes-web pregoes-tunel pregoes-backup.timer
+        systemctl restart pregoes-web"
     _ANTIGA_PARADA=   # a nova subiu: daqui em diante vale o plano de volta do fim
 
     if [ -n "$antigo" ]; then
         passo "Desligando os serviços da antiga (sem apagar dados: ela é o plano de volta)"
-        ssh_em "$antigo" 'systemctl disable pregoes pregoes-tunel pregoes-backup.timer; systemctl disable pregoes-web 2>/dev/null' || true
+        ssh_em "$antigo" 'systemctl disable pregoes-web pregoes-tunel pregoes-backup.timer; systemctl disable pregoes 2>/dev/null' || true
     fi
     conferir "$novo" "$pasta/extraido/pacote/data/pregoes.db"
     echo
     echo "Pacote desta troca guardado em: $pasta"
     if [ -n "$antigo" ]; then
         echo "Plano de volta (se algo der errado na nova):"
-        echo "    ssh -i $CHAVE root@$novo 'systemctl disable --now pregoes-tunel pregoes pregoes-backup.timer'"
-        echo "    ssh -i $CHAVE root@$antigo 'systemctl enable --now pregoes pregoes-tunel pregoes-backup.timer'"
+        echo "    ssh -i $CHAVE root@$novo 'systemctl disable --now pregoes-tunel pregoes-web pregoes-backup.timer'"
+        echo "    ssh -i $CHAVE root@$antigo 'systemctl enable --now pregoes-web pregoes-tunel pregoes-backup.timer'"
     fi
 }
 
@@ -197,8 +198,8 @@ conferir() {
     passo "Conferindo a VPS $ip"
     sleep 8
     ssh_em "$ip" "set -e
-        for s in pregoes pregoes-web pregoes-tunel pregoes-backup.timer; do printf '  %-22s %s\n' \$s \$(systemctl is-active \$s); done
-        printf '  %-22s %s\n' 'app (127.0.0.1:8501)' \"\$(curl -s -o /dev/null -w 'HTTP %{http_code}' http://127.0.0.1:8501/_stcore/health)\"
+        for s in pregoes-web pregoes-tunel pregoes-backup.timer; do printf '  %-22s %s\n' \$s \$(systemctl is-active \$s); done
+        printf '  %-22s %s\n' 'app (127.0.0.1:8501)' \"\$(curl -s -o /dev/null -w 'HTTP %{http_code}' http://127.0.0.1:8501/saude)\"
         printf '  %-22s %s\n' versão \"\$(grep VERSAO_APP $APP/pregoes/config.py | grep -o '[0-9][0-9.]*')\"
         cd $APP && sudo -u pregoes .venv/bin/python -c \"import sqlite3; c=sqlite3.connect('data/pregoes.db'); print('  banco', c.execute('pragma integrity_check').fetchone()[0], {t: c.execute(f'select count(*) from {t}').fetchone()[0] for t in ('produtos','mapeamentos_aprendidos','editais','precos_cache_descricao')})\"
         sudo -u pregoes -H rclone config show drive-backup | grep -q '^root_folder_id = .' && echo '  backup Drive: ligação ok (pasta fixada)' || echo '  backup Drive: SEM ligação — ver MIGRACAO_SERVIDOR.md'

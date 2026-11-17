@@ -4,7 +4,7 @@
 # Log: journalctl -u pregoes-tunel -f
 [Unit]
 Description=Pregoes - tunel Cloudflare
-After=network-online.target pregoes.service
+After=network-online.target pregoes-web.service
 Wants=network-online.target
 
 [Service]

@@ -120,3 +120,21 @@ def test_tarefa_registra_progresso_erro_e_nao_duplica(web):
     r = web.get(f"/api/tarefas/{t3.id}").json()
     assert r["estado"] == "erro" and r["erro"] and "Traceback" not in r["erro"]
     assert web.get("/api/tarefas/naoexiste").json()["estado"] == "erro"
+
+
+def test_enderecos_da_fase_novo_continuam_valendo(web):
+    """Depois da troca (2026-11-17) a interface responde na raiz; quem ficou
+    com uma aba ou favorito em /novo/... é levado ao endereço certo."""
+    r = web.get("/novo/pregoes", follow_redirects=False)
+    assert r.status_code == 307 and r.headers["location"] == "/pregoes"
+    assert web.get("/novo/", follow_redirects=False).headers["location"] == "/"
+    r = web.get("/novo/configuracoes?aba=sistema", follow_redirects=False)
+    assert r.headers["location"] == "/configuracoes?aba=sistema"
+    assert "Pregões em andamento" in web.get("/novo/pregoes").text      # segue e abre
+    assert web.get("/novo/static/app.css").status_code == 200
+    # ação disparada de uma aba antiga: o 307 mantém o POST
+    r = web.post("/novo/api/tarefas/naoexiste/cancelar", json={})
+    assert r.status_code == 400 and "já terminou" in r.json()["erro"]
+    # /novo exato continua sendo a tela Novo pregão
+    r = web.get("/novo", follow_redirects=False)
+    assert r.status_code == 200 and "PDF" in r.text
