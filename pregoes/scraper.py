@@ -1199,6 +1199,29 @@ def _abrir_pagina_login(page, url: str, fornecedor: str) -> None:
         )
 
 
+# Texto que os dois sites mostram quando a proteção contra robôs do formulário
+# de login (reCAPTCHA) recusa o envio. Visto pela 1ª vez em 2026-11-17, nos
+# dois fornecedores ao mesmo tempo, depois de dois dias de busca no ritmo
+# "rapido" (Q22). Não é senha errada — e o sistema NÃO tenta contornar.
+_AVISO_PROTECAO_LOGIN = "validar a proteção do formulário"
+
+
+def _falha_de_login(page, nome_site: str) -> RuntimeError:
+    """O erro certo para um login que não estabeleceu sessão: proteção contra
+    robôs do site (o operador não deve ir trocar a senha) ou credencial."""
+    try:
+        recusado = _AVISO_PROTECAO_LOGIN in (page.inner_text("body", timeout=3000) or "").lower()
+    except Exception:
+        recusado = False
+    if recusado:
+        return RuntimeError(
+            f"Login {nome_site} recusado pela proteção contra robôs do site "
+            "(reCAPTCHA) — não é e-mail nem senha.")
+    return RuntimeError(
+        f"Falha no login {nome_site} — cookies de sessão não foram "
+        "estabelecidos. Verifique email/senha em data/credenciais.json.")
+
+
 class AlmeidaDistribuidor:
     """
     Scraper de almeidadistribuidor.com.br.
@@ -1326,10 +1349,7 @@ class AlmeidaDistribuidor:
         # aparecem após login bem-sucedido) — não um sleep fixo de 4s, que
         # falhava falso em dias lentos (ver _esperar_sessao).
         if not _esperar_sessao(self._context, page):
-            raise RuntimeError(
-                "Falha no login Almeida — cookies de sessão não foram "
-                "estabelecidos. Verifique email/senha em data/credenciais.json."
-            )
+            raise _falha_de_login(page, "Almeida")
 
     def buscar(self, descricao: str,
                _log: Optional["LogItemFornecedor"] = None,
@@ -1617,10 +1637,7 @@ class DantasDistribuidora:
         # Espera ATIVA pelos cookies de sessão (não sleep fixo de 4s — ver
         # _esperar_sessao; falhava falso quando o site estava lento).
         if not _esperar_sessao(self._context, page):
-            raise RuntimeError(
-                "Falha no login Dantas — cookies de sessão não foram "
-                "estabelecidos. Verifique email/senha em data/credenciais.json."
-            )
+            raise _falha_de_login(page, "Dantas")
 
     def buscar(self, descricao: str,
                _log: Optional["LogItemFornecedor"] = None,

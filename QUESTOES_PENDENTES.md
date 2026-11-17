@@ -865,6 +865,62 @@ máquina (§9) — atualizar o CLAUDE.md quando o servidor for validado.
 **Condição.** Vale se o teste de IP (Fase 1) passar; se os fornecedores
 bloquearem o IP da VPS, pedir reembolso e repensar.
 
+### Q22. Login recusado pela proteção contra robôs dos fornecedores — 🔴 ABERTA desde 2026-11-17 13:14: busca de preços INDISPONÍVEL no servidor
+
+**O que aconteceu.** Às 13:13 de 17/11 o serviço foi reiniciado para a troca
+de interface (Q21). As sessões logadas nos dois fornecedores (da interface
+nova e do Streamlit) morreram com os processos. Desde então **todo login novo
+é recusado pelos dois sites**: o formulário de login tem reCAPTCHA e o site
+responde *"Não foi possível validar a proteção do formulário. Recarregue a
+página e tente novamente."* — nenhum cookie de sessão é criado. Sem login não
+há busca em lote nem busca manual.
+
+**O que foi conferido.** Credenciais intactas (arquivo de 15/11, não tocado).
+Os sites respondem normal a quem não está logado (busca e página de login,
+HTTP 200, 24 produtos). Diagnóstico com o navegador do sistema, nos dois
+fornecedores, 3 vezes entre 13:19 e 13:22: mesma recusa. Em todo o histórico
+de log do servidor essa falha de login **nunca tinha acontecido** — os logins
+de 15 a 17/11 de manhã passaram.
+
+**O que NÃO se sabe (hipóteses, sem prova).**
+1. Os fornecedores endureceram a proteção por causa do ritmo "rápido" (Q20):
+   foram ~45 bloqueios por limite em dois dias (24 só em 17/11), nos dois
+   sites, vindos do mesmo IP. É a hipótese mais provável e foi o risco
+   registrado ao ligar o ritmo.
+2. A nota do reCAPTCHA para este IP caiu (IP de datacenter + muitas
+   consultas) e pode se recuperar sozinha com o tempo.
+3. Coincidência: mudança no site sem relação conosco.
+Não foi possível testar de outro IP (o Mac de desenvolvimento não tem o
+navegador do Playwright instalado).
+
+**O que o sistema NÃO faz, de propósito.** Não tenta contornar reCAPTCHA nem
+qualquer detecção de robô. Também não fica insistindo no login (cada
+tentativa pode piorar a situação).
+
+**Feito na v1.1.20.** A mensagem ao operador deixou de mandar "conferir
+e-mail e senha" neste caso (ele iria trocar uma senha certa): agora diz que o
+site recusou a entrada pela proteção contra robôs e que é para avisar o
+suporte. Os pregões não foram mexidos: o de Guarabira (354 itens) ficou com
+uma busca "feita" sem resultado; quando o login voltar, "Buscar preços dos
+itens sem resultado" refaz (o que já tinha sido consultado responde do cache
+de 2 dias).
+
+**Default adotado:** esperar, sem tentar login em série. O trabalho manual
+nos sites (o operador logando no navegador dele) continua possível.
+
+**O que precisa para resolver (decisão do responsável/cliente):**
+- **O cliente falar com Almeida e Dantas** (são parceiros): pedir a liberação
+  do IP do servidor / do acesso automatizado, ou tabela de preços / API. Era a
+  recomendação nº 1 da Q20 e agora é o caminho.
+- Decidir se o ritmo volta para **Seguro** quando o login voltar
+  (recomendado: sim, até haver a liberação dos fornecedores).
+- Um teste de login por dia, no máximo, para saber se a recusa passou.
+
+**Lição registrada.** Reiniciar o serviço custa as sessões logadas; enquanto
+esta questão estiver aberta, cada reinício/deploy pode deixar a busca fora do
+ar. A retomada automática da busca (v1.1.18) funcionou — a busca recomeçou —
+mas não há o que retomar sem login.
+
 ### Q21. Troca da interface (Streamlit → web) — ✅ RESOLVIDA em 2026-11-17: a interface web é a de produção
 
 **Resolução (2026-11-17).** O responsável mandou trocar ("Trocar agora"),
@@ -873,7 +929,8 @@ lote real de 717 itens rodou nela em 16/11: 2 h 10, 670 com candidato, 0
 erros). A interface web responde na raiz, porta 8501; o Streamlit foi
 desligado e desabilitado (`pregoes.service`), sem apagar nada — voltar é 1
 comando (`INTERFACE_WEB.md`). A troca foi feita com uma busca de 354 itens em
-andamento: ela foi retomada sozinha quando o serviço subiu. Endereços
+andamento: ela recomeçou sozinha quando o serviço subiu, **mas falhou no
+login dos fornecedores (Q22)** e terminou sem resultado. Endereços
 `/novo/...` da fase de convivência redirecionam. O texto abaixo é o histórico
 da decisão.
 

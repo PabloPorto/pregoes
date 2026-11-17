@@ -149,3 +149,36 @@ class TestMensagemAmigavel:
         # Mensagem técnica não deve aparecer na saída ao usuário
         msg = mensagem_amigavel(RuntimeError("Traceback object at 0x7f cookies"))
         assert "0x7f" not in msg
+
+
+def test_login_recusado_pela_protecao_contra_robos_nao_culpa_a_senha():
+    """2026-11-17: o reCAPTCHA do formulário de login dos dois sites passou a
+    recusar o sistema. A mensagem mandava conferir a senha — e o operador ia
+    trocar uma senha que estava certa."""
+    from pregoes import erros, scraper
+
+    class _Pagina:
+        def __init__(self, texto):
+            self._texto = texto
+
+        def inner_text(self, seletor, timeout=None):
+            return self._texto
+
+    recusa = scraper._falha_de_login(
+        _Pagina("Entrar ... Não foi possível validar a proteção do formulário. "
+                "Recarregue a página e tente novamente."), "Dantas")
+    assert "proteção contra robôs" in str(recusa) and "Dantas" in str(recusa)
+    msg = erros.mensagem_amigavel(recusa)
+    assert "recusou a entrada do sistema pela proteção contra robôs" in msg
+    assert "da Dantas" in msg and "não é problema de e-mail ou senha" in msg
+    assert "Confira o e-mail e a senha" not in msg
+
+    # sem o aviso do site, continua sendo a falha de login de sempre
+    comum = scraper._falha_de_login(_Pagina("Entrar Já tenho cadastro"), "Almeida")
+    assert "cookies de sessão" in str(comum)
+    assert "Confira o e-mail e a senha" in erros.mensagem_amigavel(comum)
+
+    class _Quebrada:
+        def inner_text(self, seletor, timeout=None):
+            raise TimeoutError("x")
+    assert "cookies de sessão" in str(scraper._falha_de_login(_Quebrada(), "Almeida"))

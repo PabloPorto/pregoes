@@ -215,7 +215,7 @@ PDF do edital
 | Tributação fase 3 | Baseada em XML de NF-e do cliente | Resp 14 |
 | Sites alvo do scraper | almeidadistribuidor.com.br + dantasdistribuidora.com.br | Resp 1 |
 | Ritmo da busca em lote | **2026-11-15**: "rápido" (vai até o limite dos sites, pausa 5 min e continua) ligado no servidor do cliente; "seguro" continua disponível em Configurações → Sistema (Q20) | Pedido do responsável |
-| Anti-bot | **Revisado 2026-08-31**: scraping segue autorizado, mas os dois sites agora barram por User-Agent — 403 para `HeadlessChrome`. O scraper manda UA de Chrome comum (`_user_agent_real`). Não presuma "sem proteção" | Resp 5 + 6, campo 2026-08-31 |
+| Anti-bot | **Revisado 2026-11-17**: desde 17/11 o reCAPTCHA do formulário de login dos dois sites RECUSA o sistema — busca indisponível até resolver com os fornecedores (Q22). Não contornar CAPTCHA/detecção de robô; não insistir em login em série; evitar reiniciar o serviço à toa (perde as sessões logadas). Antes (2026-08-31): os sites barram `HeadlessChrome` por User-Agent (403) e o scraper manda UA de Chrome comum (`_user_agent_real`) | Resp 5 + 6, campo 2026-08-31 |
 
 ---
 
@@ -228,6 +228,9 @@ Resumo do estado atual (maio/2026):
 - **Q2.** Bootstrap do catálogo histórico (5.000 produtos): aguarda
   10-20 planilhas antigas do cliente. O catálogo do servidor foi **zerado a
   pedido do cliente em 2026-11-17**. Default: **começa do zero**.
+- **Q22.** 🔴 Login nos fornecedores recusado por reCAPTCHA desde
+  2026-11-17: busca de preços fora do ar no servidor. Depende de o cliente
+  falar com Almeida e Dantas. Default: esperar, sem contornar.
 - **Q6.** Heurísticas de extração de PDF — calibradas em uma amostra
   única (Araruna 06/2026). Revisitar quando aparecer o segundo edital
   real. Default: as três heurísticas em `extrator.py` ficam.

@@ -48,6 +48,19 @@ def mensagem_amigavel(exc: Exception, contexto: str = "") -> str:
                 "de acessos ou instabilidade do site. Espere alguns minutos e "
                 "tente de novo." + _RODAPE_LOG)
 
+    # Login recusado pela proteção contra robôs do site (reCAPTCHA) — vem
+    # ANTES da regra de login: aqui o operador NÃO deve ir trocar a senha.
+    if "proteção contra robôs" in texto:
+        forn = ""
+        if "almeida" in texto:
+            forn = " da Almeida"
+        elif "dantas" in texto:
+            forn = " da Dantas"
+        return (f"O site{forn} recusou a entrada do sistema pela proteção "
+                "contra robôs — não é problema de e-mail ou senha, não precisa "
+                "mexer em Configurações. Avise o suporte; enquanto isso a busca "
+                "de preços neste fornecedor fica indisponível." + _RODAPE_LOG)
+
     # Login no fornecedor
     if ("cookies de sessão" in texto or "falha no login" in texto
             or "login" in texto):
