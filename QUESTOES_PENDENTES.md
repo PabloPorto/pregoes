@@ -912,8 +912,9 @@ nos sites (o operador logando no navegador dele) continua possível.
 - **O cliente falar com Almeida e Dantas** (são parceiros): pedir a liberação
   do IP do servidor / do acesso automatizado, ou tabela de preços / API. Era a
   recomendação nº 1 da Q20 e agora é o caminho.
-- Decidir se o ritmo volta para **Seguro** quando o login voltar
-  (recomendado: sim, até haver a liberação dos fornecedores).
+- ✅ Ritmo de volta para **Seguro** em 2026-11-17 13:29, por decisão do
+  responsável (pela tela de Configurações, sem reiniciar). Fica assim até
+  haver a liberação dos fornecedores; religar o rápido é decisão dele.
 - Um teste de login por dia, no máximo, para saber se a recusa passou.
 
 **Lição registrada.** Reiniciar o serviço custa as sessões logadas; enquanto
@@ -991,7 +992,7 @@ busca ou por organização dele. **Perguntar ao cliente por que recorta.**
   tabela solta colada no último item; quantidade tirada de célula de dinheiro;
   medida "20 - 25 MM" lida como nº de item). Corrigidos, com teste.
 
-### Q20. Limite de consultas dos fornecedores — ✅ respeitado pelo sistema (v1.1.16); ✅ ritmo rápido "no limite" escolhido pelo responsável (v1.1.18)
+### Q20. Limite de consultas dos fornecedores — ✅ respeitado pelo sistema (v1.1.16); ritmo de volta ao SEGURO em 2026-11-17 (o rápido ficou ligado de 15 a 17/11 — ver Q22)
 
 **O que acontecia.** Desde 30/10 a busca em lote falhava ou vinha pela metade.
 Diagnóstico em 3 etapas, todas medidas no servidor:
@@ -1056,6 +1057,13 @@ numa rodada, sem ninguém olhando. O que pode encurtar, em ordem de retorno:
    é inaceitável"). Ver "Ritmo rápido" abaixo.
 5. Não recomendado: trocar de IP/rodar de vários IPs para contornar o limite —
    é burlar a proteção de um parceiro.
+
+> **2026-11-17: o ritmo voltou para Segura.** Depois de dois dias no rápido
+> (um lote real de 717 itens em 2 h 10, 670 com candidato, 0 erros, 19
+> pausas), o login nos dois fornecedores passou a ser recusado pelo reCAPTCHA
+> deles (Q22). Sem prova de causa e efeito, mas o rápido acionou o limite
+> ~45 vezes em dois dias; o responsável mandou voltar. O texto abaixo é o
+> registro do que foi medido.
 
 **Ritmo rápido — "no limite" (v1.1.18, 2026-11-15).** Dois ritmos, escolhidos
 em Configurações → Sistema da interface nova (vale para as duas interfaces e

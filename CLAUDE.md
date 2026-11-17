@@ -214,7 +214,7 @@ PDF do edital
 | Output | Excel idêntico ao template MATRIZ, com fórmulas preservadas | Análise da planilha |
 | Tributação fase 3 | Baseada em XML de NF-e do cliente | Resp 14 |
 | Sites alvo do scraper | almeidadistribuidor.com.br + dantasdistribuidora.com.br | Resp 1 |
-| Ritmo da busca em lote | **2026-11-15**: "rápido" (vai até o limite dos sites, pausa 5 min e continua) ligado no servidor do cliente; "seguro" continua disponível em Configurações → Sistema (Q20) | Pedido do responsável |
+| Ritmo da busca em lote | **2026-11-17**: de volta ao "seguro" (80 consultas / 10 min) no servidor do cliente. O "rápido" ficou ligado de 15 a 17/11 e foi desligado quando o login nos fornecedores passou a ser recusado (Q22); continua existindo em Configurações → Sistema, mas religar é decisão do responsável (Q20) | Decisão do responsável |
 | Anti-bot | **Revisado 2026-11-17**: desde 17/11 o reCAPTCHA do formulário de login dos dois sites RECUSA o sistema — busca indisponível até resolver com os fornecedores (Q22). Não contornar CAPTCHA/detecção de robô; não insistir em login em série; evitar reiniciar o serviço à toa (perde as sessões logadas). Antes (2026-08-31): os sites barram `HeadlessChrome` por User-Agent (403) e o scraper manda UA de Chrome comum (`_user_agent_real`) | Resp 5 + 6, campo 2026-08-31 |
 
 ---
