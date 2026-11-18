@@ -890,8 +890,31 @@ de 15 a 17/11 de manhã passaram.
 2. A nota do reCAPTCHA para este IP caiu (IP de datacenter + muitas
    consultas) e pode se recuperar sozinha com o tempo.
 3. Coincidência: mudança no site sem relação conosco.
-Não foi possível testar de outro IP (o Mac de desenvolvimento não tem o
-navegador do Playwright instalado).
+
+**Diagnóstico de 2026-11-18 (a pedido do responsável, que suspeitou de
+regressão nossa).** Um login instrumentado na Almeida, pelo código do sistema,
+mostrou a resposta exata do site ao envio do formulário:
+`{"type":"error","error":{"code":"RECAPTCHA_SCORE", …}}`. O reCAPTCHA carrega
+e gera o token normalmente (todas as chamadas ao Google com HTTP 200); quem
+recusa é o **site**, porque a nota que o Google deu ao nosso navegador ficou
+abaixo do mínimo que o site exige. Dois fatos novos:
+- **Não é o IP do servidor.** O mesmo login, com o mesmo código, feito do Mac
+  de desenvolvimento (rede residencial, sem histórico de consultas) recebe a
+  mesma recusa `RECAPTCHA_SCORE`. A hipótese 2 acima fica enfraquecida: pedir
+  só "liberar o IP" não resolve.
+- **Não é regressão do código de login.** Entre a v1.1.18 (login funcionando
+  em 15, 16 e 17/11 de manhã) e a v1.1.20, `git diff` em `pregoes/scraper.py`
+  mostra uma única mudança: o texto do erro (`_falha_de_login`). Abrir a
+  página, preencher e enviar são os mesmos. O serviço mudou só de porta e de
+  caminho (`/novo` → raiz), o que não chega ao navegador do robô.
+O que mudou foi a **exigência do site**: os dois fornecedores (mesma
+plataforma de loja) passaram a recusar, no login, navegador automatizado com
+nota baixa. Se foi reação ao ritmo "rápido" (hipótese 1) ou atualização da
+plataforma sem relação conosco (hipótese 3), não dá para saber daqui. O
+reinício de 17/11 não causou a recusa — só a revelou, porque derrubou as
+sessões que estavam logadas desde antes.
+Também ficou registrado: entre 13:14 de 17/11 e 07:10 de 18/11 os operadores
+dispararam a busca ~20 vezes; cada uma é uma tentativa de login por site.
 
 **O que o sistema NÃO faz, de propósito.** Não tenta contornar reCAPTCHA nem
 qualquer detecção de robô. Também não fica insistindo no login (cada
@@ -910,8 +933,10 @@ nos sites (o operador logando no navegador dele) continua possível.
 
 **O que precisa para resolver (decisão do responsável/cliente):**
 - **O cliente falar com Almeida e Dantas** (são parceiros): pedir a liberação
-  do IP do servidor / do acesso automatizado, ou tabela de preços / API. Era a
-  recomendação nº 1 da Q20 e agora é o caminho.
+  do **acesso automatizado da conta dele** (não basta liberar o IP — ver o
+  diagnóstico de 18/11), ou tabela de preços / API. Era a recomendação nº 1 da
+  Q20 e agora é o caminho. O que dizer a eles: "o login da minha conta feito
+  pelo meu sistema é recusado com o código `RECAPTCHA_SCORE` desde 17/11".
 - ✅ Ritmo de volta para **Seguro** em 2026-11-17 13:29, por decisão do
   responsável (pela tela de Configurações, sem reiniciar). Fica assim até
   haver a liberação dos fornecedores; religar o rápido é decisão dele.
