@@ -129,6 +129,7 @@ class _Lote:
         self.cache_hits = 0
         self.cache_misses = 0
         self.stats: list[tuple[str, int, int, int]] = []   # (nome, ok, variação, vazio)
+        self.avisos_memoria: list[str] = []   # fornecedor sem login, respondido do cache
 
     # --- progresso: roda na thread da TAREFA (o no_navegador devolve) --------
     def progresso(self, frac: float, detalhe: str, feitos: int, total: int,
@@ -183,6 +184,39 @@ class _Lote:
             mensagem=erros.mensagem_amigavel(exc, f"buscar na {nome.capitalize()}")))
         self.stats.append((nome, 0, 0, self.total))
 
+    def _sem_login_responde_da_memoria(self, nome: str, exc: Exception) -> None:
+        """O login no fornecedor falhou: em vez de devolver NADA, responde com
+        o que as buscas dos últimos 2 dias deixaram guardado (Q22 — em
+        18/11/2026 havia 320 de 354 itens de um pregão na memória e a busca
+        voltava vazia). O erro do login continua registrado, com a contagem."""
+        _log.error("falha grave na busca em %s", nome, exc_info=exc)
+        try:
+            scraper.fechar_sessao_viva(nome)
+        except Exception:
+            pass
+        try:
+            lote = scraper.resultados_da_memoria(self.itens_alvo, nome)
+        except Exception:      # memória ilegível não pode esconder o erro do login
+            _log.exception("não consegui ler a memória de preços de %s", nome)
+            lote = scraper.ResultadoLote(resultados={})
+        achados = sum(1 for bag in lote.resultados.values() if bag)
+        mensagem = erros.mensagem_amigavel(exc, f"buscar na {nome.capitalize()}")
+        if achados:
+            mensagem += (f" Usei os preços guardados das buscas dos últimos 2 dias: "
+                         f"{achados} de {self.total} itens.")
+        self.erros.append(scraper.ErroBusca(
+            indice_item=-1, fornecedor=nome, descricao_resumo="(login/inicialização)",
+            mensagem=mensagem))
+        if achados:
+            self.avisos_memoria.append(
+                f"<b>Atenção — {nome.capitalize()}:</b> o site não deixou o sistema "
+                f"entrar. Os preços de <b>{achados} de {self.total} itens</b> vieram das "
+                "buscas dos últimos 2 dias — não foram consultados agora. Os demais "
+                "ficaram sem preço deste fornecedor.")
+        self._absorver(nome, lote)
+        _log.info("%s sem login: %d de %d itens respondidos da memória de preços",
+                  nome, achados, self.total)
+
     # --- a operação inteira: roda na thread DONA dos navegadores --------------
     def buscar_na_thread_dona(self, progresso) -> dict:
         n_forn = len(self.fornecedores)
@@ -196,7 +230,7 @@ class _Lote:
             try:
                 sessoes[nome] = scraper.obter_sessao_viva(nome)
             except Exception as exc:
-                self._registrar_falha_grave(nome, exc)
+                self._sem_login_responde_da_memoria(nome, exc)
 
         paralelo = (len(sessoes) > 1
                     and all(getattr(f, "_http_cookie", None) for f in sessoes.values()))
@@ -439,7 +473,8 @@ def executar_busca(slug: str, indices: Optional[list[int]], tarefa: Tarefa) -> O
         estado["erros_busca"] = lote.erros
         estado["avisos_pagamento"] = avisos_pagamento
         estado["avisos_lote_vazio"] = (regras.avisos_lote_vazio(lote.stats, lote.total)
-                                       + regras.avisos_recusa(lote.erros))
+                                       + regras.avisos_recusa(lote.erros)
+                                       + lote.avisos_memoria)
         pregao.salvar()
 
     tarefa.atualizar(1.0, "", feitos=lote.total, total=lote.total, rotulo="Busca concluída",

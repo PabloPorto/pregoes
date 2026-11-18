@@ -463,6 +463,72 @@ def test_cancelar_pelo_no_navegador_de_verdade_aborta_a_thread_dona(web, monkeyp
     assert not Pregao.abrir(p.slug).tem_busca
 
 
+# ============ login recusado: responde da memória de preços (Q22) ============
+
+def _guardar_na_memoria(descricao, fornecedor, opcoes):
+    import json
+    from dataclasses import asdict
+    from pregoes.normalizador import normalizar_descricao
+    conn = db.conectar()
+    try:
+        db.cache_gravar(conn, normalizar_descricao(descricao), fornecedor,
+                        json.dumps([asdict(o) for o in opcoes]))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_login_recusado_responde_com_os_precos_guardados(busca, web):
+    """Os dois sites recusam o login: a busca não volta mais vazia — entrega o
+    que as buscas dos últimos 2 dias deixaram no cache e avisa de onde veio."""
+    busca.login_falha = {"almeida", "dantas"}
+    p = _pregao(web, 6)
+    descs = [it.descricao for it in p.itens_revisados]
+    for d in descs[:4]:
+        _guardar_na_memoria(d, "almeida", [_r(f"{d} GUARDADO", "TIGRE", 7.5, "A-1")])
+    _guardar_na_memoria(descs[0], "dantas", [_r(f"{descs[0]} GUARDADO", "AMANCO", 8.0,
+                                               "D-1", "dantas")])
+    t = _buscar(web, p.slug)
+    assert t.estado == "concluida"
+    assert busca.chamadas == []                      # nenhuma consulta ao site
+    p = Pregao.abrir(p.slug)
+    assert [len(p.resultados_busca[i]) for i in range(6)] == [2, 1, 1, 1, 0, 0]
+    assert p.resultados_busca[1][0].preco == 7.5
+    por_forn = {e.fornecedor: e.mensagem for e in p["erros_busca"]}
+    assert "Usei os preços guardados das buscas dos últimos 2 dias: 4 de 6 itens." in por_forn["almeida"]
+    assert "1 de 6 itens" in por_forn["dantas"]
+    # achou algo nos dois: não é "site instável, nenhum resultado em nenhum item";
+    # a tela diz, à vista, de onde os preços vieram
+    assert len(p["avisos_lote_vazio"]) == 2
+    html = web.get(f"/pregao/{p.slug}/precos").text
+    assert "Os preços de <b>4 de 6 itens</b> vieram das" in html
+    assert "nenhum resultado em NENHUM" not in html
+
+
+def test_login_recusado_sem_nada_guardado_continua_avisando(busca, web):
+    busca.login_falha = {"dantas"}
+    p = _pregao(web, 6)
+    _buscar(web, p.slug)
+    p = Pregao.abrir(p.slug)
+    erro = next(e for e in p["erros_busca"] if e.fornecedor == "dantas")
+    assert "Usei os preços guardados" not in erro.mensagem
+    assert p["avisos_lote_vazio"] == regras.avisos_lote_vazio([("dantas", 0, 0, 6)], 6)
+
+
+def test_memoria_de_precos_vencida_nao_e_usada(busca, web):
+    """Preço com mais de 2 dias não entra: o prazo do cache continua valendo."""
+    busca.login_falha = {"almeida", "dantas"}
+    p = _pregao(web, 2)
+    d = p.itens_revisados[0].descricao
+    _guardar_na_memoria(d, "almeida", [_r(f"{d} VELHO", "TIGRE", 7.5, "A-1")])
+    conn = db.conectar()
+    conn.execute("UPDATE precos_cache_descricao SET consultado_em = datetime('now', '-3 days')")
+    conn.commit()
+    conn.close()
+    _buscar(web, p.slug)
+    assert not any(Pregao.abrir(p.slug).resultados_busca.values())
+
+
 # ============================ escolhas por item ==============================
 
 def _tres_opcoes():

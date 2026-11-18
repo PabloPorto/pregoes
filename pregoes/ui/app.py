@@ -1935,6 +1935,29 @@ def _executar_busca(itens: list, fornecedores_nomes: list[str],
         ))
         stats_concluidos.append((nome, 0, 0, total_itens))
 
+    def _sem_login_responde_da_memoria(nome: str, exc: Exception) -> None:
+        """Login falhou: responde com o cache de 2 dias em vez de NADA (Q22).
+        Mesma regra de `web/servico_busca.py`."""
+        from pregoes.scraper import ResultadoLote, resultados_da_memoria
+        _log.error("falha grave na busca em %s", nome, exc_info=exc)
+        try:
+            fechar_sessao_viva(nome)
+        except Exception:
+            pass
+        try:
+            lote = resultados_da_memoria(itens_alvo, nome)
+        except Exception:
+            lote = ResultadoLote(resultados={})
+        achados = sum(1 for bag in lote.resultados.values() if bag)
+        mensagem = erros.mensagem_amigavel(exc, f"buscar na {nome.capitalize()}")
+        if achados:
+            mensagem += (f" Usei os preços guardados das buscas dos últimos 2 dias: "
+                         f"{achados} de {total_itens} itens.")
+        erros_agregados.append(ErroBusca(
+            indice_item=-1, fornecedor=nome,
+            descricao_resumo="(login/inicialização)", mensagem=mensagem))
+        _absorver_lote(nome, lote)
+
     # --- Login + busca de TODOS os fornecedores numa ÚNICA operação da thread
     # dona dos navegadores (scraper.no_navegador). O Playwright é preso à thread
     # que o criou, e cada clique no Streamlit roda numa thread nova; fazer
@@ -1957,7 +1980,7 @@ def _executar_busca(itens: list, fornecedores_nomes: list[str],
             try:
                 sessoes[nome] = obter_sessao_viva(nome)
             except Exception as exc:
-                _registrar_falha_grave(nome, exc)
+                _sem_login_responde_da_memoria(nome, exc)
 
         # PARALELO (Fase 2 de perf): 1 thread por fornecedor, consultas via
         # HTTP (thread-safe). Requer TODAS as sessões com transporte HTTP; o

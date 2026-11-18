@@ -56,6 +56,8 @@ def _sem_espera_de_consultas(monkeypatch):
     # teste nenhum pode dormir nelas. Quem testa a pausa mede o que foi pedido.
     monkeypatch.setattr(scraper, "_PAUSA_LIMITE_S", 0.0)
     monkeypatch.setattr(scraper, "_SONDA_LIMITE_S", 0.0)
+    # Idem para a hora sem login depois de uma recusa do site (Q22).
+    monkeypatch.setattr(scraper, "_login_recusado_ate", {})
 
 
 # 4) Interface web (pregoes/web): cada teste ganha uma pasta de dados VAZIA e

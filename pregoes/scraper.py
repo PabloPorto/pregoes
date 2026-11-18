@@ -1204,6 +1204,22 @@ def _abrir_pagina_login(page, url: str, fornecedor: str) -> None:
 # dois fornecedores ao mesmo tempo, depois de dois dias de busca no ritmo
 # "rapido" (Q22). Não é senha errada — e o sistema NÃO tenta contornar.
 _AVISO_PROTECAO_LOGIN = "validar a proteção do formulário"
+_MSG_LOGIN_RECUSADO = ("Login {nome} recusado pela proteção contra robôs do site "
+                       "(reCAPTCHA) — não é e-mail nem senha.")
+_MARCA_LOGIN_RECUSADO = "recusado pela proteção contra robôs"
+
+# Depois de uma recusa, o sistema NÃO tenta login de novo neste fornecedor por
+# 1 hora: entre 17 e 18/11/2026 os operadores dispararam a busca ~20 vezes e
+# cada uma era um login recusado a mais nos dois sites — insistir só piora a
+# nota do reCAPTCHA (Q22). Vale para o lote e para a busca manual. Vive na
+# memória do processo: reiniciar o serviço libera um teste na hora.
+_LOGIN_RECUSADO_ESPERA_S = 3600.0
+_login_recusado_ate: dict[str, float] = {}
+
+
+def login_recusado(fornecedor: str) -> bool:
+    """O site recusou o login deste fornecedor há menos de 1 hora?"""
+    return time.monotonic() < _login_recusado_ate.get(fornecedor, 0.0)
 
 
 def _falha_de_login(page, nome_site: str) -> RuntimeError:
@@ -1214,9 +1230,7 @@ def _falha_de_login(page, nome_site: str) -> RuntimeError:
     except Exception:
         recusado = False
     if recusado:
-        return RuntimeError(
-            f"Login {nome_site} recusado pela proteção contra robôs do site "
-            "(reCAPTCHA) — não é e-mail nem senha.")
+        return RuntimeError(_MSG_LOGIN_RECUSADO.format(nome=nome_site))
     return RuntimeError(
         f"Falha no login {nome_site} — cookies de sessão não foram "
         "estabelecidos. Verifique email/senha em data/credenciais.json.")
@@ -2359,6 +2373,28 @@ def buscar_precos_para_itens(
     )
 
 
+def resultados_da_memoria(itens: list[ItemExtraido], fornecedor: str) -> ResultadoLote:
+    """Só o 1º passo da busca — o cache de 2 dias — SEM tocar no site.
+
+    Para quando o fornecedor não deixa o sistema entrar (Q22): o que foi
+    consultado nos últimos 2 dias continua valendo e não pode se perder só
+    porque o login de hoje falhou. Só LÊ o cache (não grava "não achei" por
+    cima de nada) e não chama o judge: é o resultado como foi guardado."""
+    resultados: dict[int, list[ResultadoBusca]] = {}
+    achados = 0
+    conn = db.conectar()
+    try:
+        for idx, item in enumerate(itens):
+            desc_norm = normalizar_descricao(item.descricao)
+            payload = db.cache_buscar(conn, desc_norm, fornecedor) if desc_norm else None
+            bag = _payload_to_resultados(payload, fornecedor) if payload is not None else []
+            resultados[idx] = bag
+            achados += bool(bag)
+    finally:
+        conn.close()
+    return ResultadoLote(resultados=resultados, cache_hits=achados)
+
+
 def _registrar_candidatos_finais(
     log_forn: "LogItemFornecedor",
     candidatos: list[ResultadoBusca],
@@ -2537,8 +2573,19 @@ def _abrir_sessao_viva(fornecedor: str):
     cred = credenciais.carregar(fornecedor)
     if not cred:
         raise RuntimeError(f"Sem credencial configurada para {fornecedor}.")
+    if login_recusado(fornecedor):
+        # Sem nova tentativa (ver _LOGIN_RECUSADO_ESPERA_S): o mesmo erro, já.
+        raise RuntimeError(_MSG_LOGIN_RECUSADO.format(nome=fornecedor.capitalize()))
     forn = cls(cred["email"], cred["senha"])
-    forn.__enter__()   # login (sobe o navegador)
+    try:
+        forn.__enter__()   # login (sobe o navegador)
+    except RuntimeError as exc:
+        if _MARCA_LOGIN_RECUSADO in str(exc):
+            _login_recusado_ate[fornecedor] = time.monotonic() + _LOGIN_RECUSADO_ESPERA_S
+            _logger.warning("login em %s recusado pela proteção contra robôs — sem "
+                            "nova tentativa por %d min", fornecedor,
+                            _LOGIN_RECUSADO_ESPERA_S // 60)
+        raise
     return forn
 
 

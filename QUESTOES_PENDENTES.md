@@ -928,6 +928,18 @@ uma busca "feita" sem resultado; quando o login voltar, "Buscar preços dos
 itens sem resultado" refaz (o que já tinha sido consultado responde do cache
 de 2 dias).
 
+**Feito na v1.1.21 (2026-11-18).** Duas coisas, nenhuma contorna a proteção:
+1. **Busca responde da memória quando o login é recusado.** Antes, sem login o
+   fornecedor era descartado inteiro e o cache de 2 dias nem era consultado —
+   a busca voltava vazia mesmo com os preços guardados (em 18/11 havia 320 de
+   354 itens do pregão 51/2026 de Guarabira no cache, consultados em 16/11).
+   Agora `scraper.resultados_da_memoria` entrega o que está no cache, a tela
+   avisa que os preços "vieram das buscas dos últimos 2 dias" e o erro do
+   login continua registrado. O prazo do cache (2 dias) não mudou.
+2. **Uma tentativa de login por hora e por fornecedor depois de uma recusa**
+   (`_LOGIN_RECUSADO_ESPERA_S`): as buscas seguintes falham na hora com o mesmo
+   aviso, sem bater no site. Reiniciar o serviço libera um teste imediato.
+
 **Default adotado:** esperar, sem tentar login em série. O trabalho manual
 nos sites (o operador logando no navegador dele) continua possível.
 

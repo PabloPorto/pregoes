@@ -737,6 +737,56 @@ def test_busca_no_site_reusa_sessao_logada(monkeypatch):
     assert [o.codigo_fornecedor for o in out] == ["A1"]
 
 
+def _forn_que_o_site_recusa(contador, mensagem=None):
+    import pregoes.scraper as scraper
+
+    class _Recusado:
+        def __init__(self, *a):
+            pass
+
+        def __enter__(self):
+            contador["n"] += 1
+            raise RuntimeError(mensagem or scraper._MSG_LOGIN_RECUSADO.format(nome="Almeida"))
+
+    return _Recusado
+
+
+def test_login_recusado_pelo_site_nao_e_tentado_de_novo_na_mesma_hora(monkeypatch):
+    """Recusa do reCAPTCHA: 1 tentativa por hora e por fornecedor — insistir
+    piora (Q22). As seguintes falham na hora com o mesmo erro, sem tocar o site."""
+    import pregoes.scraper as scraper
+    n = {"n": 0}
+    monkeypatch.setattr(scraper, "AlmeidaDistribuidor", _forn_que_o_site_recusa(n))
+    monkeypatch.setattr(scraper.credenciais, "carregar",
+                        lambda f: {"email": "x", "senha": "y"})
+    for _ in range(3):
+        with pytest.raises(RuntimeError, match="proteção contra robôs"):
+            scraper.buscar_no_site("almeida", "alicate")
+    assert n["n"] == 1
+    assert scraper.login_recusado("almeida") and not scraper.login_recusado("dantas")
+
+    # passada a hora, uma nova tentativa é liberada
+    scraper._login_recusado_ate["almeida"] = 0.0
+    with pytest.raises(RuntimeError):
+        scraper.buscar_no_site("almeida", "alicate")
+    assert n["n"] == 2
+
+
+def test_falha_comum_de_login_nao_arma_a_espera(monkeypatch):
+    """Senha errada / site fora não é recusa por robô: o operador corrige e
+    tenta de novo na hora."""
+    import pregoes.scraper as scraper
+    n = {"n": 0}
+    monkeypatch.setattr(scraper, "AlmeidaDistribuidor",
+                        _forn_que_o_site_recusa(n, "Falha no login Almeida — cookies"))
+    monkeypatch.setattr(scraper.credenciais, "carregar",
+                        lambda f: {"email": "x", "senha": "y"})
+    for _ in range(2):
+        with pytest.raises(RuntimeError):
+            scraper.buscar_no_site("almeida", "alicate")
+    assert n["n"] == 2 and not scraper.login_recusado("almeida")
+
+
 def test_busca_no_site_sessao_em_cache_caida_reloga(monkeypatch):
     """Sessão em cache que FALHA na busca → descarta + reloga fresco (fallback —
     pior caso = comportamento de antes)."""
