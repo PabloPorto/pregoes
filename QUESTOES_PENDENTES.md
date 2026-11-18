@@ -940,6 +940,16 @@ de 2 dias).
    (`_LOGIN_RECUSADO_ESPERA_S`): as buscas seguintes falham na hora com o mesmo
    aviso, sem bater no site. Reiniciar o serviço libera um teste imediato.
 
+**Exceção ao prazo do cache, uma vez só (decisão do responsável, 2026-11-18).**
+O pregão 52/2026 de Guarabira (hidráulicos, 291 itens) não tinha nada no cache
+válido, mas 210 itens tinham preço guardado de 12 e 13/11 (5 a 6 dias). O
+responsável mandou usar ("Sim, usar"). Foi feito por um roteiro avulso, só
+nesse pregão: 210 itens preenchidos, com aviso fixo na tela de preços
+("preços antigos … de 12 e 13/11 … confira no site antes de fechar"). **A
+regra de 2 dias (Seção 7 do CLAUDE.md) não mudou** e o cache não foi alterado.
+Cópia do rascunho de antes: `/root/pregao52_antes_dos_precos_vencidos_20261118_0756.pkl`
+no servidor. Quando o login voltar: "Buscar preços novamente" nesse pregão.
+
 **Default adotado:** esperar, sem tentar login em série. O trabalho manual
 nos sites (o operador logando no navegador dele) continua possível.
 
