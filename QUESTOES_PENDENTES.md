@@ -865,6 +865,53 @@ máquina (§9) — atualizar o CLAUDE.md quando o servidor for validado.
 **Condição.** Vale se o teste de IP (Fase 1) passar; se os fornecedores
 bloquearem o IP da VPS, pedir reembolso e repensar.
 
+### Q23. API de Integração dos fornecedores (Agile B2B) — 🟡 ABERTA desde 2026-11-22: faltam as credenciais
+
+**Contexto.** Depois da Q22 o cliente falou com os fornecedores e recebeu o
+"Manual técnico — API de Integração v1" da **Agile B2B** (a plataforma de loja
+que Almeida e Dantas usam). É um manual genérico da plataforma, não de um
+fornecedor. Endereços: Developer Hub `https://api-integracao.agileecommerce.com.br/`
+e Swagger `…/swagger/ui/index` (JSON em `…/swagger/docs/v1`, público).
+
+**O que o manual + a referência pública confirmam (lido em 2026-11-22, sem
+nenhuma chamada autenticada):**
+- Autenticação: `POST /api/usuario/login` com `client_id` + `client_secret` →
+  JWT (`Authorization: Bearer …`); renovação em `/api/usuario/refresh`.
+- Recursos em `/api/integracao/<recurso>`; 242 rotas. As que interessam:
+  `produtos` (codigo, nome, ncm, ean, ipi, id_marca, ativo…), `marcas`,
+  `tabelas_preco`, `produtos_tabelas_preco` (id_produto, id_tabela_preco,
+  preco1), `produtos_filiais` (estoque_disponivel, preco), `tributos`
+  (ST/ICMS por NCM/UF), `condicoes_pagamento`, `precificadores_produtos`.
+- Paginação `page`/`limit` (máximo 250 por página), `fields`, filtros com
+  operador no nome do parâmetro (ex.: `nome:like=`). Há limite de taxa (429),
+  valor não publicado.
+- **Não há busca por relevância** como a do site — só listagem com filtros.
+
+**O que falta (o manual não traz e só os fornecedores podem dar):**
+1. `client_id` e `client_secret` — **um aplicativo por fornecedor**, criado
+   pelo Administrador da loja (Almeida e Dantas) no Admin da Agile B2B, depois
+   de "contratar" (gratuito) a API de Integração na Agile Store.
+2. Permissão de **leitura (GET) apenas** em: produtos, marcas, tabelas_preco,
+   produtos_tabelas_preco, produtos_filiais (e, se toparem, tributos e
+   condicoes_pagamento). Nada de escrita; nada de dados de outros clientes.
+3. **Qual tabela de preço é a do cliente** (código/id) e qual filial — na API o
+   preço é por tabela, não "o preço de quem está logado".
+
+**Default adotado:** nada implementado. A busca segue como na Q22 (memória de
+2 dias; login bloqueado).
+
+**Decisões que virão quando houver credencial (são do responsável — §15):**
+- Trocar o robô do site pela API muda a arquitetura da busca: o caminho natural
+  é **copiar catálogo + preços para o SQLite** (tabelas novas → mudança de
+  schema) e casar localmente com o matcher que já existe.
+- Onde guardar as credenciais: `data/credenciais.json`, pela tela de
+  Configurações (como as de hoje). Não trafegar por mensagem.
+- Conferir, numa amostra, se `preco1` da tabela do cliente bate com o preço
+  que ele vê no site (condição de pagamento / precificadores podem alterar).
+
+**Alternativa não escolhida:** esperar a liberação do login do robô no site —
+depende do reCAPTCHA e pode voltar a quebrar.
+
 ### Q22. Login recusado pela proteção contra robôs dos fornecedores — 🔴 ABERTA desde 2026-11-17 13:14: busca de preços INDISPONÍVEL no servidor
 
 **O que aconteceu.** Às 13:13 de 17/11 o serviço foi reiniciado para a troca
